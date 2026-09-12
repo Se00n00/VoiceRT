@@ -1,0 +1,14 @@
+sample_rate: 16000
+device: cuda
+server:
+  host: 0.0.0.0
+  port: 8003
+legs:
+  vad: configs/vad.yaml
+  stt: configs/whisper.yaml
+  llm: configs/qwen.yaml
+  tts: configs/tts.yaml
+streaming:
+  max_tokens: 48
+  sentence_split: "[.!?]+"
+vram_budget_mb: 3800

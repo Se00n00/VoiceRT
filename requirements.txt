@@ -1,0 +1,25 @@
+# voice-pipeline runtime. Pinned to the versions it is tested on
+# (RTX 3050, CUDA 12, Python 3.12). Install with:
+#   pip install -r requirements.txt
+#
+# Notes:
+# - torch: get the CUDA build for your platform first if pip resolves
+#   CPU-only (see https://pytorch.org/get-started/locally/), then
+#   install the rest of this file.
+# - kokoro pulls its own phonemizer (misaki) automatically.
+# - transformers 5.x is REQUIRED-ish: the TTS eager path is chosen
+#   because dynamo x transformers-5 output_capturing breaks full-model
+#   torch.compile (see models/tts/model.py). Older transformers may
+#   behave differently under compile; eager still works.
+torch==2.5.1
+triton==3.1.0
+transformers==5.17.0
+fastapi==0.141.1
+uvicorn==0.52.4
+starlette==1.6.0
+pydantic==2.13.5
+soundfile==0.14.0
+numpy==2.5.3
+onnxruntime==1.30.0
+pyyaml==6.0.3
+kokoro==0.9.4

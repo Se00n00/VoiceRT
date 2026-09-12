@@ -1,0 +1,36 @@
+# bytecode / caches
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.hypothesis/
+.coverage
+
+# envs / packaging
+.venv/
+*.egg-info/
+
+# weights (HF cache lives outside the repo; per-file downloads too)
+*.pt
+*.bin
+*.safetensors
+*.onnx
+!models/silero_vad/*.onnx
+
+# audio fixtures, outputs, logs (never commit these)
+*.wav
+*.mp3
+*.flac
+*.log
+nohup.out
+samples_out/
+
+# benchmark run outputs (the kernel_profile.txt docstring table stays)
+benchmarks/results/*.json
+
+# editors / OS
+.DS_Store
+*.swp
+*.swo
+.vscode/
+.idea/
