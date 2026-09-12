@@ -109,19 +109,32 @@ class TestGuards(unittest.TestCase):
             _guard_wav(big, 16000)
         self.assertEqual(cm.exception.status_code, 413)
 
-    def test_sema_503(self):
+    def test_queue_503(self):
         import server.routes as R
         from fastapi import HTTPException
 
-        for _ in range(R.MAX_INFLIGHT):
-            R._sema.acquire()
+        # Fill every FIFO slot, then shrink the timeout so the queued
+        # acquire fails fast with 503 instead of waiting.
+        tickets = [R._sched.acquire(blocking=False) for _ in range(R._sched.max_concurrency)]
+        assert all(t is not None for t in tickets)
+        old_timeout = R._QUEUE_TIMEOUT_S
+        R._QUEUE_TIMEOUT_S = 0.05
         try:
             with self.assertRaises(HTTPException) as cm:
                 R._acquire_or_503()
             self.assertEqual(cm.exception.status_code, 503)
         finally:
-            for _ in range(R.MAX_INFLIGHT):
-                R._sema.release()
+            R._QUEUE_TIMEOUT_S = old_timeout
+            for t in tickets:
+                R._release(t)
+
+    def test_capacity_defaults(self):
+        import server.routes as R
+
+        cap = R.get_capacity()
+        self.assertIn("max_sessions", cap)
+        self.assertIn("max_inflight", cap)
+        self.assertIn("generation_length", cap)
 
     def test_schema_bounds(self):
         from pydantic import ValidationError

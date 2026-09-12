@@ -14,14 +14,39 @@ import torch
 
 from engine.audio import to_mono
 from engine.model import load_config
-from engine.session import SessionStore, new_session_id
+from engine.session import SessionStore
 from engine.streaming import SPLIT, SentenceSplitter
 from runtime.device import max_allocated_mb, select_device, synchronize
+from runtime.memory import check_budget
 from runtime.profiler import Profiler
 
 SYSTEM_PROMPT = "You are a voice assistant. Reply in one short spoken sentence."
 STT_SR = 16000
 TTS_SR = 24000
+DEFAULT_VRAM_BUDGET_MB = 3800.0
+DEFAULT_PER_TURN_MB = 150.0
+
+
+def _pipeline_budget(config_dir=None):
+    """(vram_budget_mb, per_turn_mb) from pipeline.yaml, else defaults."""
+    import os
+
+    import yaml
+
+    budget, per_turn = DEFAULT_VRAM_BUDGET_MB, DEFAULT_PER_TURN_MB
+    try:
+        if config_dir is None:
+            here = os.path.dirname(os.path.abspath(__file__))
+            config_dir = os.path.join(os.path.dirname(here), "configs")
+        path = os.path.join(config_dir, "pipeline.yaml")
+        with open(path) as f:
+            cfg = yaml.safe_load(f) or {}
+        budget = float(cfg.get("vram_budget_mb", budget))
+        cap = cfg.get("capacity", {}) or {}
+        per_turn = float(cap.get("per_turn_mb", per_turn))
+    except Exception:
+        pass
+    return budget, per_turn
 
 
 class VoiceEngine:
@@ -52,6 +77,7 @@ class VoiceEngine:
         self.vad, self.stt, self.llm, self.tts = None, None, None, None
         self.proc, self.tok = None, None
         self.sessions = SessionStore()
+        self.vram_budget_mb, self.per_turn_mb = _pipeline_budget(config_dir)
         self._load_legs()
         try:
             vram = max_allocated_mb()
@@ -246,6 +272,7 @@ class VoiceEngine:
         remembered afterwards.
         """
         self._require("proc", "stt", "tok", "llm", "tts")
+        check_budget(self.per_turn_mb, self.vram_budget_mb, what="voice turn")
         t0 = time.perf_counter()
         st = self.transcribe(audio, sr)
         ids = self.prompt_ids(st["text"], session_id)

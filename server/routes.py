@@ -38,10 +38,54 @@ MAX_AUDIO_S = 60.0
 MAX_INFLIGHT = 4
 
 _engine = None
-_sema = threading.Semaphore(MAX_INFLIGHT)
 _t_boot = time.time()
 _metrics = {}  # endpoint -> [count, errors, total_s]
 _metrics_lock = threading.Lock()
+
+# -- admission control: FIFO queue + VRAM-derived capacity ----------------
+# _sched serializes turns (single worker: c=4 halves throughput, measured).
+# _capacity is the startup plan from runtime.capacity (see configure_capacity);
+# pre-startup the conservative defaults below apply so imports/tests work.
+from runtime.scheduler import FIFOScheduler
+
+_sched = FIFOScheduler(MAX_INFLIGHT)
+_QUEUE_TIMEOUT_S = 10.0
+_capacity = {"max_sessions": 1000, "max_inflight": MAX_INFLIGHT,
+             "generation_length": 48, "queue_timeout_s": _QUEUE_TIMEOUT_S,
+             "conservative": True}
+
+
+def configure_capacity(plan):
+    """Apply a startup capacity plan (called once from app startup).
+
+    Resizes the FIFO scheduler, the queue timeout, the session-store cap,
+    and publishes the plan on /health. Safe to call twice (last wins).
+    """
+    global _QUEUE_TIMEOUT_S
+    _capacity.clear()
+    _capacity.update(dict(plan))
+    try:
+        _sched.max_concurrency = max(1, int(plan.get("max_inflight",
+                                                     MAX_INFLIGHT)))
+    except Exception:
+        pass
+    try:
+        _QUEUE_TIMEOUT_S = float(plan.get("queue_timeout_s",
+                                          _QUEUE_TIMEOUT_S))
+    except Exception:
+        pass
+    try:
+        if engine_loaded():
+            get_engine().sessions.max_sessions = max(
+                1, int(plan.get("max_sessions", 1000)))
+    except Exception:
+        pass
+    return dict(_capacity)
+
+
+def get_capacity():
+    """Current serving plan (conservative defaults before startup)."""
+    return dict(_capacity)
 
 
 def get_engine():
@@ -65,16 +109,43 @@ def _record(endpoint, dt, err=False):
 
 
 def _acquire_or_503():
-    if not _sema.acquire(blocking=False):
+    """Take a FIFO queue ticket, waiting up to the configured timeout.
+
+    Burst traffic queues fairly instead of thundering-herd; only a full
+    queue (timeout) becomes 503 + Retry-After. Queue wait is recorded for
+    /metrics. Returns the ticket; every ticket must reach _release().
+    """
+    t0 = time.perf_counter()
+    try:
+        ticket = _sched.acquire(blocking=True, timeout=_QUEUE_TIMEOUT_S)
+    except Exception:
+        ticket = None
+    if ticket is None:
+        _record("queue_timeout", time.perf_counter() - t0, err=True)
         raise HTTPException(
             status_code=503,
-            detail=f"server saturated ({MAX_INFLIGHT} in flight); retry",
+            detail=(f"server saturated ({_sched.max_concurrency} in flight, "
+                    f"queue waited {_QUEUE_TIMEOUT_S:.0f}s); retry"),
             headers={"Retry-After": "2"},
         )
+    _record("queue_wait", time.perf_counter() - t0)
+    return ticket
+
+
+def _release(ticket):
+    try:
+        _sched.release(ticket)
+    except Exception:
+        pass
 
 
 def _leg_error(exc):
+    from runtime.memory import MemoryBudgetExceeded
+
     msg = str(exc)
+    if isinstance(exc, MemoryBudgetExceeded):
+        raise HTTPException(status_code=503, detail=msg,
+                            headers={"Retry-After": "2"})
     if "leg(s) not loaded" in msg or "not loaded" in msg:
         raise HTTPException(status_code=503, detail=msg)
     raise HTTPException(status_code=500, detail="engine error")
@@ -136,6 +207,7 @@ def health():
         "uptime_s": time.time() - _t_boot,
         "engine_loaded": engine_loaded(),
         "legs": ["vad", "transcribe", "chat", "speak", "voice"],
+        "capacity": get_capacity(),
     }
     if engine_loaded():
         try:
@@ -144,9 +216,9 @@ def health():
             out["missing"] = list(missing)
             out["vram_mb"] = _vram_mb()
             try:
-                from models.qwen.kernels import HAVE_TRITON_KERNELS as q
-                from models.tts.kernels import HAVE_TRITON_KERNELS as t
-                from models.whisper.kernels import HAVE_TRITON_KERNELS as w
+                from models.qwen import HAVE_TRITON_KERNELS as q
+                from models.tts import HAVE_TRITON_KERNELS as t
+                from models.whisper import HAVE_TRITON_KERNELS as w
                 from models.silero_vad.kernels import HAVE_TRITON_LSTM as v
 
                 out["triton"] = {
@@ -176,10 +248,18 @@ def metrics():
         }
     return {
         "uptime_s": time.time() - _t_boot,
-        "inflight": MAX_INFLIGHT - _sema._value,
+        "inflight": _sched.running,
+        "queue": _sched.stats(),
+        "queue_wait_s": _mean("queue_wait"),
         "vram_mb": _vram_mb(),
         "endpoints": eps,
     }
+
+
+def _mean(endpoint):
+    with _metrics_lock:
+        c, _, t = _metrics.get(endpoint, (0, 0, 0.0))
+    return (t / c) if c else 0.0
 
 
 @router.post("/v1/vad")
@@ -189,12 +269,12 @@ async def vad(f: UploadFile):
         data = await f.read()
         audio, sr = await _parse_upload(data)
         _guard_wav(audio, sr)
-        _acquire_or_503()
+        ticket = _acquire_or_503()
         try:
             eng = get_engine()
             segs = await asyncio.to_thread(eng.vad_segments, audio)
         finally:
-            _sema.release()
+            _release(ticket)
         segs = [[float(a), float(b)] for a, b in segs["segments"]]
         _record("vad", time.perf_counter() - t0)
         return {
@@ -220,12 +300,12 @@ async def transcribe(f: UploadFile):
         data = await f.read()
         audio, sr = await _parse_upload(data)
         _guard_wav(audio, sr)
-        _acquire_or_503()
+        ticket = _acquire_or_503()
         try:
             eng = get_engine()
             r = await asyncio.to_thread(eng.transcribe, audio, sr)
         finally:
-            _sema.release()
+            _release(ticket)
         _record("transcribe", time.perf_counter() - t0)
         return r
     except HTTPException:
@@ -245,11 +325,11 @@ def chat(req: ChatReq):
 
     t0 = time.perf_counter()
     sid = req.session_id or new_session_id()
-    _acquire_or_503()
+    ticket = _acquire_or_503()
     try:
         eng = get_engine()
     except Exception:
-        _sema.release()
+        _release(ticket)
         raise
     try:
         if not req.stream:
@@ -257,7 +337,7 @@ def chat(req: ChatReq):
                 r = eng.chat(req.prompt, max_tokens=req.max_tokens,
                              stream=False, session_id=sid, reset=req.reset)
             finally:
-                _sema.release()
+                _release(ticket)
             text = r.get("text", "")
             ttft = r.get("ttft", r.get("ttft_s", 0.0))
             tps = r.get("tps", r.get("decode_tps", 0.0))
@@ -266,6 +346,8 @@ def chat(req: ChatReq):
                     "session_id": sid}
 
         def sse():
+            from engine.streaming import done_frame, format_sse
+
             try:
                 if req.reset:
                     eng.sessions.reset(sid)
@@ -273,16 +355,13 @@ def chat(req: ChatReq):
                 out_ids = []
                 for tok_id, _ in eng.llm.generate_stream(ids, req.max_tokens):
                     out_ids.append(tok_id)
-                    yield f"data: {eng.tok.decode([tok_id])!r}\n\n"
+                    yield format_sse(None, repr(eng.tok.decode([tok_id])))
                 eng.remember(sid, req.prompt,
                              eng.tok.decode(out_ids, skip_special_tokens=True))
-                yield "data: [DONE]\n\n"
+                yield done_frame()
             finally:
                 _record("chat_stream", time.perf_counter() - t0)
-                try:
-                    _sema.release()
-                except ValueError:
-                    pass
+                _release(ticket)
 
         return StreamingResponse(sse(), media_type="text/event-stream",
                                  headers={"X-Session-Id": sid})
@@ -302,7 +381,7 @@ def speak(req: SpeakReq):
     import soundfile as sf
 
     t0 = time.perf_counter()
-    _acquire_or_503()
+    ticket = _acquire_or_503()
     try:
         eng = get_engine()
         r = eng.speak(req.text)
@@ -324,10 +403,7 @@ def speak(req: SpeakReq):
         _record("speak", time.perf_counter() - t0, err=True)
         raise HTTPException(status_code=500, detail="engine error")
     finally:
-        try:
-            _sema.release()
-        except ValueError:
-            pass
+        _release(ticket)
 
 
 @router.post("/v1/voice")
@@ -342,12 +418,12 @@ async def voice(f: UploadFile, session_id: str = Form("")):
         data = await f.read()
         audio, sr = await _parse_upload(data)
         _guard_wav(audio, sr)
-        _acquire_or_503()
+        ticket = _acquire_or_503()
         try:
             eng = get_engine()
             r = await asyncio.to_thread(eng.stream_turn, audio, sr, sid)
         finally:
-            _sema.release()
+            _release(ticket)
         wav = np.asarray(r["wav"], dtype=np.float32)
         wav_b64 = base64.b64encode(wav.tobytes()).decode()
         _record("voice", time.perf_counter() - t0)
@@ -373,11 +449,14 @@ async def voice(f: UploadFile, session_id: str = Form("")):
 
 @router.get("/v1/sessions")
 def sessions():
-    """Debug: how many sessions/turns are held in memory."""
+    """Sessions held vs the VRAM-derived serving plan."""
     try:
-        return get_engine().sessions.stats()
+        stats = get_engine().sessions.stats()
     except Exception:
-        return {"sessions": 0, "turns": 0}
+        stats = {"sessions": 0, "turns": 0}
+    stats["max_sessions"] = _capacity.get("max_sessions", 1000)
+    stats["generation_length"] = _capacity.get("generation_length", 48)
+    return stats
 
 
 @router.delete("/v1/session/{sid}")

@@ -29,17 +29,18 @@ class TestRuntime(unittest.TestCase):
 
     def test_scheduler(self):
         mod = _mod()
-        cls = (getattr(mod, "FIFOScheduler", None)
-               or getattr(mod, "Scheduler", None)
-               or getattr(mod, "MicroBatcher", None)
-               or getattr(mod, "Batcher", None))
+        cls = getattr(mod, "FIFOScheduler", None)
         if cls is None:
-            self.skipTest("runtime Scheduler/Batcher not ported yet")
-        try:
-            obj = cls(max_batch=2)
-        except TypeError:
-            obj = cls()
-        self.assertIsNotNone(obj)
+            self.skipTest("runtime.FIFOScheduler not ported yet")
+        sched = cls(max_concurrency=1)
+        t = sched.acquire(blocking=False)
+        self.assertIsNotNone(t)
+        # slot taken -> non-blocking acquire fails fair and square
+        self.assertIsNone(sched.acquire(blocking=False))
+        sched.release(t)
+        self.assertIsNotNone(sched.acquire(blocking=False))
+        st = sched.stats()
+        self.assertEqual(st["max_concurrency"], 1)
 
     def test_profiler(self):
         mod = _mod()

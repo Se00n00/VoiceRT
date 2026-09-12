@@ -9,7 +9,7 @@
 # - kokoro pulls its own phonemizer (misaki) automatically.
 # - transformers 5.x is REQUIRED-ish: the TTS eager path is chosen
 #   because dynamo x transformers-5 output_capturing breaks full-model
-#   torch.compile (see models/tts/model.py). Older transformers may
+#   torch.compile (see models/tts.py). Older transformers may
 #   behave differently under compile; eager still works.
 torch==2.5.1
 triton==3.1.0

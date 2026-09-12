@@ -22,6 +22,8 @@ FILENAME = {
 }
 
 # Leg -> candidate (module, class) pairs tried in order.
+# Single-file models (models/<name>.py) are canonical; legacy
+# models/<name>.model paths are kept as fallback.
 CANDIDATES = {
     "vad": [
         ("models.silero_vad.model", "SileroVAD"),
@@ -29,16 +31,25 @@ CANDIDATES = {
         ("models.silero_vad.model", "VadEngine"),
     ],
     "stt": [
+        ("models.whisper", "WhisperEngine"),
+        ("models.whisper", "WhisperTriton"),
+        ("models.whisper", "WhisperModel"),
         ("models.whisper.model", "WhisperEngine"),
         ("models.whisper.model", "WhisperTriton"),
         ("models.whisper.model", "WhisperModel"),
     ],
     "llm": [
+        ("models.qwen", "QwenEngine"),
+        ("models.qwen", "TinyLLM"),
+        ("models.qwen", "QwenModel"),
         ("models.qwen.model", "QwenEngine"),
         ("models.qwen.model", "TinyLLM"),
         ("models.qwen.model", "QwenModel"),
     ],
     "tts": [
+        ("models.tts", "KokoroEngine"),
+        ("models.tts", "TtsEngine"),
+        ("models.tts", "KokoroTTS"),
         ("models.tts.model", "KokoroEngine"),
         ("models.tts.model", "TtsEngine"),
         ("models.tts.model", "KokoroTTS"),
@@ -110,7 +121,7 @@ def resolve_leg_class(leg):
         raise ImportError(
             f"no model class importable for leg {leg!r} "
             f"(tried {CANDIDATES[leg]}; {tried}). "
-            f"Expected e.g. models/{leg}/model.py to define one."
+            f"Expected e.g. models/qwen.py to define one."
         )
     return found
 

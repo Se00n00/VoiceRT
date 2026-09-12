@@ -17,6 +17,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 IMPORTS = [
     "triton_kernels",
+    "triton_kernels.qwen",
+    "triton_kernels.whisper",
+    "triton_kernels.tts",
     "models.whisper",
     "models.qwen",
     "models.tts",

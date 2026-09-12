@@ -1,6 +1,6 @@
 """Dispatcher for all voice-pipeline benchmarks.
 
-Run: PYTHONPATH=voice-pipeline python scripts/benchmark.py {vad,whisper,qwen,tts,pipeline} [bench args...]
+Run: PYTHONPATH=voice-pipeline python scripts/benchmark.py {vad,whisper,qwen,tts,pipeline,capacity} [bench args...]
 """
 import argparse
 import os
@@ -8,7 +8,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-LEGS = ("vad", "whisper", "qwen", "tts", "pipeline")
+LEGS = ("vad", "whisper", "qwen", "tts", "pipeline", "capacity")
+
+_MOD = {"capacity": "benchmarks.bench_capacity"}
 
 
 def main(argv=None):
@@ -17,7 +19,7 @@ def main(argv=None):
     ap.add_argument("rest", nargs=argparse.REMAINDER)
     args = ap.parse_args(argv)
 
-    mod_name = f"benchmarks.benchmark_{args.leg}"
+    mod_name = _MOD.get(args.leg, f"benchmarks.benchmark_{args.leg}")
     try:
         mod = __import__(mod_name, fromlist=["main"])
     except Exception as exc:

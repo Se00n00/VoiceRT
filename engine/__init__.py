@@ -1,13 +1,6 @@
-"""engine: VoiceEngine, serial VoicePipe, and pipeline helpers."""
+"""engine: VoiceEngine live-loop plus config/leg loading and session helpers."""
 from engine.audio import duration_s, load_wav, normalize, resample, save_wav, to_mono
 from engine.engine import STT_SR, SYSTEM_PROMPT, TTS_SR, VoiceEngine
-from engine.executor import LegExecutor
-from engine.generation import (
-    run_token_loop,
-    sample_next_token,
-    should_stop,
-    strip_stop_tail,
-)
 from engine.model import (
     CANDIDATES,
     FILENAME,
@@ -20,7 +13,7 @@ from engine.model import (
     load_leg,
     resolve_leg_class,
 )
-from engine.pipeline import VoicePipe
+from engine.session import SessionStore, new_session_id
 from engine.streaming import (
     SPLIT,
     SentenceSplitter,
@@ -41,11 +34,6 @@ __all__ = [
     "SYSTEM_PROMPT",
     "TTS_SR",
     "VoiceEngine",
-    "LegExecutor",
-    "run_token_loop",
-    "sample_next_token",
-    "should_stop",
-    "strip_stop_tail",
     "CANDIDATES",
     "FILENAME",
     "LEG_ORDER",
@@ -56,7 +44,8 @@ __all__ = [
     "load_config",
     "load_leg",
     "resolve_leg_class",
-    "VoicePipe",
+    "SessionStore",
+    "new_session_id",
     "SPLIT",
     "SentenceSplitter",
     "done_frame",
