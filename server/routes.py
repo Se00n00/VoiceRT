@@ -447,6 +447,86 @@ async def voice(f: UploadFile, session_id: str = Form("")):
         raise HTTPException(status_code=500, detail="engine error")
 
 
+@router.post("/v1/talk")
+async def talk_stream(f: UploadFile, session_id: str = Form("")):
+    """Staged voice turn over plain HTTP (SSE) — no WebSocket client needed.
+
+    Same utterance in, same staged events out as WS /v1/talk:
+      event: stt → event: llm (per token) → event: llm done →
+      event: tts (per sentence, wav_b64) → event: turn → [DONE]
+    Consume normally: curl -N -F f=@a.wav http://host:8003/v1/talk
+    """
+    import base64 as _b64
+
+    from engine.session import new_session_id
+    from engine.streaming import done_frame, format_sse
+    from runtime.tensor import to_host_numpy
+
+    t0 = time.perf_counter()
+    sid = session_id or new_session_id()
+    data = await f.read()
+    audio, sr = await _parse_upload(data)
+    _guard_wav(audio, sr)
+    ticket = _acquire_or_503()
+    queue: asyncio.Queue = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
+    def run():
+        try:
+            eng = get_engine()
+            r = eng.talk_turn(audio, sr, sid,
+                              on_event=lambda k, p: loop.call_soon_threadsafe(
+                                  queue.put_nowait, (k, p)))
+            loop.call_soon_threadsafe(queue.put_nowait, ("__done__", r))
+        except Exception as exc:  # noqa: BLE001 - streamed as event
+            loop.call_soon_threadsafe(
+                queue.put_nowait, ("__error__", str(exc)[:300]))
+
+    async def sse():
+        worker = loop.run_in_executor(None, run)
+        try:
+            while True:
+                kind, payload = await queue.get()
+                if kind == "__done__":
+                    yield format_sse("turn", {
+                        "text": payload["text"], "reply": payload["reply"],
+                        "ttfa_s": payload["ttfa_s"],
+                        "total_s": payload["total_s"],
+                        "vram_mb": payload.get("vram_mb"),
+                        "session_id": sid})
+                    yield done_frame()
+                    break
+                if kind == "__error__":
+                    yield format_sse("error", {"message": payload})
+                    break
+                if kind == "stt":
+                    yield format_sse("stt", {"text": payload["text"],
+                                            "partial": False})
+                elif kind == "llm":
+                    if payload.get("done"):
+                        yield format_sse("llm", {"done": True,
+                                                "text": payload.get("text", "")})
+                    else:
+                        yield format_sse("llm",
+                                         {"token": payload.get("token", "")})
+                elif kind == "tts":
+                    wav = to_host_numpy(payload["wav"])
+                    yield format_sse("tts", {
+                        "wav_b64": _b64.b64encode(wav.tobytes()).decode(),
+                        "sr": int(payload.get("sr", 24000)),
+                        "sentence": payload.get("sentence", "")})
+        finally:
+            _release(ticket)
+            try:
+                await worker
+            except Exception:
+                pass
+        _record("talk_stream", time.perf_counter() - t0)
+
+    return StreamingResponse(sse(), media_type="text/event-stream",
+                             headers={"X-Session-Id": sid})
+
+
 @router.get("/v1/sessions")
 def sessions():
     """Sessions held vs the VRAM-derived serving plan."""

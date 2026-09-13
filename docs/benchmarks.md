@@ -13,6 +13,7 @@ this repo is hand-waved — each traces to a command below.
 | `tts` | `VoiceEngine.speak` | 3 fixed sentences | RTF, VRAM | stdout + `results/tts_*.wav` |
 | `vad` | `VoiceEngine.vad_segments` | synth/file, `--iters 20` | p50/p99, RTF | stdout |
 | `pipeline` | live `POST /v1/voice` | synth sine, conc sweep 1/2/4 | TTFA/E2E p50/p99, req/s | stdout |
+| `e2e` | `VoiceEngine.stream_turn` per file | **real speech** (your `--dir`, else `tts_*.wav`) | TTFA/E2E/RTF per file + p50, `--compare` deltas | `results/e2e_<ts>.json` |
 | `capacity` | engine + `stream_turn` round-trip | genlen×conc matrix + telemetry | TTFT/TPO/TPS/thr/util/W/cost | json + md + SVG |
 
 Dispatcher: `PYTHONPATH=. python scripts/benchmark.py {vad,whisper,qwen,tts,pipeline,capacity}`.
@@ -80,6 +81,12 @@ PYTHONPATH=. python scripts/benchmark.py capacity --full
 PYTHONPATH=. python scripts/benchmark.py qwen -- --max-tokens 8
 PYTHONPATH=. python scripts/benchmark.py whisper
 PYTHONPATH=. python scripts/benchmark.py tts
+
+# Real-speech end-to-end (no server needed; uses your wavs or tts_*.wav)
+PYTHONPATH=. python scripts/benchmark.py e2e -- --dir /path/to/librispeech-wavs
+
+# Compare this run against a baseline (before/after a change)
+PYTHONPATH=. python scripts/benchmark.py e2e -- --compare results/e2e_<older>.json
 
 # Endpoint sweep (needs the server up in another shell)
 PYTHONPATH=. python serve.py &

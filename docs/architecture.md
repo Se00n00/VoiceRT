@@ -137,11 +137,47 @@ Same admission wrapper (parse → guard → ticket → `to_thread` → release �
 32 ms windows); STT returns `{text, rtf, ttfs, dur}`; TTS returns raw
 `audio/wav` bytes with `X-Synth-S` header.
 
-### 3.4 `WS /v1/talk` — socket turn
+### 3.4 `WS /v1/talk` — incremental streaming session
 
 `server/websocket.py` shares the HTTP engine singleton via `get_engine()`
-(a second `VoiceEngine` would OOM the 4 GB card) and the same ticket queue.
-Wav frames → `to_host_numpy` → `stream_turn` → audio reply frames.
+(a second `VoiceEngine` would OOM the 4 GB card) and the same FIFO ticket
+queue. One socket = one session, established at connect:
+
+```
+connect ?session_id= ──▶ {"event":"ready","session_id","sr":16000}
+binary PCM16 mono chunks ──▶ buffered (cap 60s) + per-chunk VAD
+                             ──▶ {"event":"vad","speech","buffer_s"} on change
+                             ──▶ {"event":"stt","text","partial":true}
+                                 live partials (throttled buffer re-decode,
+                                 best-effort, text-change gated)
+speech + 0.8s trailing silence ──▶ auto-commit (or {"type":"commit"})
+ ──▶ ticket ──▶ eng.talk_turn(buffer, on_event=emit)   [worker thread]
+        ├─ STT done       ──▶ {"event":"stt","text"}            immediately
+        ├─ per LLM token  ──▶ {"event":"llm","token"}           immediately
+        ├─ LLM done       ──▶ {"event":"llm","done":true,"text"}
+        ├─ per sentence   ──▶ {"event":"tts","wav_b64","sr","sentence"}
+        └─ turn done      ──▶ {"event":"turn","text","reply","ttfa_s",
+                               "total_s","vram_mb","session_id"}
+{"type":"reset"} drops the buffer; {"type":"config","sr","end_silence_s"}
+retunes the session; "close" ends it. A RIFF/wav binary message takes the
+legacy one-shot path (single summary JSON, unchanged).
+```
+
+Event bridging: `talk_turn` invokes `on_event` synchronously in the worker
+thread; the handler re-posts each event to an `asyncio.Queue` via
+`loop.call_soon_threadsafe` and a drain loop forwards them to the socket
+in stage order — the client sees STT text ~60 ms after commit while the
+LLM is still decoding.
+
+### 3.4b `POST /v1/talk` — same staged turn over plain HTTP (SSE)
+
+No WebSocket client? `POST /v1/talk` (multipart wav `f` + optional
+`session_id` form field, `server/routes.py:talk_stream`) runs the identical
+`talk_turn(..., on_event=...)` path and streams it back as
+`text/event-stream`: `event: stt → event: llm (per token) → event: llm done
+→ event: tts (per sentence, wav_b64) → event: turn → [DONE]`, with
+`X-Session-Id` echoed. Same FIFO ticket, same budget guard, same 400/413/
+503 semantics as `/v1/voice` — consume with `curl -N`.
 
 ### 3.5 `GET /health` · `GET /metrics` · `GET /v1/sessions`
 

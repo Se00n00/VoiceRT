@@ -14,8 +14,12 @@
 torch==2.5.1
 triton==3.1.0
 transformers==5.17.0
+# - websockets: REQUIRED for uvicorn to accept WS /v1/talk. Without it
+#   uvicorn serves HTTP-only and every WS handshake 404s (the route still
+#   registers, so /docs and route lists look fine — misleading).
 fastapi==0.141.1
 uvicorn==0.52.4
+websockets==17.1
 starlette==1.6.0
 pydantic==2.13.5
 soundfile==0.14.0

@@ -178,6 +178,82 @@ class TestGuards(unittest.TestCase):
             src = f.read()
         self.assertIn("from server.routes import get_engine", src)
 
+    def test_ws_streaming_protocol(self):
+        # Staged protocol surface: ready/commit/reset/config + vad/stt/llm/tts/turn.
+        import os
+
+        root = os.path.dirname(os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__))))
+        with open(os.path.join(root, "server", "websocket.py")) as f:
+            src = f.read()
+        for marker in ('"event": "ready"', '"type": "commit"',
+                       '"type": "reset"', '"type": "config"',
+                       '"event": "vad"', '"event": "stt"',
+                       '"partial"', 'maybe_partial',
+                       '"event": "llm"', '"event": "tts"',
+                       '"event": "turn"', "talk_turn", "on_event"):
+            self.assertIn(marker, src, f"WS protocol missing {marker}")
+
+    def test_pcm16_helper(self):
+        import struct
+
+        from server.websocket import _pcm16_to_float
+
+        raw = struct.pack("<4h", 0, 16384, -16384, 32767)
+        out = _pcm16_to_float(raw)
+        self.assertEqual(len(out), 4)
+        self.assertAlmostEqual(out[0], 0.0)
+        self.assertAlmostEqual(out[1], 0.5)
+        self.assertAlmostEqual(out[2], -0.5)
+
+    def test_talk_stream_sse(self):
+        # POST /v1/talk streams staged SSE over plain HTTP (curl-able).
+        import io
+        import wave
+
+        import numpy as np
+
+        import server.routes as R
+        from engine.session import SessionStore
+
+        class StubEng:
+            def __init__(self):
+                self.sessions = SessionStore()
+
+            def talk_turn(self, audio, sr, sid, on_event=None):
+                on_event("stt", {"text": "hi"})
+                on_event("llm", {"token": "Hello. "})
+                on_event("llm", {"done": True, "text": "Hello."})
+                on_event("tts", {"wav": np.zeros(240, dtype=np.float32),
+                                 "sr": 24000, "sentence": "Hello."})
+                return {"text": "hi", "reply": "Hello.", "ttfa_s": 0.1,
+                        "total_s": 0.2, "vram_mb": 0.0, "session_id": sid}
+
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(16000)
+            w.writeframes(b"\x00\x00" * 1600)
+        old = R._engine
+        R._engine = StubEng()
+        try:
+            from fastapi.testclient import TestClient
+
+            from server.app import app
+
+            c = TestClient(app, raise_server_exceptions=False)
+            r = c.post("/v1/talk", files={"f": ("a.wav", buf.getvalue(),
+                                                "audio/wav")})
+        finally:
+            R._engine = old
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("text/event-stream", r.headers["content-type"])
+        body = r.text
+        for marker in ("event: stt", "event: llm", "event: tts",
+                       "event: turn", "[DONE]"):
+            self.assertIn(marker, body, f"SSE missing {marker}")
+
 
 if __name__ == "__main__":
     unittest.main()

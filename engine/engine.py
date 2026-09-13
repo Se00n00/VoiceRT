@@ -135,6 +135,21 @@ class VoiceEngine:
         return [to_host_numpy(wav)]
 
     # -- legs -----------------------------------------------------------------
+    def vad_active(self, chunk, sr=STT_SR):
+        """True when a streamed audio chunk contains speech (for endpointing).
+
+        Cheap enough to call per chunk: runs the VAD leg on the chunk only.
+        Never raises — VAD failure means "no speech" (fail-open for liveness).
+        """
+        try:
+            self._require("vad")
+            wav = np.asarray(to_mono(chunk), dtype=np.float32)
+            if wav.size == 0:
+                return False
+            return bool(self.vad.segments(wav))
+        except Exception:
+            return False
+
     def vad_segments(self, audio, sr=STT_SR):
         """Speech segments for mono/float audio. Returns a list of spans."""
         self._require("vad")
@@ -263,18 +278,27 @@ class VoiceEngine:
             dt = time.perf_counter() - t0
         return {"wav": np.asarray(wav, dtype=np.float32), "sr": TTS_SR, "synth_s": dt}
 
-    def stream_turn(self, audio, sr=STT_SR, session_id=None):
+    def stream_turn(self, audio, sr=STT_SR, session_id=None, on_event=None):
         """One voice turn with LLM->TTS sentence streaming.
 
         Returns dict with text/reply/wav/stt_s/llm_s/ttfa_s/total_s/vram_mb.
         TTFA is measured from call entry to the first synthesized chunk.
         When session_id is given, history is prepended and the turn is
         remembered afterwards.
+
+        When ``on_event`` is given, it is called synchronously (same thread)
+        as each stage completes — STT text first, then per-token LLM pieces,
+        then per-sentence TTS audio — so a streaming endpoint can forward
+        partial results without waiting for the full turn:
+          ("stt", {"text"}) → ("llm", {"token"})* → ("llm", {"done", "text"})
+          → ("tts", {"wav", "sr"})* → return value as before.
         """
         self._require("proc", "stt", "tok", "llm", "tts")
         check_budget(self.per_turn_mb, self.vram_budget_mb, what="voice turn")
         t0 = time.perf_counter()
         st = self.transcribe(audio, sr)
+        if on_event is not None:
+            on_event("stt", {"text": st["text"]})
         ids = self.prompt_ids(st["text"], session_id)
         t_llm0 = time.perf_counter()
         splitter = SentenceSplitter()
@@ -286,12 +310,17 @@ class VoiceEngine:
             chunks.append(s["wav"])
             if first_at is None:
                 first_at = time.perf_counter() - t0
+            if on_event is not None:
+                on_event("tts", {"wav": np.asarray(s["wav"], dtype=np.float32),
+                                 "sr": TTS_SR, "sentence": sent})
 
         if hasattr(self.llm, "generate_stream"):
             token_iter = self.llm.generate_stream(ids, max_new_tokens=self.max_new_tokens)
             for tok_id, _ in token_iter:
                 reply_ids.append(tok_id)
                 piece = self.tok.decode([tok_id], skip_special_tokens=True)
+                if on_event is not None:
+                    on_event("llm", {"token": piece})
                 for sent in splitter.push(piece):
                     synth_sentence(sent)
         else:
@@ -312,6 +341,8 @@ class VoiceEngine:
         full = np.concatenate(chunks) if chunks else np.zeros(0, dtype=np.float32)
         reply = self.tok.decode(reply_ids, skip_special_tokens=True)
         self.remember(session_id, st["text"], reply)
+        if on_event is not None:
+            on_event("llm", {"done": True, "text": reply})
         return {
             "text": st["text"],
             "reply": reply,
@@ -324,3 +355,13 @@ class VoiceEngine:
             "vram_mb": max_allocated_mb(),
             "session_id": session_id,
         }
+
+    def talk_turn(self, audio, sr=STT_SR, session_id=None, on_event=None):
+        """Streaming-session turn: identical to stream_turn, event-first API.
+
+        Exists so streaming callers (WS /v1/talk) don't need to know that
+        ``stream_turn(..., on_event=...)`` is the same code path: pass an
+        ``on_event(kind, payload)`` callback and forward each event to the
+        client the moment its stage completes.
+        """
+        return self.stream_turn(audio, sr, session_id, on_event=on_event)

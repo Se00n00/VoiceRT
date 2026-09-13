@@ -330,7 +330,8 @@ Base URL default: `http://localhost:8003`
 | `POST` | `/v1/voice` | wav upload `f` + optional `session_id` form field | `{text, reply, wav_b64, ttfa_s, total_s, vram_mb, session_id}` |
 | `GET` | `/v1/sessions` | — | `{sessions, turns, max_sessions, generation_length}` |
 | `DELETE` | `/v1/session/{id}` | — | `{ok, cleared, session_id}` |
-| `WS` | `/v1/talk?session_id=` | audio frames | streaming turn over socket |
+| `POST` | `/v1/talk` | wav upload `f` + optional `session_id` | staged SSE: `stt→llm→tts→turn` + `[DONE]` (curl-able) |
+| `WS` | `/v1/talk?session_id=` | PCM16 chunks / commit | live `vad` + partial `stt`, staged `llm→tts→turn` |
 
 Examples:
 
@@ -355,6 +356,34 @@ curl -X POST http://localhost:8003/v1/speak \
 
 # Full turn with session memory
 curl -F f=@sample.wav -F session_id=my-uuid http://localhost:8003/v1/voice
+
+# Same turn, staged over plain HTTP (no WebSocket client needed)
+curl -N -F f=@sample.wav http://localhost:8003/v1/talk
+# event: stt ... event: llm ... event: tts ... event: turn ... [DONE]
+```
+
+Live streaming over one socket (PCM16 chunks in, staged events out —
+STT text the moment it completes, then LLM tokens, then TTS audio):
+
+```python
+import asyncio, json, struct
+import websockets  # pip install websockets
+
+async def main():
+    async with websockets.connect(
+            "ws://localhost:8003/v1/talk?session_id=my-uuid") as ws:
+        print(await ws.recv())  # {"event": "ready", ...}
+        with open("sample.wav", "rb") as f:
+            pcm = f.read()      # mono 16k PCM16 frames in practice
+        await ws.send(pcm[:32000])
+        await ws.send(json.dumps({"type": "commit"}))
+        async for msg in ws:
+            evt = json.loads(msg)
+            print(evt["event"], evt.get("text", evt.get("token", ""))[:60])
+            if evt.get("event") == "turn":
+                break
+
+asyncio.run(main())
 ```
 
 Sessions: frontend creates one UUID (`crypto.randomUUID()`), sends it as
