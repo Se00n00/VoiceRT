@@ -20,7 +20,7 @@ except Exception:
 
 def _load_llm_kernels():
     """Return (rmsnorm, rope, swiglu, gqa_decode_attn) or raise SkipTest."""
-    candidates = ("triton_kernels.qwen", "triton_kernels.llm",
+    candidates = ("src.models.triton_kernels.qwen", "triton_kernels.llm",
                   "triton_kernels.llm_kernels", "triton_kernels")
     last = None
     for name in candidates:

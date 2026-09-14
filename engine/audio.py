@@ -7,7 +7,7 @@ import soundfile as sf
 
 def to_mono(audio):
     """Average multi-channel audio to mono; pass through 1-D input."""
-    from runtime.tensor import to_host_numpy
+    from src.models.runtime.tensor import to_host_numpy
     audio = to_host_numpy(audio, dtype=np.float64)
     if audio.ndim == 1:
         return audio

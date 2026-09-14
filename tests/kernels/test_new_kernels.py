@@ -25,7 +25,7 @@ class TestNewKernels(unittest.TestCase):
     def test_fused_qkv_whisper(self):
         """Whisper d=512/H=8: q/v biased, k unbiased (verified convention)."""
         _need_cuda(self)
-        from triton_kernels.attention import fused_qkv
+        from src.models.triton_kernels.attention import fused_qkv
         torch.manual_seed(0)
         dev = "cuda:0"
         D = 512
@@ -48,7 +48,7 @@ class TestNewKernels(unittest.TestCase):
     def test_fused_qkv_gqa_qwen(self):
         """Qwen d=896/Hq=14/Hk=2: q/k/v ALL biased (verified convention)."""
         _need_cuda(self)
-        from triton_kernels.attention import fused_qkv_gqa
+        from src.models.triton_kernels.attention import fused_qkv_gqa
         torch.manual_seed(1)
         dev = "cuda:0"
         D, Dq, Dkv = 896, 896, 128
@@ -72,7 +72,7 @@ class TestNewKernels(unittest.TestCase):
     def test_conv1d_silu(self):
         """Kokoro-ish conv C=512/L=200: parity vs conv1d+silu; FAIL if bf16>1e-2."""
         _need_cuda(self)
-        from triton_kernels.conv1d import conv1d_silu
+        from src.models.triton_kernels.conv1d import conv1d_silu
         torch.manual_seed(2)
         dev = "cuda:0"
         # Small shape for speed + one realistic Kokoro-ish shape.
@@ -92,7 +92,7 @@ class TestNewKernels(unittest.TestCase):
     def test_in1d_silu(self):
         """Fused InstanceNorm1d+SiLU: parity vs instance_norm+silu; FAIL if bf16>1e-2."""
         _need_cuda(self)
-        from triton_kernels.conv1d import in1d_silu
+        from src.models.triton_kernels.conv1d import in1d_silu
         torch.manual_seed(3)
         dev = "cuda:0"
         for (N, C, L) in ((2, 8, 32), (1, 64, 200)):
@@ -117,7 +117,7 @@ class TestNewKernels(unittest.TestCase):
     def test_lstm_cell(self):
         """Silero-ish LSTM hidden 128: parity vs nn.LSTMCell."""
         _need_cuda(self)
-        from triton_kernels.activation import lstm_cell
+        from src.models.triton_kernels.activation import lstm_cell
         torch.manual_seed(4)
         dev = "cuda:0"
         for (B, H, I) in ((1, 128, 64), (2, 128, 128)):
@@ -143,7 +143,7 @@ class TestNewKernels(unittest.TestCase):
 
     def test_rope_batched(self):
         _need_cuda(self)
-        from triton_kernels.rope import rope, rope_batched
+        from src.models.triton_kernels.rope import rope, rope_batched
         torch.manual_seed(3)
         T, H, dh = 21, 14, 64
         for dtype in (torch.float32, torch.bfloat16):

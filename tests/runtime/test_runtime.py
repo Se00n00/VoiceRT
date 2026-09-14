@@ -8,8 +8,8 @@ import unittest
 
 def _mod():
     try:
-        import runtime  # noqa: F401
-        return __import__("runtime", fromlist=["*"])
+        import src.models.runtime  # noqa: F401
+        return __import__("src.models.runtime", fromlist=["*"])
     except Exception as exc:
         raise unittest.SkipTest(f"runtime not ported yet ({exc})")
 

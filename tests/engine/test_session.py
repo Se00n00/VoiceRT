@@ -64,17 +64,5 @@ class TestSessionStore(unittest.TestCase):
         self.assertNotEqual(new_session_id(), new_session_id())
 
 
-class TestSessionSchemas(unittest.TestCase):
-    def test_chat_req_session_fields(self):
-        from server.schemas import ChatReq, ChatResp, VoiceResp
-
-        r = ChatReq(prompt="hi", session_id="abc", reset=True)
-        self.assertEqual(r.session_id, "abc")
-        self.assertTrue(r.reset)
-        self.assertIsNone(ChatReq(prompt="hi").session_id)
-        self.assertEqual(ChatResp(text="t", session_id="s").session_id, "s")
-        self.assertEqual(VoiceResp(session_id="s").session_id, "s")
-
-
 if __name__ == "__main__":
     unittest.main()

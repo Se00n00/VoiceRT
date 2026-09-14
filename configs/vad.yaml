@@ -1,8 +1,0 @@
-model: silero_v4
-onnx_path: models/silero_vad/silero_vad.onnx
-sample_rate: 16000
-window: 512
-context: 64
-threshold: 0.5
-min_speech_ms: 250
-min_silence_ms: 300

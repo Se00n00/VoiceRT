@@ -1,7 +1,7 @@
 """pytest bootstrap: put the voice-pipeline root on sys.path.
 
 This is the ONLY file under tests/ allowed to touch sys.path; all test
-modules use absolute library imports (`from server...`, `from engine...`).
+modules use absolute library imports (`from server...`, `from src...`).
 """
 import os
 import sys

@@ -1,4 +1,4 @@
-# voice-pipeline
+<img src="VoiceRT.png">
 
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
 ![CUDA 12](https://img.shields.io/badge/CUDA-12-green)
@@ -10,14 +10,15 @@
 No cloud, no API keys, no cluster: microphone (or wav) → text → reply → voice, in under a second.
 
 ```bash
-curl -F f=@sample.wav http://localhost:8003/v1/voice | python -m json.tool
-# {"text": "...", "reply": "Hello! How can I assist you today?",
-#  "ttfa_s": 0.31, "total_s": 0.83, ...}
+# one turn over the two-way socket (see API below)
+# {"event": "done", "summary": {"text": "...",
+#  "reply": "Hello! How can I assist you today?",
+#  "ttfa_s": 0.31, "total_s": 0.83, ...}}
 ```
 
 | Metric (measured, RTX 3050 4GB) | Value |
 |---|---|
-| Pipeline | Silero VAD → Whisper-base → Qwen2.5-0.5B → Kokoro-82M |
+| Pipeline | Silero VAD → Whisper-base → Qwen3-0.6B → Kokoro-82M |
 | Resident VRAM | ~1.9 GB (all four models live) |
 | Voice-turn latency | TTFA **308 ms**, end-to-end **827 ms** |
 | LLM decode | TTFT **14 ms**, **~69 tok/s** sustained |
@@ -37,7 +38,7 @@ curl -F f=@sample.wav http://localhost:8003/v1/voice | python -m json.tool
 - [Installation](#installation)
 - [Quickstart](#quickstart)
 - [Use it in Python](#use-it-in-python)
-- [REST + WebSocket API](#rest--websocket-api)
+- [API specification](#api-specification)
 - [Configuration](#configuration)
 - [Triton kernels](#triton-kernels)
 - [Operations](#operations)
@@ -50,11 +51,12 @@ curl -F f=@sample.wav http://localhost:8003/v1/voice | python -m json.tool
 
 ```
 mic / wav ──> VAD (Silero, ONNX CPU) ──> STT (Whisper-base)
-    ──> LLM (Qwen2.5-0.5B, streaming tokens)
+    ──> LLM (Qwen3-0.6B, streaming tokens)
     ──> sentence splitter ──> TTS (Kokoro-82M) ──> wav out
 ```
 
-One `VoiceEngine` holds all four models in a single process and VRAM pool.
+One `VoiceAgent` (a compiled LangGraph turn graph) holds all four models
+in a single process and VRAM pool.
 LLM tokens stream out; each completed sentence is synthesized immediately,
 so the first audio starts in ~300 ms without waiting for the full reply.
 
@@ -85,14 +87,16 @@ startup: probe VRAM (nvidia-smi)
        → resize session store + FIFO queue from the plan
 ```
 
-Per-session price (`runtime/capacity.py`, unit-tested on CPU):
+Per-session price (`src/models/runtime/capacity.py`, unit-tested on CPU):
 
-- **KV-cache share** — `2 × 24 layers × 2 kv-heads × 512 × 64 × 2B ≈ 6 MB`
-- **History working set** — `20 turns × (200 prompt + 48 gen) tokens × 896 × 2B ≈ 8.5 MB`
+- **KV-cache share** — `2 × 28 layers × 8 kv-heads × 512 × 128 × 2B ≈ 56 MB`
+- **History working set** — `20 turns × (200 prompt + 48 gen) tokens × 1024 × 2B ≈ 9.7 MB`
 - **Transient scratch** — TTS buffers + mel frontend ≈ 150 MB
-- × **1.25 safety factor** → **≈ 206 MB/session** at 48 tokens
+- × **1.25 safety factor** → **≈ 270 MB/session** at 48 tokens
 
-Worked example — this machine (RTX 3050 Laptop, 4096 MB):
+Worked example — this machine (RTX 3050 Laptop, 4096 MB), Qwen2.5-0.5B
+stack measured 2026-09-12 (kept for reference; Qwen3-0.6B re-measures at
+next boot, estimate ≈ 270 MB/session → ~6 sessions):
 
 | | genlen 48 | genlen 128 |
 |---|---|---|
@@ -104,13 +108,15 @@ Worked example — this machine (RTX 3050 Laptop, 4096 MB):
 
 Longer generations cost more history per turn, so fewer sessions fit —
 exactly the tradeoff the planner quantifies. The live plan is always
-visible: `GET /health` → `capacity`, `GET /v1/sessions` → usage vs max.
-Retune without code changes via `configs/pipeline.yaml` → `capacity:`.
+visible: `GET /health` → `missing` + `sessions` + `vram_mb`.
+Retune via `VoiceAgentConfig` fields (`max_tokens`, `max_inflight`,
+`queue_timeout_s`, `vram_budget_mb`).
 
 ## Performance
 
 Measured 2026-09-12 on RTX 3050 Laptop 4GB (CUDA 12, torch 2.5.1),
-`PYTHONPATH=. python benchmarks/bench_capacity.py`.
+Qwen2.5-0.5B stack (kept for reference; the serving math is unchanged,
+see `src/models/runtime/capacity.py` + `tests/runtime/test_capacity.py`).
 First-touch CUDA init inflates the very first row; steady state follows it.
 GPU util is sampled via `nvidia-smi` at 2 Hz during each run — short
 sub-second bursts under-fill the sampler, so treat util as a lower bound.
@@ -130,9 +136,6 @@ Concurrency doubles token throughput (26 → 66 tok/s at genlen 16) while
 per-request latency rises — the classic serving tradeoff, measured not
 assumed. Peak efficiency: **3.14 tok/s per watt** (conc 1, genlen 48).
 
-![TTFT vs concurrency](benchmarks/results/cap_ttft_vs_conc.svg)
-![Throughput vs generation length](benchmarks/results/cap_thr_vs_genlen.svg)
-
 ### Cost per million tokens
 
 At a local amortized rate of **$0.05/hr** (laptop power + hardware share):
@@ -142,9 +145,6 @@ At a local amortized rate of **$0.05/hr** (laptop power + hardware share):
 | genlen 48, conc 1 | 69.4 | **$0.2000** |
 | genlen 48, conc 2 | 67.1 | $0.2070 |
 | genlen 16, conc 2 | 65.5 | $0.2122 |
-
-![Cost vs generation length](benchmarks/results/cap_cost_vs_genlen.svg)
-![GPU util vs throughput](benchmarks/results/cap_util_vs_thr.svg)
 
 ### Full voice turn (round-trip: synth speech → full pipeline)
 
@@ -163,40 +163,27 @@ At a local amortized rate of **$0.05/hr** (laptop power + hardware share):
 | LLM TTFT / decode | 14 ms / ~69 tok/s | — |
 | TTS (Kokoro, eager) | 141 ms | **0.045** |
 
-Raw runs: `benchmarks/results/capacity_<ts>.json`, tables in
-`benchmarks/results/capacity.md`. Reproduce everything with
-`PYTHONPATH=. python scripts/benchmark.py capacity`.
-
 ## Project structure
 
 ```
 voice-pipeline/
-├── serve.py            # API entrypoint: python serve.py  (port 8003)
+├── server.py            # THE server: health, metrics, two-way /talk WS (port 8003)
+├── engine/              # audio io, session memory, streaming helpers
 ├── requirements.txt    # pinned runtime deps, pip install only
-├── configs/            # pipeline.yaml (+capacity) + per-leg yamls
-├── engine/             # VoiceEngine, session store, streaming, audio utils
 ├── models/
 │   ├── qwen.py         # LLM leg: QwenEngine (weights + KV-cache + attn)
 │   ├── whisper.py      # STT leg: WhisperEngine (mel + encoder + decoder)
 │   ├── tts.py          # TTS leg: KokoroEngine (voices + text + synth)
-│   └── silero_vad/     # VAD leg (ONNX CPU + energy fallback)
-├── triton_kernels/     # low-level kernels (rmsnorm, rope, attn, conv1d, ...)
-│                       # + per-leg surface: qwen.py / whisper.py / tts.py
-├── runtime/            # device / memory / profiler / tensor helpers +
-│                       # capacity planner, FIFO scheduler, batcher, budget
-├── server/             # FastAPI app: routes, schemas, websocket, middleware
-├── scripts/
-│   ├── download_models.py
-│   ├── validate_models.py
-│   ├── benchmark.py    # dispatcher (incl. capacity)
-│   └── convert_weights.py
-├── benchmarks/         # per-leg + pipeline + capacity sweeps + results/
-│   ├── bench_capacity.py
-│   └── results/        # capacity.json/md + SVG graphs
-├── tests/              # 54-test unittest suite (engine/kernels/models/…)
-├── examples/
-│   ├── offline.py      # wav in -> reply wav
-│   └── streaming.py    # chunked-file simulated streaming turn
+│   └── silero_vad/     # VAD leg (pure ONNX, CPU)
+├── src/                # clean async legs + agent loop
+│   ├── models/         # vad/stt/llm/tts (dataclass configs, async, no YAML)
+│   │   ├── runtime/    # device/memory/profiler/tensor + capacity + scheduler
+│   │   │   ├── triton_kernels/  # hand-written kernels (rmsnorm/rope/attn/conv1d…)
+│   │   │                 # + per-leg surface: qwen.py / whisper.py / tts.py
+│   │   └── download.py # weight bootstrap (HF + silero ONNX)
+│   ├── agent/          # LangGraph turn graph (state, nodes, builder)
+│   └── main.py         # VoiceAgent: VAD -> STT -> LLM -> TTS loop
+├── tests/              # 70-test unittest suite (engine/kernels/models/…)
 └── README.md
 ```
 
@@ -224,230 +211,257 @@ pip install -r requirements.txt
 ```
 
 `PYTHONPATH=.` must be set on every command below so the
-`triton_kernels` / `models` / `engine` / `server` packages resolve.
+  `src` / `models` / `engine` / `server` packages resolve (kernels live at `src.models.triton_kernels`).
 
-Download and verify weights:
-
-```bash
-PYTHONPATH=. python scripts/download_models.py
-PYTHONPATH=. python scripts/validate_models.py
-```
-
-Start the API (warms all legs, probes VRAM, plans capacity — ~2 min first boot):
+Download weights (first run only):
 
 ```bash
-PYTHONPATH=. python serve.py
-# optional: PYTHONPATH=. python serve.py --host 0.0.0.0 --port 8003
+PYTHONPATH=. python -m src.models.download
 ```
 
-Watch the startup lines: `voice engine ready vram=…` then
-`capacity: 9 sessions @ genlen 48, 4 inflight (…)`.
+Start the API (warms all legs — ~2 min first boot):
+
+```bash
+PYTHONPATH=. python server.py
+# optional: PYTHONPATH=. python server.py --host 0.0.0.0 --port 8003
+```
+
+Watch the startup line: `voice-agent ready` (plus `missing=[…]` when a
+leg has no weights).
 
 ## Quickstart
 
 1. Install + download models (see above).
-2. Start server: `PYTHONPATH=. python serve.py`
-3. Full voice turn:
+2. Start server: `PYTHONPATH=. python server.py`
+3. Full voice turn over the two-way socket (see API below).
 
-```bash
-curl -F f=@sample.wav http://localhost:8003/v1/voice | python -m json.tool
-```
-
-4. Health (with capacity plan) + metrics (with queue stats):
+4. Health + metrics:
 
 ```bash
 curl http://localhost:8003/health
 curl http://localhost:8003/metrics
 ```
 
-5. Run tests + benchmarks:
+5. Run tests:
 
 ```bash
 PYTHONPATH=. python -m unittest discover -s tests -t . -q
-PYTHONPATH=. python scripts/benchmark.py capacity
 ```
 
 ## Use it in Python
 
-Offline file-to-file turn:
+Voice turn straight on the agent (streams per-node events):
 
-```bash
-PYTHONPATH=. python examples/offline.py input.wav reply.wav
-```
-
-Simulated streaming turn (feeds `--chunk-ms` slices through VAD first):
-
-```bash
-PYTHONPATH=. python examples/streaming.py input.wav reply_stream.wav --chunk-ms 320
-```
-
-Direct engine API:
+Direct agent API:
 
 ```python
-from engine.engine import VoiceEngine
+import asyncio
+from src.main import VoiceAgent
 
-eng = VoiceEngine()  # loads configs/*, warms legs, reads VRAM budget
+async def main():
+    agent = VoiceAgent()
+    await agent.warm()
+    async for event in agent(audio, sr=16000, session_id="my-session-id"):
+        print(event.node, event.kind, str(event.data)[:80])
 
-segs = eng.vad_segments(audio, sr=16000)
-stt = eng.transcribe(audio, sr=16000)          # {"text", "rtf", "ttfs", ...}
-chat = eng.chat("Hello!", max_tokens=48)       # {"text", "ttft", "tps", ...}
-tts = eng.speak(chat["text"])                  # {"wav", "sr", "synth_s"}
-
-turn = eng.stream_turn(audio, sr=16000)        # full VAD->STT->LLM->TTS
-print(turn["text"], turn["reply"])
-print(f"TTFA={turn['ttfa_s']*1000:.0f}ms total={turn['total_s']*1000:.0f}ms")
+asyncio.run(main())
 ```
 
-Multi-turn with sessions:
+Single legs (dataclass configs, no YAML):
 
 ```python
-sid = "my-session-id"
-r1 = eng.chat("My name is Ada.", session_id=sid)
-r2 = eng.chat("What is my name?", session_id=sid)  # remembers r1
+from src.models.vad import VadConfig, VadModel
+from src.models.llm import LlmConfig, LlmModel
+
+vad = VadModel(VadConfig(threshold=0.5))
+llm = LlmModel(LlmConfig(model="Qwen/Qwen3-0.6B", thinking=False))
 ```
 
 Capacity math in code (same functions the server uses):
 
 ```python
-from runtime.capacity import probe_vram, plan_capacity
+from src.models.runtime.capacity import probe_vram, plan_capacity
 info = probe_vram()                            # nvidia-smi -> torch -> zeros
 plan = plan_capacity(info["total_mb"], 1807, max_new_tokens=48)
 print(plan["max_sessions"], "sessions @", plan["generation_length"], "tokens")
 ```
 
-## REST + WebSocket API
+## API specification (one server: `server.py`)
 
-Base URL default: `http://localhost:8003`
+Base URL default: `http://localhost:8003`. Interactive docs at `/docs`,
+raw schema at `/openapi.json` — all three endpoints are listed there,
+including the WebSocket `/talk`.
 
 | Method | Endpoint | Input | Output |
 |---|---|---|---|
-| `GET` | `/health` | — | `{ok, uptime_s, engine_loaded, missing, vram_mb, triton, capacity}` |
-| `GET` | `/metrics` | — | per-endpoint `{count, errors, mean_s}`, inflight, queue stats, vram |
-| `POST` | `/v1/vad` | wav upload `f` | `{segments, audio_dur_s, n_segments}` |
-| `POST` | `/v1/transcribe` | wav upload `f` | `{text, rtf, ttfs, dur}` |
-| `POST` | `/v1/chat` | `{prompt, max_tokens, stream, session_id, reset}` | JSON or SSE tokens + `[DONE]` |
-| `POST` | `/v1/speak` | `{text}` | `audio/wav` bytes |
-| `POST` | `/v1/voice` | wav upload `f` + optional `session_id` form field | `{text, reply, wav_b64, ttfa_s, total_s, vram_mb, session_id}` |
-| `GET` | `/v1/sessions` | — | `{sessions, turns, max_sessions, generation_length}` |
-| `DELETE` | `/v1/session/{id}` | — | `{ok, cleared, session_id}` |
-| `POST` | `/v1/talk` | wav upload `f` + optional `session_id` | staged SSE: `stt→llm→tts→turn` + `[DONE]` (curl-able) |
-| `WS` | `/v1/talk?session_id=` | PCM16 chunks / commit | live `vad` + partial `stt`, staged `llm→tts→turn` |
+| `GET` | `/health` | — | liveness + agent status (below) |
+| `GET` | `/metrics` | — | turn counters + per-node event counts |
+| `WS` | `/talk` | PCM16 chunks / control JSON (below) | per-node streams + turn summary |
 
-Examples:
+### `GET /health`
 
-```bash
-# Transcribe
-curl -F f=@sample.wav http://localhost:8003/v1/transcribe
+Liveness-safe: never builds the agent, always 200 while the process is up.
 
-# Chat (JSON)
-curl -X POST http://localhost:8003/v1/chat \
-  -H 'Content-Type: application/json' \
-  -d '{"prompt":"Say hi in one short sentence.","max_tokens":48}'
-
-# Chat (SSE stream)
-curl -N -X POST http://localhost:8003/v1/chat \
-  -H 'Content-Type: application/json' \
-  -d '{"prompt":"Count to three.","stream":true}'
-
-# TTS
-curl -X POST http://localhost:8003/v1/speak \
-  -H 'Content-Type: application/json' \
-  -d '{"text":"Hello from the voice pipeline."}' --output out.wav
-
-# Full turn with session memory
-curl -F f=@sample.wav -F session_id=my-uuid http://localhost:8003/v1/voice
-
-# Same turn, staged over plain HTTP (no WebSocket client needed)
-curl -N -F f=@sample.wav http://localhost:8003/v1/talk
-# event: stt ... event: llm ... event: tts ... event: turn ... [DONE]
+```jsonc
+// GET /health
+{
+  "ok": true,
+  "uptime_s": 25.29,
+  "agent_loaded": true,     // false until legs finish warming
+  "nodes": ["vad", "stt", "llm", "tts"],
+  "missing": [],            // legs without weights, e.g. ["tts leg: ..."]
+  "vram_mb": 2289.7,        // torch peak allocated (absent on CPU-only)
+  "sessions": {"sessions": 0, "turns": 0, "max_turns": 20, "max_age_s": 1800.0}
+}
 ```
 
-Live streaming over one socket (PCM16 chunks in, staged events out —
-STT text the moment it completes, then LLM tokens, then TTS audio):
+### `GET /metrics`
+
+```jsonc
+// GET /metrics
+{
+  "uptime_s": 31.49,
+  "turns": {"started": 12, "done": 11, "errors": 1, "mean_s": 0.94},
+  "events": {"vad": 24, "stt": 11, "llm": 132, "tts": 21, "turn": 11}
+}
+```
+
+### `WS /talk` — two-way voice socket
+
+Connect at `ws://host:8003/talk`, optional `?session_id=`. One socket =
+one session. Audio is mono float, server works at 16 kHz internally
+(chunks at other rates are resampled).
+
+**Client → server.** Text frames carry JSON; binary frames carry raw
+little-endian PCM16 mono (equivalent to one `audio` chunk):
+
+| Message | Meaning |
+|---|---|
+| `{"type":"config","sr":16000,"session_id":"…","end_silence_s":0.8}` | tune session (all fields optional); server re-sends `ready` |
+| `{"type":"audio","pcm_b64":"…","sr":16000}` | append one chunk (`sr` optional, resampled to 16 kHz) |
+| `<binary PCM16>` | same as an `audio` chunk, no base64 overhead |
+| `{"type":"commit"}` | run a turn on the buffer now |
+| `{"type":"reset"}` | drop the buffer + VAD state |
+| `{"type":"close"}` | end the session |
+
+Buffer cap is 60 s of audio (`error` past it). Empty `commit` answers
+`{"event":"error","message":"empty buffer"}` and the socket stays open.
+
+**Endpointing:** every chunk is VAD-scored. After speech plus
+`end_silence_s` trailing silence the buffered turn auto-commits — a mic
+client can just stream frames and read back streams, no `commit` needed.
+
+**Server → client:**
+
+| Frame | Meaning |
+|---|---|
+| `{"event":"ready","session_id":"…","sr":16000,"nodes":["vad","stt","llm","tts"]}` | on connect (and after `config`) |
+| `{"event":"node","node":"vad","kind":"speech","data":{"speech":bool,"buffer_s":float}}` | VAD state change per chunk |
+| `{"event":"node","node":"vad","kind":"segments","data":{"segments":[[start_s,end_s]],"audio_dur_s":float,"speech_s":float}}` | turn speech spans |
+| `{"event":"node","node":"vad","kind":"reset","data":{"buffer_s":0.0}}` | ack of `reset` |
+| `{"event":"node","node":"stt","kind":"text","data":{"text","rtf","ttfs","dur_s"}}` | transcript (or `{"text":"","silent":true}` on gated silence) |
+| `{"event":"node","node":"llm","kind":"token","data":{"token","first":bool}}` | one decoded piece, streamed |
+| `{"event":"node","node":"llm","kind":"done","data":{"text"}}` | full reply |
+| `{"event":"node","node":"tts","kind":"audio","data":{"wav_b64","sr","sentence","synth_s"}}` | one sentence of float32 PCM (`wav_b64` decodes to `sr`-Hz mono) |
+| `{"event":"done","summary":{"text","reply","segments","node_s","ttfa_s","total_s","vram_mb","session_id"}}` | turn complete |
+| `{"event":"error","message"}` | guard/saturation failure; socket stays open |
+
+**A real turn** (live capture — "Hello there, how are you today?" in,
+reply out):
+
+```
+server  {"event":"ready","session_id":"66f3…","sr":16000,"nodes":[…]}
+server  {"event":"node","node":"vad","kind":"speech","data":{"speech":false,…}}
+server  {"event":"node","node":"vad","kind":"segments",
+          "data":{"segments":[[0.32,2.01]],"audio_dur_s":2.15,"speech_s":1.69}}
+server  {"event":"node","node":"stt","kind":"text",
+          "data":{"text":" Hello there, how are you today?","rtf":0.075,…}}
+server  {"event":"node","node":"llm","kind":"token","data":{"token":"Hello","first":true}}
+server  {"event":"node","node":"llm","kind":"token","data":{"token":"!",…}}
+        …tokens stream, one TTS chunk per completed sentence…
+server  {"event":"node","node":"tts","kind":"audio",
+          "data":{"wav_b64":"…","sr":24000,"sentence":"Hello!","synth_s":…}}
+server  {"event":"node","node":"llm","kind":"done",
+          "data":{"text":"Hello! I'm here to help you…"}}
+server  {"event":"done","summary":{"text":" Hello there, how are you today?",
+          "reply":"Hello! I'm here to help you…","ttfa_s":0.31,"total_s":0.83,…}}
+```
+
+Minimal client:
 
 ```python
-import asyncio, json, struct
+import asyncio, json
 import websockets  # pip install websockets
 
 async def main():
     async with websockets.connect(
-            "ws://localhost:8003/v1/talk?session_id=my-uuid") as ws:
+            "ws://localhost:8003/talk?session_id=my-uuid") as ws:
         print(await ws.recv())  # {"event": "ready", ...}
-        with open("sample.wav", "rb") as f:
-            pcm = f.read()      # mono 16k PCM16 frames in practice
+        with open("sample.pcm", "rb") as f:
+            pcm = f.read()      # mono 16k PCM16 frames
         await ws.send(pcm[:32000])
         await ws.send(json.dumps({"type": "commit"}))
         async for msg in ws:
             evt = json.loads(msg)
-            print(evt["event"], evt.get("text", evt.get("token", ""))[:60])
-            if evt.get("event") == "turn":
+            # {"event": "node", "node": "vad"|"stt"|"llm"|"tts", ...}
+            # {"event": "done", "summary": {text, reply, ttfa_s, total_s}}
+            # {"event": "error", "message": ...}
+            print(evt["event"], evt.get("node", ""))
+            if evt.get("event") in ("done", "error"):
                 break
 
 asyncio.run(main())
 ```
 
 Sessions: frontend creates one UUID (`crypto.randomUUID()`), sends it as
-`session_id` on `/v1/chat`, `/v1/voice` (form field), or `?session_id=` on
-WS `/v1/talk`. Omit it for stateless. `reset:true` (chat) or
-`DELETE /v1/session/{id}` clears. History bounded per session, 30-min TTL,
-session count capped by the VRAM-derived plan (9 on the reference 4GB
-card), RAM-only.
+`?session_id=` on `WS /talk` (or inside a `config` message). Omit it for
+stateless. History bounded per session, 30-min TTL, RAM-only.
 
 ## Configuration
 
-`configs/pipeline.yaml`:
+No YAML, no config files: every leg takes a frozen dataclass, composed
+in `VoiceAgentConfig`:
 
-```yaml
-sample_rate: 16000
-device: cuda
-server:
-  host: 0.0.0.0
-  port: 8003
-legs:
-  vad: configs/vad.yaml
-  stt: configs/whisper.yaml
-  llm: configs/qwen.yaml
-  tts: configs/tts.yaml
-streaming:
-  max_tokens: 48          # <-- generation length drives session pricing
-  sentence_split: "[.!?]+"
-vram_budget_mb: 3800      # hard guard, enforced per voice turn (503 past it)
-capacity:
-  per_turn_mb: 150        # transient scratch per turn
-  headroom_frac: 0.10     # VRAM fraction held back
-  headroom_min_mb: 400
-  safety_factor: 1.25     # per-session price multiplier
-  sessions_cap: 1000      # ceiling even when VRAM allows more
-  max_inflight: 4         # measured serialization point
-  queue_timeout_s: 10     # FIFO wait before 503 + Retry-After
+```python
+from src.main import VoiceAgent, VoiceAgentConfig
+from src.models.llm import LlmConfig
+from src.models.tts import TtsConfig
+from src.models.vad import VadConfig
+
+cfg = VoiceAgentConfig(
+    vad=VadConfig(threshold=0.5),
+    llm=LlmConfig(model="Qwen/Qwen3-0.6B", max_tokens=48, thinking=False),
+    tts=TtsConfig(voice="af_heart"),
+    max_inflight=4,          # measured serialization point
+    queue_timeout_s=10,      # FIFO wait before a turn `error` event
+    vram_budget_mb=3800,     # hard guard, enforced per voice turn
+)
+agent = VoiceAgent(cfg)
 ```
 
-Edit `configs/qwen.yaml` (`max_new_tokens`), `configs/tts.yaml` (`voice`),
-`configs/vad.yaml` (`threshold`) to tune quality / latency / memory.
-Raising `max_new_tokens` automatically lowers served sessions at next boot.
+Raising `max_tokens` prices sessions up (longer generations hold more
+history per turn); lowering `max_inflight` sheds burst load sooner.
 
 ## Triton kernels
 
 All kernels are parity-tested and wired in (`HAVE_*=True` verified).
-One import per leg — `triton_kernels/qwen.py`, `triton_kernels/whisper.py`,
-`triton_kernels/tts.py` — each with Triton fast path + exact torch fallback.
+One import per leg — `src/models/triton_kernels/qwen.py`, `whisper.py`,
+`tts.py` — each with Triton fast path + exact torch fallback.
 
 | Kernel | Speedup vs eager | Status |
 |---|---|---|
 | rope_batched (prefill) | 26.7x | TTFT 173 → 14 ms |
 | conv1d_silu / in1d_silu (TTS post) | 2.53x | in TTS hot path |
-| lstm_cell (VAD) | 1.59x | standalone; ONNX wiring pending |
+| lstm_cell | 1.59x | standalone parity vs nn.LSTMCell (generic; VAD runs pure ONNX, unwired) |
 | rmsnorm / rope / swiglu / gqa / layernorm / row_softmax / decode-attn / batched-decode | active in hot paths | profile-verified |
 | fused_qkv (STT) / fused_qkv_gqa (LLM) | faster in-engine than microbench | primary + fallback |
 | plain conv1d | 0.00x vs cuDNN | stays on cuDNN, documented |
-
-Full table: `benchmarks/results/kernel_profile.txt`.
 
 Honest call: Kokoro full-model `torch.compile` is broken in this env
 (dynamo × transformers-5 → `NameError: torch`); submodule static compile
 crashes on new lengths; dynamic compile is slower than eager for varying
 sentences (RTF 0.37 vs 0.045). Eager TTS + Triton post-processing is the
-right default, and the CUDA-graph runner in `runtime/` stays explicitly
+right default, and the CUDA-graph runner in `src/models/runtime/` stays explicitly
 opted out for the same measured reason.
 
 By leg:
@@ -461,45 +475,37 @@ By leg:
 
 ## Operations
 
-- `GET /health` is liveness-safe (never constructs the engine) and now
-  publishes the `capacity` plan: total/baseline/headroom/usable VRAM,
-  per-session price + breakdown, `max_sessions`, `max_inflight`.
-- `GET /metrics` adds FIFO stats (`pending`, `running`, `admitted_total`)
-  and mean `queue_wait_s` alongside per-endpoint counts/errors/latency.
+- `GET /health` is liveness-safe (never builds the agent): `{ok,
+  uptime_s, agent_loaded, missing, nodes, sessions, vram_mb}`.
+- `GET /metrics`: turn counts/errors/mean latency + per-node event counts.
 - Admission: turns take a FIFO ticket (`queue_timeout_s`, default 10 s);
-  a full queue returns 503 + `Retry-After: 2` instead of queueing
-  unboundedly. Per-turn VRAM guard (`vram_budget_mb`, default 3800 MB)
-  is enforced in `VoiceEngine.stream_turn` → 503 past it.
-- Generation stops at `<|im_end|>` / `<|endoftext|>` — SSE ends cleanly
-  with `[DONE]`, no template leakage into the stream.
-- Guards: audio capped at 60 s (413), empty audio (400), unreadable
-  upload (400), prompt/tokens/text bounds via schemas (422), missing
-  legs (503).
+  a saturated server answers the turn with an `error` event instead of
+  queueing unboundedly. Per-turn VRAM guard (`vram_budget_mb`, default
+  3800 MB) is enforced in `VoiceAgent.__call__`.
+- Generation stops at `<|im_end|>` / `<|endoftext|>` — the `llm done`
+  event ends the token stream; no template leakage.
+- Guards: audio capped at 60 s, empty audio rejected, missing legs
+  reported in `/health` → `missing` (and surface as turn `error` events).
 - Concurrency: single worker serializes past 4 in-flight (measured) —
   the queue sheds load instead of melting latency. True admission
   batching is the next rung, not this rung.
 - VRAM: ~1.9 GB steady with all four legs; 9 sessions fit the reference
   4 GB card at 48 tokens.
-- WS `/v1/talk` shares the HTTP engine singleton — a second VoiceEngine
-  would OOM the 4 GB card. Verified with a real socket turn.
-- VAD stays ONNX-on-CPU by decision: 2.3 MB vendored weights, RTF 0.01,
-  nothing to win. The Triton LSTM cell is implemented + parity-tested
-  (`HAVE_TRITON_LSTM=true`) for the day the VAD outgrows ONNX.
+- One `VoiceAgent` serves every socket — a second agent would duplicate
+  weights in VRAM and OOM the 4 GB card.
+- VAD is pure ONNX on CPU by decision: vendored weights, RTF 0.01,
+  no energy fallback, no Triton path — the ONNX session is the whole leg.
 
 ## Testing
 
 ```bash
 PYTHONPATH=. python -m unittest discover -s tests -t . -q
-# 54 tests OK (engine turns, kernel parity, model legs, capacity math,
-# runtime helpers, live server error paths 400/413/422/503)
+# 70 tests OK (agent loops, kernel parity, model legs, capacity math,
+# runtime helpers, 3-endpoint server)
 ```
 
-Validate weights + imports after download:
-
-```bash
-PYTHONPATH=. python scripts/validate_models.py
-PYTHONPATH=. python scripts/benchmark.py capacity   # regenerates numbers+graphs
-```
+Check weights are present after download (`GET /health` → `missing`
+must be `[]` when all four legs resolve).
 
 ## Deep dives
 
@@ -508,22 +514,19 @@ PYTHONPATH=. python scripts/benchmark.py capacity   # regenerates numbers+graphs
   latency/VRAM budgets, failure-mode table
 - [`docs/capacity.md`](docs/capacity.md) — the VRAM capacity model,
   queueing design, worked 4GB example, retuning guide
-- [`docs/benchmarks.md`](docs/benchmarks.md) — profiling methodology,
-  result schema, reproducing every number above
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| `ModuleNotFoundError: triton_kernels / models / engine / server` | Run from `voice-pipeline/` with `PYTHONPATH=.` |
+| `ModuleNotFoundError: src / models / server` | Run from `voice-pipeline/` with `PYTHONPATH=.` |
 | pip installed CPU-only torch | Install CUDA build from pytorch.org first, then `pip install -r requirements.txt` |
-| `leg(s) not loaded (503)` | Run `scripts/download_models.py` + `validate_models.py`, check `GET /health` → `missing` |
-| `server saturated (503)` | Queue timed out under burst; retry after `Retry-After`, or raise `queue_timeout_s` / lower `max_tokens` |
-| `needs ~XMB but budget is 3800MB (503)` | Per-turn guard tripped; free VRAM or raise `vram_budget_mb` |
+| `leg(s) not loaded` (turn `error` event) | Run `python -m src.models.download`, check `GET /health` → `missing` |
+| `server saturated` (turn `error` event) | Queue timed out under burst; retry, or raise `queue_timeout_s` / lower `max_tokens` |
+| `needs ~XMB but budget is 3800MB` (turn `error` event) | Per-turn guard tripped; free VRAM or raise `vram_budget_mb` |
 | First boot slow (~2 min) | Normal: all four legs warm up; later boots are faster |
-| OOM on 4 GB card | Close other GPU apps; only one `VoiceEngine` may exist (HTTP + WS share it) |
-| Empty / long audio errors | Cap is 60 s wav; empty uploads return 400 by design |
-| No GPU util in benchmark | `nvidia-smi` missing → telemetry falls back to torch VRAM only |
+| OOM on 4 GB card | Close other GPU apps; only one `VoiceAgent` may exist |
+| Empty / long audio errors | Cap is 60 s; empty buffers return an `error` event by design |
 
 ## Roadmap
 
@@ -531,7 +534,7 @@ PYTHONPATH=. python scripts/benchmark.py capacity   # regenerates numbers+graphs
 - [x] FIFO admission queue with timeout (this release)
 - [x] TTFT/TPO/throughput/util/power/cost profiling (this release)
 - [ ] True admission batching (beyond FIFO load-shedding)
-- [ ] Partial STT + VAD-driven barge-in over WS
+- [x] Partial STT + VAD-driven barge-in over WS
 - [ ] ONNX → Triton VAD cutover when it outgrows CPU
 - [ ] Quantized LLM / STT options for <2 GB cards
-- [ ] Frontend demo client for `/v1/talk`
+- [ ] Frontend demo client for `/talk`

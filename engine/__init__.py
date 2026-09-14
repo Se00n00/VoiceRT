@@ -1,18 +1,8 @@
-"""engine: VoiceEngine live-loop plus config/leg loading and session helpers."""
+"""engine: audio io, session memory, and streaming helpers.
+
+(Used by the live stack: ``src/*``, ``server.py``.)
+"""
 from engine.audio import duration_s, load_wav, normalize, resample, save_wav, to_mono
-from engine.engine import STT_SR, SYSTEM_PROMPT, TTS_SR, VoiceEngine
-from engine.model import (
-    CANDIDATES,
-    FILENAME,
-    LEG_ORDER,
-    config_path_for,
-    leg_status,
-    list_legs,
-    load_all_configs,
-    load_config,
-    load_leg,
-    resolve_leg_class,
-)
 from engine.session import SessionStore, new_session_id
 from engine.streaming import (
     SPLIT,
@@ -30,20 +20,6 @@ __all__ = [
     "resample",
     "save_wav",
     "to_mono",
-    "STT_SR",
-    "SYSTEM_PROMPT",
-    "TTS_SR",
-    "VoiceEngine",
-    "CANDIDATES",
-    "FILENAME",
-    "LEG_ORDER",
-    "config_path_for",
-    "leg_status",
-    "list_legs",
-    "load_all_configs",
-    "load_config",
-    "load_leg",
-    "resolve_leg_class",
     "SessionStore",
     "new_session_id",
     "SPLIT",

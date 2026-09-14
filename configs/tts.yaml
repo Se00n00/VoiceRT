@@ -1,7 +1,0 @@
-model: hexgrad/Kokoro-82M
-lang: a
-voice: af_heart
-sample_rate: 24000
-torch_compile: true
-kernels: [conv1d_silu, in1d_silu]
-speed: 1.0

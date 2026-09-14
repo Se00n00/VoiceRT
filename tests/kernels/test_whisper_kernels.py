@@ -15,7 +15,7 @@ except Exception:
 
 
 def _load_stt_kernels():
-    candidates = ("triton_kernels.whisper", "triton_kernels.stt",
+    candidates = ("src.models.triton_kernels.whisper", "triton_kernels.stt",
                   "triton_kernels.whisper_kernels", "triton_kernels")
     last = None
     for name in candidates:
