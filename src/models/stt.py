@@ -38,17 +38,16 @@ class SttModel:
         if self._leg is None:
             import torch
 
-            from src.models.engines.whisper import WhisperEngine
+            # fused single-file model: src/models/whisper.py (1 fused layer x6, batched, fused kernels)
+            from src.models.whisper import WhisperFused
 
             device = self.config.device
             if device.startswith("cuda") and not torch.cuda.is_available():
                 device = "cpu"
-            self._leg = WhisperEngine(
+            self._leg = WhisperFused(
                 device=device,
                 model=self.config.model,
-                language=self.config.language,
-                sample_rate=self.config.sample_rate,
-                max_new_tokens=self.config.max_tokens,
+                batch_size=1,
             )
         return self._leg
 
@@ -77,14 +76,11 @@ class SttModel:
         max_tokens = self.config.max_tokens
 
         def _run():
-            feats = proc(wav, sampling_rate=int(sr),
-                         return_tensors="pt").input_features
-            feats = torch.nn.functional.pad(feats, (0, 3000 - feats.shape[-1]))
-            if leg.device.startswith("cuda"):
-                feats = feats.cuda()
+            # WhisperFused batched path — wav in, ids out (fused kernels, mandatory)
             with torch.no_grad():
-                r = leg.transcribe_mel(feats, max_tokens=max_tokens)
-            ids = r["ids"]
+                r = leg.transcribe([wav], sr=int(sr), max_tokens=max_tokens)
+            # r["ids"] is List[List[int]] batched; take first
+            ids = r["ids"][0] if isinstance(r["ids"], list) and r["ids"] and isinstance(r["ids"][0], list) else r["ids"]
             text = proc.batch_decode([ids], skip_special_tokens=True)[0]
             return r, text
 

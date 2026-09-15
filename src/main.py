@@ -46,6 +46,10 @@ class VoiceAgentConfig:
     vram_budget_mb: float = 3800.0
     per_turn_mb: float = 150.0
     trim_pad_s: float = 0.15
+    # paged LLM engine (src/inference) — shares VRAM budget, uses real QwenRunner
+    llm_paged: bool = False  # set True to route LLM via paged engine (recommended on CUDA)
+    llm_paged_blocks: int = 16
+    llm_paged_batch_size: int = 4
 
 
 class VoiceAgent:
@@ -54,9 +58,17 @@ class VoiceAgent:
     def __init__(self, config: VoiceAgentConfig | None = None):
         self.config = config or VoiceAgentConfig()
         cfg = self.config
+        # if paged LLM requested, inject paged flags into llm config
+        llm_cfg = cfg.llm
+        if cfg.llm_paged:
+            # rebuild llm config with paged enabled (frozen dataclass)
+            from dataclasses import replace
+            llm_cfg = replace(llm_cfg, use_paged=True,
+                              paged_blocks=cfg.llm_paged_blocks,
+                              paged_batch_size=cfg.llm_paged_batch_size)
         self.vad = VadModel(cfg.vad)
         self.stt = SttModel(cfg.stt)
-        self.llm = LlmModel(cfg.llm)
+        self.llm = LlmModel(llm_cfg)
         self.tts = TtsModel(cfg.tts)
         self.sessions = SessionStore(
             max_turns=cfg.max_session_turns,
@@ -67,6 +79,8 @@ class VoiceAgent:
         self.missing: list = []
         self._warmed = False
         self._graph = None  # compiled lazily: tests may swap legs first
+        # paged engine handle (mirrors llm._paged_engine after warm)
+        self._paged_engine = None
 
     @property
     def warmed(self) -> bool:
@@ -80,8 +94,48 @@ class VoiceAgent:
                 await getattr(self, name).warm()
             except Exception as exc:  # noqa: BLE001 - omit-and-report
                 self.missing.append(f"{name} leg: {exc}")
+        # expose paged engine if llm was built with it
+        try:
+            eng = None
+            if hasattr(self.llm, "_paged_engine"):
+                cand = getattr(self.llm, "_paged_engine")
+                eng = cand() if callable(cand) else cand
+                # also check inst attribute
+                if eng is None and hasattr(self.llm, "_paged_engine_inst"):
+                    eng = getattr(self.llm, "_paged_engine_inst")
+            self._paged_engine = eng
+            if self._paged_engine is None and getattr(self.config, "llm_paged", False):
+                try:
+                    self._paged_engine = self.llm._paged_engine()  # type: ignore
+                except Exception:
+                    pass
+        except Exception:
+            self._paged_engine = None
         self._warmed = True
         return self
+
+    @property
+    def paged_engine(self):
+        # lazy fallback — only after warm to avoid eager weight fetch in tests
+        if not self._warmed:
+            return self._paged_engine
+        if self._paged_engine is None:
+            try:
+                eng = self.llm._paged_engine()  # type: ignore
+                self._paged_engine = eng
+            except Exception:
+                pass
+        return self._paged_engine
+
+    def engine_stats(self):
+        """Paged engine stats if active, else None."""
+        eng = self.paged_engine
+        if eng is None:
+            return None
+        try:
+            return eng.stats()  # type: ignore
+        except Exception:
+            return None
 
     # -- admission ----------------------------------------------------
     async def _admit(self):

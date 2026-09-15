@@ -35,5 +35,3 @@ benchmarks/results/*.json
 *.swo
 .vscode/
 .idea/
-
-tests

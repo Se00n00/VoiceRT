@@ -93,11 +93,14 @@ def gqa_decode_attn(q, K, V, scale):
     Hq, D = q.shape
     Hk = K.shape[0]
     group = Hq // Hk
+    # keep everything in float32 for parity; Triton path handles fp16
     Ke = K.repeat_interleave(group, dim=0).float()
     Ve = V.repeat_interleave(group, dim=0).float()
     scores = torch.einsum("hd,hnd->hn", q.float(), Ke) * scale
-    probs = torch.softmax(scores, dim=-1).to(V.dtype)
-    return torch.einsum("hn,hnd->hd", probs, Ve)
+    probs = torch.softmax(scores, dim=-1)  # float
+    out = torch.einsum("hn,hnd->hd", probs, Ve)
+    # preserve q's dtype for the caller (they often cast to weight dtype after)
+    return out.to(q.dtype) if out.dtype != q.dtype else out
 
 
 def fused_qkv_gqa(x, wq, wk, wv, bq=None, bk=None, bv=None):

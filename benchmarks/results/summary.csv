@@ -1,0 +1,22 @@
+Model,Metric,PyTorch,Triton,Speedup
+LLM,TTFT p50 (ms),2095.62,128.50,16.31x
+LLM,TPOT p50 (ms),24.493,20.354,1.20x
+LLM,tok/s,37.2,99.7,2.68x
+STT,latency median (ms),1449.1,653.6,2.22x
+STT,RTF,0.527,0.054,9.68x
+STT,audio s/s,58.9,90.8,1.54x
+TTS,latency median (ms),1185.2,889.9,1.33x
+TTS,RTF,0.104,0.086,1.22x
+llm_kernels,rmsnorm speedup,0.300ms,0.119ms,2.52x
+llm_kernels,rope speedup,0.414ms,0.122ms,3.39x
+llm_kernels,rope_batched speedup,10.348ms,0.122ms,84.92x
+llm_kernels,swiglu speedup,0.108ms,0.090ms,1.19x
+llm_kernels,gqa_decode_attn speedup,0.413ms,0.094ms,4.37x
+llm_kernels,fused_qkv_gqa speedup,0.119ms,0.142ms,0.84x
+stt_kernels,layernorm speedup,0.038ms,0.056ms,0.67x
+stt_kernels,row_softmax speedup,0.028ms,0.048ms,0.59x
+stt_kernels,decode_attn speedup,0.162ms,0.040ms,4.09x
+stt_kernels,batched_decode_attn speedup,0.160ms,0.048ms,3.32x
+stt_kernels,fused_qkv speedup,0.077ms,0.067ms,1.15x
+tts_kernels,conv1d_silu speedup,0.068ms,0.499ms,0.14x
+tts_kernels,in1d_silu speedup,0.110ms,0.056ms,1.95x

@@ -21,6 +21,12 @@ from src.models.runtime.device import (
 from src.models.runtime.memory import MemoryBudgetExceeded, check_budget, fits, summary
 from src.models.runtime.profiler import Profiler
 from src.models.runtime.scheduler import FIFOScheduler
+
+# inference engine — available via explicit import to avoid circular deps:
+#   from src.inference import InferenceEngine
+#   from src.models.runtime.inference_engine import InferenceEngine, auto_engine_config
+# (runtime/__init__ does not eagerly import inference to keep import graph acyclic;
+#  the facade module `runtime/inference_engine.py` re-exports with capacity-aware helpers.)
 from src.models.runtime.tensor import (
     DTYPE_MAP,
     dtype_name,

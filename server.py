@@ -69,12 +69,28 @@ def _record_turn(dt: float, err: bool = False):
 
 
 def get_agent():
-    """Process-wide :class:`VoiceAgent`, built on first use."""
+    """Process-wide :class:`VoiceAgent`, built on first use.
+
+    On CUDA, opts into paged LLM engine (real QwenRunner, continuous batching)
+    so the inference engine is actively in the hot path for every LLM turn.
+    """
     global _agent
     if _agent is None:
-        from src.main import VoiceAgent
+        from src.main import VoiceAgent, VoiceAgentConfig
 
-        _agent = VoiceAgent()
+        try:
+            import torch
+            # enable paged only when CUDA + weights are usable; VoiceAgent.warm will
+            # degrade gracefully to fused path if engine fails (OOM / missing)
+            if torch.cuda.is_available():
+                cfg = VoiceAgentConfig(llm_paged=True, llm_paged_blocks=16,
+                                       llm_paged_batch_size=4)
+                _agent = VoiceAgent(cfg)
+            else:
+                _agent = VoiceAgent()
+        except Exception:
+            from src.main import VoiceAgent as _VA
+            _agent = _VA()
     return _agent
 
 
@@ -100,7 +116,7 @@ def _pcm16_to_float(raw: bytes) -> np.ndarray:
 def health():
     # Liveness-safe: never builds the agent, never throws. Always returns
     # the full spec shape {ok, uptime_s, agent_loaded, missing, nodes,
-    # sessions, vram_mb} — with defaults until the agent warms.
+    # sessions, vram_mb, engine} — with defaults until the agent warms.
     try:
         loaded = bool(_agent is not None and getattr(_agent, "warmed", False))
     except Exception:
@@ -111,7 +127,8 @@ def health():
                  "nodes": ["vad", "stt", "llm", "tts"],
                  "sessions": {"sessions": 0, "turns": 0, "max_turns": 20,
                               "max_age_s": 1800.0},
-                 "vram_mb": 0.0}
+                 "vram_mb": 0.0,
+                 "engine": None}
     if _agent is not None:
         try:
             out["missing"] = list(getattr(_agent, "missing", []) or [])
@@ -119,6 +136,26 @@ def health():
             pass
         try:
             out["sessions"] = _agent.sessions.stats()
+        except Exception:
+            pass
+        # paged engine stats — proves inference engine is live for LLM
+        try:
+            stats = _agent.engine_stats()  # type: ignore
+            if stats is not None:
+                out["engine"] = {
+                    "active": True,
+                    "runner": stats.get("runner"),
+                    "device": stats.get("device"),
+                    "steps": stats.get("steps"),
+                    "kv_cache": stats.get("kv_cache"),
+                    "scheduler": stats.get("scheduler"),
+                    "prefix_cache": stats.get("prefix_cache"),
+                    "cuda_graph": stats.get("cuda_graph"),
+                }
+            else:
+                # engine configured but not yet warmed, or non-paged mode
+                paged = bool(getattr(getattr(_agent, "config", None), "llm_paged", False))
+                out["engine"] = {"active": False, "paged_requested": paged}
         except Exception:
             pass
     try:
@@ -141,7 +178,7 @@ def metrics():
     done = snap["turns_done"]
     events = {"vad": 0, "stt": 0, "llm": 0, "tts": 0, "turn": 0}
     events.update(snap["events"])
-    return {
+    out = {
         "uptime_s": time.time() - _t_boot,
         "turns": {
             "started": snap["turns_started"],
@@ -151,6 +188,22 @@ def metrics():
         },
         "events": events,
     }
+    # enrich with paged engine counters if live
+    try:
+        if _agent is not None and hasattr(_agent, "engine_stats"):
+            estats = _agent.engine_stats()  # type: ignore
+            if estats is not None:
+                out["engine"] = {
+                    "steps": estats.get("steps"),
+                    "total_tokens": estats.get("total_tokens"),
+                    "runner": estats.get("runner"),
+                    "kv_cache": estats.get("kv_cache"),
+                    "prefix_cache": estats.get("prefix_cache"),
+                    "cuda_graph": estats.get("cuda_graph"),
+                }
+    except Exception:
+        pass
+    return out
 
 
 @router.websocket("/talk")
@@ -384,6 +437,19 @@ def create_app(agent=None):
             print("voice-agent ready", flush=True)
             if getattr(ag, "missing", []):
                 print(f"voice-agent missing: {ag.missing}", flush=True)
+            # report paged engine so operator sees inference engine is live
+            try:
+                est = ag.engine_stats()  # type: ignore
+                if est is not None:
+                    print(f"paged engine: runner={est.get('runner')} "
+                          f"device={est.get('device')} "
+                          f"blocks={est.get('kv_cache', {}).get('num_blocks') or est.get('kv_cache', {}).get('memory_mb') } "
+                          f"prefix={est.get('prefix_cache')} "
+                          f"graph={est.get('cuda_graph')}", flush=True)
+                elif getattr(getattr(ag, "config", None), "llm_paged", False):
+                    print("paged engine: requested but not active (fallback to fused)", flush=True)
+            except Exception:
+                pass
         except Exception as exc:  # never fail startup for import checks
             print(f"voice-agent not warmed: {exc}", flush=True)
 

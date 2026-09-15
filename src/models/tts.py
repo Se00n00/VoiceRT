@@ -43,17 +43,19 @@ class TtsModel:
         if self._leg is None:
             import torch
 
-            from src.models.engines.tts import KokoroEngine
+            # fused single-file model: src/models/kokoro.py (batched, VRAM-aware, fused tts kernels)
+            from src.models.kokoro import KokoroFused
 
             device = self.config.device
             if device.startswith("cuda") and not torch.cuda.is_available():
                 device = "cpu"
-            self._leg = KokoroEngine(
-                lang=self.config.lang,
+            self._leg = KokoroFused(
+                lang_code=self.config.lang,
                 voice=self.config.voice,
                 device=device,
                 sample_rate=self.config.sample_rate,
-                speed=self.config.speed,
+                enhance=False,
+                batch_size=4,
             )
         return self._leg
 

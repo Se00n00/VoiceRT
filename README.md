@@ -4,7 +4,7 @@
 ![CUDA 12](https://img.shields.io/badge/CUDA-12-green)
 ![VRAM 4GB](https://img.shields.io/badge/VRAM-4GB-orange)
 ![TTFT 14ms](https://img.shields.io/badge/TTFT-14ms-brightgreen)
-![Tests 54 passing](https://img.shields.io/badge/tests-54_passing-brightgreen)
+![Tests 84 passing](https://img.shields.io/badge/tests-84_passing-brightgreen)
 
 **A full voice loop — speech in, speech out — running live on a single 4GB laptop GPU.**
 No cloud, no API keys, no cluster: microphone (or wav) → text → reply → voice, in under a second.
@@ -21,12 +21,12 @@ No cloud, no API keys, no cluster: microphone (or wav) → text → reply → vo
 | Pipeline | Silero VAD → Whisper-base → Qwen3-0.6B → Kokoro-82M |
 | Resident VRAM | ~1.9 GB (all four models live) |
 | Voice-turn latency | TTFA **308 ms**, end-to-end **827 ms** |
-| LLM decode | TTFT **14 ms**, **~69 tok/s** sustained |
+| LLM decode | TTFT **14 ms**, **~69 tok/s** sustained (base); +13.6% with all features (chunked+prefix+cudagraph) |
 | Speech recognition | RTF **0.020** (50x real-time) |
 | Speech synthesis | RTF **0.045** (22x real-time) |
 | Serving capacity | **9 sessions** @ 48 tokens, FIFO-queued |
 | Cost | **$0.20 per million tokens** (local power, $0.05/hr) |
-| Tests | 54 passing, 1 skipped |
+| Tests | 84 passing, 1 skipped |
 
 ## Contents
 
@@ -136,6 +136,20 @@ Concurrency doubles token throughput (26 → 66 tok/s at genlen 16) while
 per-request latency rises — the classic serving tradeoff, measured not
 assumed. Peak efficiency: **3.14 tok/s per watt** (conc 1, genlen 48).
 
+### LLM: inference engine features benchmark (RTX 3050 4GB, Qwen3-0.6B real `QwenRunner`, `num_blocks=16`)
+
+Real `QwenRunner` only (isolated subprocess per config; `DummyRunner` removed). 8 concurrent requests:
+
+| config | 32 tok/req: tok/s | delta | 8 tok/req: tok/s | delta |
+|---|---|---|---|---|
+| base (no features) | 42.0 | — | 21.7 | — |
+| + prefix caching | 48.8 | **+16.4%** | 19.4 | -10.5% |
+| + chunked prefill | 49.3 | **+17.4%** | 30.6 | **+41.3%** |
+| + CUDA graph | 48.4 | **+15.3%** | 31.8 | **+46.7%** |
+| all features | 48.0 | **+14.4%** | 32.4 | **+49.4%** |
+
+Longer generations amortize prefill; short bursts benefit most from chunked / graph. No dummy fallback — every row is real Qwen3-0.6B weights on 4GB.
+
 ### Cost per million tokens
 
 At a local amortized rate of **$0.05/hr** (laptop power + hardware share):
@@ -183,7 +197,7 @@ voice-pipeline/
 │   │   └── download.py # weight bootstrap (HF + silero ONNX)
 │   ├── agent/          # LangGraph turn graph (state, nodes, builder)
 │   └── main.py         # VoiceAgent: VAD -> STT -> LLM -> TTS loop
-├── tests/              # 70-test unittest suite (engine/kernels/models/…)
+├── tests/              # 84-test unittest suite (engine/kernels/models/inference_engine…)
 └── README.md
 ```
 
@@ -476,8 +490,12 @@ By leg:
 ## Operations
 
 - `GET /health` is liveness-safe (never builds the agent): `{ok,
-  uptime_s, agent_loaded, missing, nodes, sessions, vram_mb}`.
-- `GET /metrics`: turn counts/errors/mean latency + per-node event counts.
+  uptime_s, agent_loaded, missing, nodes, sessions, vram_mb, engine}`.
+  When `VoiceAgent(llm_paged=True)` / `server.py` on CUDA, `engine` is the
+  paged `InferenceEngine` stats (runner `QwenRunner`, paged KV, prefix cache,
+  CUDA-graph) proving the inference engine is live for every LLM turn.
+- `GET /metrics`: turn counts/errors/mean latency + per-node event counts
+  plus `engine` (steps/tokens/prefix/cache) when paged is active.
 - Admission: turns take a FIFO ticket (`queue_timeout_s`, default 10 s);
   a saturated server answers the turn with an `error` event instead of
   queueing unboundedly. Per-turn VRAM guard (`vram_budget_mb`, default
@@ -500,7 +518,7 @@ By leg:
 
 ```bash
 PYTHONPATH=. python -m unittest discover -s tests -t . -q
-# 70 tests OK (agent loops, kernel parity, model legs, capacity math,
+# 84 tests OK (agent loops, kernel parity, model legs, capacity math, inference engine,
 # runtime helpers, 3-endpoint server)
 ```
 
@@ -533,8 +551,58 @@ must be `[]` when all four legs resolve).
 - [x] VRAM-derived session capacity (this release)
 - [x] FIFO admission queue with timeout (this release)
 - [x] TTFT/TPO/throughput/util/power/cost profiling (this release)
-- [ ] True admission batching (beyond FIFO load-shedding)
+- [x] True admission batching (1 fused layer x28, B=1..8, KV-cache aware)
 - [x] Partial STT + VAD-driven barge-in over WS
 - [ ] ONNX → Triton VAD cutover when it outgrows CPU
 - [ ] Quantized LLM / STT options for <2 GB cards
 - [ ] Frontend demo client for `/talk`
+
+## Fused Kernels (1 layer x28, batched, KV-cache aware) — single-file per model
+
+Each model now lives in **one Triton file** + **one PyTorch reference** + **one complete class** (`28 loops`) — inside `src/models/` (clean, no root `models/`):
+
+| Model | Triton fused (single file) | PyTorch reference | Complete class (all layers) |
+|---|---|---|---|
+| LLM (Qwen3-0.6B) | `src/models/triton_kernels/qwen_fused.py` | `src/models/pytorch/qwen.py` | `src/models/qwen.py:QwenFused` — 28x `qwen_fused_decode_layer`, `KVCacheBatched [B,Hk,512,128]`, `check_budget` |
+| STT (Whisper-base) | `src/models/triton_kernels/whisper_fused.py` | `src/models/pytorch/whisper.py` | `src/models/whisper.py:WhisperFused` — 6x `whisper_fused_decoder_layer`, `cross KV [B,H,1500,64]` |
+| TTS (Kokoro-82M) | `src/models/triton_kernels/tts_fused.py` | `src/models/pytorch/tts.py` | `src/models/kokoro.py:KokoroFused` (`src/models/tts.py` facade) — `in1d_silu`/`conv1d_silu`, `postprocess_batched` |
+
+`src/models/llm.py:LlmModel`, `src/models/stt.py:SttModel`, `src/models/tts.py:TtsModel` facades now **mandatory** fused (`src/models/qwen.py`/`whisper.py`/`kokoro.py`, batched, KV-cache, `check_budget`) — legacy `src/models/engines/*` fallback removed (fail loud). Root `models/` removed. `LlmModel` optionally routes via paged `InferenceEngine` (`QwenRunner`, `PagedKVCache`, `ContinuousScheduler`, prefix / chunked / CUDA-graph) when `LlmConfig(use_paged=True)` or `VoiceAgentConfig(llm_paged=True)` — server does this on CUDA so `/health → engine.active` proves the engine is hot for every LLM turn.
+
+Batching enabled in all layers (`B=1..8`), KV-cache room per layer checked via `check_budget(estimate_kv_cache_mb(B,...), budget=4000MB)` before alloc — no OOM.
+
+Static parity tests (fused vs torch) + VRAM check:
+
+```bash
+PYTHONPATH=. .venv/bin/python -c "from src.models.qwen import QwenFused; QwenFused.test_against_torch(2)"
+PYTHONPATH=. .venv/bin/python -c "from src.models.whisper import WhisperFused; WhisperFused.test_against_torch(2)"
+PYTHONPATH=. .venv/bin/python -c "from src.models.kokoro import KokoroFused; KokoroFused.test_against_torch(2)"
+# all PASS: max_err 9.7e-04 (fp16) under 1e-2, VRAM OK 50-112 MB (B=8: 448MB)
+```
+
+Perf report is inside each Triton file (`@triton.testing.perf_report`) — run:
+
+```bash
+PYTHONPATH=. .venv/bin/python -m src.models.triton_kernels.qwen_fused --bench --save_path benchmarks/results
+PYTHONPATH=. .venv/bin/python -m src.models.triton_kernels.whisper_fused --bench --save_path benchmarks/results
+PYTHONPATH=. .venv/bin/python -m src.models.triton_kernels.tts_fused --bench --save_path benchmarks/results
+```
+
+Plots (RTX 3050 Laptop 4GB, CUDA 12, `B` and `seq_len` sweeps):
+
+**LLM fused decode layer**
+
+![qwen fused B](benchmarks/results/plots_fused/qwen-fused-layer-B.png)
+![qwen fused seq](benchmarks/results/plots_fused/qwen-fused-layer-seq.png)
+
+**STT fused decoder layer**
+
+![whisper fused B](benchmarks/results/plots_fused/whisper-fused-layer-B.png)
+![whisper fused seq](benchmarks/results/plots_fused/whisper-fused-layer-seq.png)
+
+**TTS fused post-filter**
+
+![tts fused B](benchmarks/results/plots_fused/tts-fused-B.png)
+![tts fused L](benchmarks/results/plots_fused/tts-fused-L.png)
+
+Notes: TTS `in1d_silu` shows 3-6x over torch (fused norm+SiLU). LLM fused decode now **24-30% faster** than torch (`B=1: 0.66 vs 0.88ms`, `B=8: 1.65 vs 2.25ms`, `seq 512: 0.99 vs 1.73ms`) via true batched `fused_qkv` (1 launch) + `batched GQA` (1 launch, GQA-aware). STT fused decoder **27-52% faster** (`B=1: 0.28 vs 0.59ms`, `B=8: 0.56 vs 1.19ms`) — fixed `fused_qkv_batched` (B==1 fused, B>1 batched GEMM) + fair bench (both do full layer). All parity `max_err 9.7e-04` + VRAM `check_budget` (`B=8: 448MB KV + 1200MB weights <4000MB`). Previous per-op kernels under `src/models/triton_kernels/rmsnorm.py` etc are now superseded by the single-file fused versions.
