@@ -6,6 +6,8 @@ Technical documentation for `voice-pipeline`. Start here, then go deep.
 |---|---|
 | [architecture.md](architecture.md) | Complete system architecture: components, data flow per endpoint, module map, startup sequence, failure modes |
 | [capacity.md](capacity.md) | VRAM capacity model: probe → price → plan, queueing design, worked 4GB example, retuning guide |
+| [inference_engine.md](inference_engine.md) | Scheduling, batching, paged KV, memory mgmt, QwenRunner, integration with VoiceAgent |
+| [benchmarks.md](benchmarks.md) | All measured numbers: fused kernel microbench, inference engine features, full pipeline, cost, capacity |
 
 ```
                     ┌─────────────────────────────────────────────┐
