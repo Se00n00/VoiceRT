@@ -1,0 +1,27 @@
+{
+  "name": "voice-term-ink",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Stock Ink (React) TUI for the local voice-terminal agent. Talks to bridge.py on :8004.",
+  "type": "module",
+  "bin": {
+    "voice-term": "./bin/run.js"
+  },
+  "scripts": {
+    "dev": "tsx src/index.tsx",
+    "dev:watch": "tsx watch src/index.tsx",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "ink": "^5.2.1",
+    "ink-text-input": "^6.0.0",
+    "react": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "@types/react": "^18.3.3",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0"
+  }
+}

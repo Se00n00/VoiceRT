@@ -120,28 +120,62 @@ def check_coverage(weights):
 
 # -- mel frontend ---------------------------------------------------------
 def hz_to_mel(hz):
-    return 2595.0 * np.log10(1.0 + np.asarray(hz) / 700.0)
+    """Slaney mel scale (librosa parity): linear below 1000 Hz, log above.
+
+    The pure-log HTK formula shifts low-frequency edges by ~3 FFT bins,
+    mistuning the bottom mel bands and pushing the encoder off-distribution.
+    """
+    hz = np.asanyarray(hz, dtype=np.float64)
+    f_sp = 200.0 / 3.0
+    mels = (hz - 0.0) / f_sp
+    min_log_hz = 1000.0
+    min_log_mel = (min_log_hz - 0.0) / f_sp
+    logstep = np.log(6.4) / 27.0
+    log_t = hz >= min_log_hz
+    mels = np.where(log_t, min_log_mel + np.log(hz / min_log_hz) / logstep, mels)
+    return mels
 
 
 def mel_to_hz(mel):
-    return 700.0 * (10.0 ** (np.asarray(mel) / 2595.0) - 1.0)
+    """Inverse Slaney mel scale (librosa parity)."""
+    mel = np.asanyarray(mel, dtype=np.float64)
+    f_sp = 200.0 / 3.0
+    min_log_hz = 1000.0
+    min_log_mel = (min_log_hz - 0.0) / f_sp
+    logstep = np.log(6.4) / 27.0
+    hz = f_sp * mel
+    log_t = mel >= min_log_mel
+    hz = np.where(log_t, min_log_hz * np.exp(logstep * (mel - min_log_mel)), hz)
+    return hz
 
 
 def mel_filterbank(sr=SAMPLE_RATE, n_fft=N_FFT, n_mels=N_MELS,
                    fmin=0.0, fmax=8000.0):
-    """Slaney-style triangular mel filterbank [n_mels, n_fft//2 + 1]."""
+    """Slaney-style triangular mel filterbank [n_mels, n_fft//2 + 1].
+
+    Matches librosa.filters.mel(norm='slaney') used by the official
+    frontend: triangles normalized to unit AREA (each filter divided by
+    its Hz bandwidth). Peak-normalized filters tilt wide high-frequency
+    bands upward, pushing the encoder off-distribution so the decoder
+    answers <|nospeech|> on real speech.
+    """
     n_freqs = n_fft // 2 + 1
     mel_edges = np.linspace(hz_to_mel(fmin), hz_to_mel(fmax), n_mels + 2)
     hz_edges = mel_to_hz(mel_edges)
-    bins = np.floor((n_fft + 1) * hz_edges / sr).astype(int)
+    # Float-domain triangles on the exact rFFT grid (librosa parity):
+    # integer-bin edges collapse narrow low-frequency bands to a point,
+    # mistuning those bins and pushing the encoder off-distribution.
+    fftfreqs = np.fft.rfftfreq(n_fft, d=1.0 / float(sr))
+    ramps = np.subtract.outer(hz_edges, fftfreqs)  # [n_mels+2, n_freqs]
     fb = np.zeros((n_mels, n_freqs), dtype=np.float32)
     for m in range(n_mels):
-        lo, mid, hi = bins[m], bins[m + 1], bins[m + 2]
-        if mid > lo:
-            fb[m, lo:mid] = (np.arange(lo, mid) - lo) / max(mid - lo, 1)
-        if hi > mid:
-            fb[m, mid:hi] = (hi - np.arange(mid, hi)) / max(hi - mid, 1)
-    return fb
+        lower = -ramps[m] / max(hz_edges[m + 1] - hz_edges[m], 1e-9)
+        upper = ramps[m + 2] / max(hz_edges[m + 2] - hz_edges[m + 1], 1e-9)
+        fb[m] = np.maximum(0.0, np.minimum(lower, upper))
+    # Slaney area normalization (librosa parity).
+    enorm = 2.0 / np.maximum(hz_edges[2:] - hz_edges[:-2], 1e-9)
+    fb = fb * enorm[:, None]
+    return fb.astype(np.float32)
 
 
 _FB = None
@@ -155,32 +189,55 @@ def _filters():
 
 
 def _stft_power(wav, n_fft=N_FFT, hop=HOP_LENGTH):
+    """Centered reflect-padded power STFT with periodic Hann, last frame dropped.
+
+    Matches HuggingFace's Whisper frontend bit-for-bit in framing: pad
+    ``n_fft // 2`` reflect samples on each side (``center=True``), frame
+    every ``hop`` samples, then drop the trailing frame (HF: STFT yields
+    ``L // hop + 1`` frames, the last is skipped). An unpadded STFT shifts
+    every frame by half a window, pushing the encoder off-distribution.
+    """
     from src.models.runtime.tensor import to_host_numpy
-    x = to_host_numpy(wav)
-    if x.size < n_fft:
-        x = np.pad(x, (0, n_fft - x.size))
+    x = to_host_numpy(wav).astype(np.float32)
+    pad = n_fft // 2
+    x = np.pad(x, (pad, pad), mode="reflect")
     window = np.hanning(n_fft + 1)[:-1].astype(np.float32)
     n = 1 + (x.size - n_fft) // hop
     idx = np.arange(n_fft)[None, :] + hop * np.arange(n)[:, None]
     frames = x[idx] * window[None, :]
     spec = np.fft.rfft(frames, n=n_fft, axis=1)
-    return (spec.real ** 2 + spec.imag ** 2).astype(np.float32)
+    power = (spec.real ** 2 + spec.imag ** 2).astype(np.float32)
+    return power[:-1]
 
 
 def log_mel_spectrogram(wav, sr=SAMPLE_RATE, n_mels=N_MELS):
-    """Raw waveform (float, any length) -> [n_mels, T] log10-mel float32."""
+    """Raw waveform (float, any length) -> [n_mels, T] normalized log-mel.
+
+    Matches the official Whisper frontend: log10, clip dynamic range to
+    8 dB below the peak, then scale to ~[0, 1] via (x + 4) / 4. Without
+    this the encoder runs off-distribution and the decoder answers
+    <|nospeech|> on loud, VAD-confirmed speech.
+    """
     from src.models.runtime.tensor import to_host_numpy
-    x = to_host_numpy(wav)
+    x = to_host_numpy(wav).astype(np.float32)
     if sr != SAMPLE_RATE:
         dur = len(x) / float(sr)
         n_out = int(round(dur * SAMPLE_RATE))
         old = np.linspace(0.0, 1.0, num=len(x))
         new = np.linspace(0.0, 1.0, num=max(n_out, 1))
         x = np.interp(new, old, x).astype(np.float32)
+    # HF parity: pad/trim the WAVEFORM to 30 s first (silence zeros), so the
+    # frame count is exact and padded regions read as true silence.
+    if len(x) > N_SAMPLES:
+        x = x[:N_SAMPLES]
+    elif len(x) < N_SAMPLES:
+        x = np.pad(x, (0, N_SAMPLES - len(x)))
     power = _stft_power(x)
     mel = power @ _filters().T
-    mel = np.maximum(mel, 1e-10)
-    return np.log10(mel).T.astype(np.float32)
+    log_spec = np.log10(np.maximum(mel, 1e-10))
+    log_spec = np.maximum(log_spec, log_spec.max() - 8.0)
+    log_spec = (log_spec + 4.0) / 4.0
+    return log_spec.T.astype(np.float32)
 
 
 def pad_or_trim(mel, length=N_FRAMES, value=0.0):

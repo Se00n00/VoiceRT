@@ -409,10 +409,26 @@ class InferenceEngine:
             self.add_request(rid, list(toks), sp)  # type: ignore
 
         results: dict[str, list[int]] = {rid: [] for rid in request_ids}
-        # track per-request outputs via step EngineOutputs
-        while self.has_unfinished():
-            outs = self.step()
-            for o in outs:
+        # Stall guard: schedule() legitimately returns [] only when nothing is
+        # schedulable. Consecutive empties mean admission can never succeed
+        # (e.g. prompt+max_tokens future blocks exceed the pool) — abort MY
+        # requests and raise instead of spinning forever (wedged thread +
+        # poisoned request_ids for all later calls).
+        empty_streak = 0
+        try:
+            while self.has_unfinished():
+                outs = self.step()
+                if not outs:
+                    empty_streak += 1
+                    if empty_streak >= 500:
+                        raise RuntimeError(
+                            "inference stalled: scheduler admitted nothing for 500 steps "
+                            f"(prompt lens {[len(p) for p in prompts]}, max_tokens={sp.max_tokens}, "
+                            f"blocks={self.kv_cache.config.num_blocks}); "
+                            "prompt+max_tokens likely exceeds the KV block pool")
+                else:
+                    empty_streak = 0
+                for o in outs:
                 # append to results via internal sg lookup
                 results[o.request_id].append(o.token_id)
                 if o.finished and o.request_id in self._req_to_sg:
@@ -423,6 +439,17 @@ class InferenceEngine:
                         # strip trailing EOS if present and not ignore
                         if results[o.request_id] and results[o.request_id][-1] in sp.stop_token_ids and not sp.ignore_eos:
                             results[o.request_id] = results[o.request_id][:-1]
+        finally:
+            # Never leak blocks / poison request_ids on failure paths
+            # (stall, forward crash, caller timeout): free what is mine.
+            # Finished requests are left alone (results already captured).
+            for rid in request_ids:
+                try:
+                    sg = self._req_to_sg.get(rid)
+                    if sg is not None and not sg.is_finished():
+                        self.abort_request(rid)
+                except Exception:
+                    pass
         return results
 
     async def generate_async(

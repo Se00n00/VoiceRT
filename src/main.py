@@ -19,7 +19,8 @@ import numpy as np
 
 from src.agent.events import AgentEvent  # noqa: F401  (public currency)
 from src.agent.graph import build_turn_graph
-from engine import SessionStore, new_session_id
+from src.agent.memory import LangChainSessionMemory
+from engine import new_session_id
 from src.models.llm import LlmConfig, LlmModel
 from src.models.runtime import FIFOScheduler, check_budget
 from src.models.stt import SttConfig, SttModel
@@ -70,7 +71,7 @@ class VoiceAgent:
         self.stt = SttModel(cfg.stt)
         self.llm = LlmModel(llm_cfg)
         self.tts = TtsModel(cfg.tts)
-        self.sessions = SessionStore(
+        self.sessions = LangChainSessionMemory(
             max_turns=cfg.max_session_turns,
             max_age_s=cfg.session_ttl_s,
             max_sessions=cfg.max_sessions,

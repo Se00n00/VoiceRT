@@ -33,4 +33,8 @@ kokoro==0.9.4
 #   to downgrade it, which breaks uvicorn WS framing — reinstall 17.1
 #   after langgraph if pip reports a websockets downgrade.
 langgraph==1.2.11
+# - textual: the opencode-style full-screen TUI (tui.py). Not needed
+#   for the server; install only for the terminal app.
+textual==8.2.8
+rich==15.0.0
 

@@ -1,6 +1,14 @@
 """Agent: LangGraph turn graph over per-node stream events."""
 from src.agent.events import AgentEvent, NODES
 from src.agent.graph import build_turn_graph
+from src.agent.memory import LCSessionHistory, LangChainSessionMemory
+from src.agent.terminal import (
+    TerminalConfig,
+    TerminalHarness,
+    TerminalState,
+    build_terminal_graph,
+    run_command,
+)
 from src.agent.nodes import (
     respond_node,
     route_after_vad,
@@ -13,6 +21,13 @@ from src.agent.state import AgentState
 
 __all__ = [
     "AgentEvent",
+    "LangChainSessionMemory",
+    "LCSessionHistory",
+    "TerminalConfig",
+    "TerminalHarness",
+    "TerminalState",
+    "build_terminal_graph",
+    "run_command",
     "NODES",
     "AgentState",
     "build_turn_graph",

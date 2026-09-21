@@ -141,6 +141,61 @@ class LlmModel:
         msgs.append({"role": "user", "content": text})
         return msgs
 
+    def messages_for_browser(self, text: str, history: list | None = None,
+                             snapshot: str = "",
+                             observation: str = "") -> list:
+        """Same-model browser prompt: system + preamble + snapshot + user.
+
+        No sidecar, no router model — the SAME Qwen weights decide between
+        plain chat text and one JSON browser action. ``max_tokens`` default
+        stays 48; callers pass a larger per-step limit to ``generate``
+        (e.g. 128) so JSON fits.
+        """
+        # Inlined (was src.tools.schema.BROWSER_PREAMBLE): the browser
+        # schema module was removed with the extension; the prompt text
+        # stays here so this helper keeps working stand-alone.
+        _BROWSER_PREAMBLE = (
+            "You control a browser. Reply with EITHER plain chat text "
+            "OR exactly one JSON action. No other text when acting. "
+            'Ops: click {action,ref} | type {action,ref,text} | '
+            'scroll {action,ref,direction} | select {action,ref,text} | '
+            'navigate {action,text:url} | read {action,ref?} | '
+            'done {action,reply}. Use refs from the page list only.'
+        )
+
+        system = self.config.system_prompt + " " + _BROWSER_PREAMBLE
+        msgs = [{"role": "system", "content": system}]
+        msgs.extend(history or [])
+        body = str(text or "")[:500]
+        if snapshot:
+            body += "\n" + str(snapshot)[:1500]
+        if observation:
+            body += "\nLast result: " + str(observation)[:500]
+        msgs.append({"role": "user", "content": body})
+        return msgs
+
+    def messages_for_terminal(self, text: str, history: list | None = None,
+                              cwd: str = "", observation: str = "") -> list:
+        """Same-model terminal prompt: system + preamble + cwd + user.
+
+        No sidecar, no router model — the SAME Qwen weights decide between
+        plain chat text and one JSON ``TerminalAction`` (see
+        src/tools/terminal.py). Keep bodies small so prompt+max_tokens
+        fits the paged KV block pool.
+        """
+        from src.tools.terminal import TERMINAL_PREAMBLE
+
+        system = self.config.system_prompt + " " + TERMINAL_PREAMBLE
+        msgs = [{"role": "system", "content": system}]
+        msgs.extend(history or [])
+        body = str(text or "")[:500]
+        if cwd:
+            body += "\nCWD: " + str(cwd)[:300] + " SHELL: bash"
+        if observation:
+            body += "\nLast result: " + str(observation)[:800]
+        msgs.append({"role": "user", "content": body})
+        return msgs
+
     async def encode(self, messages: list) -> list:
         tok = self._tokenizer()
         thinking = bool(self.config.thinking)
@@ -181,9 +236,13 @@ class LlmModel:
             limit = int(max_tokens or self.config.max_tokens)
             from src.inference.config import SamplingParams as _SP
             sp = _SP(max_tokens=limit, temperature=0.0)
+            # unique id per call: a stuck/timed-out call must never poison
+            # later ones with "duplicate request_id" (fixed "req0" did).
+            import time as _t
+            rid = f"req-{int(_t.time_ns())}"
             def _run_paged():
-                out = eng.generate([ids], sp, request_ids=["req0"])
-                return list(out.get("req0", []))
+                out = eng.generate([ids], sp, request_ids=[rid])
+                return list(out.get(rid, []))
             out_ids = await asyncio.to_thread(_run_paged)
             text = await self.decode(out_ids)
             return LlmResult(text=text, ttft_s=0.0, tps=0.0,
@@ -218,17 +277,34 @@ class LlmModel:
             sp = _SP(max_tokens=limit, temperature=0.0)
             queue: asyncio.Queue = asyncio.Queue()
             loop = asyncio.get_running_loop()
+            import time as _t
+            rid = f"stream-{int(_t.time_ns())}"
+            empty_steps = {"n": 0}  # worker-side stall counter (sees step outs)
             def _run_paged():
                 try:
-                    import time as _t
-                    rid = f"stream-{int(_t.time_ns())}"
                     eng.add_request(rid, list(ids), sp)
                     first = True
                     while eng.has_unfinished():
                         outs = eng.step()
-                        for o in outs:
-                            if o.request_id != rid:
-                                continue
+                        if not outs:
+                            # Nothing scheduled for anyone: a few empties are
+                            # normal at admission; hundreds mean the prompt can
+                            # never fit the block pool (livelock).
+                            empty_steps["n"] += 1
+                            if empty_steps["n"] >= 500:
+                                try:
+                                    eng.abort_request(rid)
+                                except Exception:
+                                    pass
+                                loop.call_soon_threadsafe(
+                                    queue.put_nowait, ("err", RuntimeError(
+                                        "inference stalled: prompt likely exceeds KV block pool; "
+                                        "shorten history/snapshot or raise paged blocks")))
+                                return
+                            continue
+                        empty_steps["n"] = 0
+                        mine = [o for o in outs if o.request_id == rid]
+                        for o in mine:
                             loop.call_soon_threadsafe(queue.put_nowait, ("tok", (o.token_id, first)))
                             first = False
                             if o.finished:
@@ -240,7 +316,16 @@ class LlmModel:
             worker = loop.run_in_executor(None, _run_paged)
             try:
                 while True:
-                    kind, payload = await queue.get()
+                    try:
+                        # Stall backstop: worker only posts tokens; silence
+                        # here means it is wedged — abort and fail loudly.
+                        kind, payload = await asyncio.wait_for(queue.get(), timeout=180)
+                    except asyncio.TimeoutError:
+                        try:
+                            eng.abort_request(rid)
+                        except Exception:
+                            pass
+                        raise RuntimeError("LLM stream timed out (180s without a token)")
                     if kind == "end":
                         return
                     if kind == "err":

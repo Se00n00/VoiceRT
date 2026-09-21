@@ -196,3 +196,17 @@ All plots in `benchmarks/results/plots_fused/` · engine bench in `benchmarks/en
 - [OpenAI Triton](https://triton-lang.org/)
 
 More: [`docs/architecture.md`](docs/architecture.md) startup + WS flow, [`docs/inference_engine.md`](docs/inference_engine.md) scheduling/batching/KV/memory, [`docs/capacity.md`](docs/capacity.md) VRAM math, plots in `benchmarks/results/plots_fused/`.
+
+---
+
+## 🚧 TUI version — work in progress
+
+I'm building an opencode-style **terminal voice agent** on top of this pipeline: full-screen split UI — conversation + input on the left, live USER/AGENT audio visualizer on the right — with the same single Qwen model chatting or running shell commands (`v` voice turn, `y`/`n` confirm gate, `/` commands, per-session LangChain memory). Two frontends exist: `tui.py` (Textual) and the current **stock Ink (React) app in `tui-ink/`** backed by `bridge.py` (`:8004`, `server.py` untouched). Not done yet: visual polish and edge cases are still being worked on.
+
+See it live (one command — the TUI spawns its own local agent backend; `server.py` stays out of it):
+
+```bash
+cd tui-ink && npm install && npm run dev
+```
+
+First boot warms legs (~1-2 min). Headphones (or speakers down) avoid the mic re-ingesting replies; without them the app still works — it pauses listening while speaking and discards its own echo. Advanced: run the backend separately (`PYTHONPATH=. python bridge.py`) and point the TUI at it with `VOICE_BRIDGE=http://127.0.0.1:8004`.

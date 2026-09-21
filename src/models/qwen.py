@@ -199,6 +199,10 @@ class QwenFused(torch.nn.Module):
             ids_list = ids_batch
             T0 = max(len(x) for x in ids_list)
             # pad to T0 for prefill (we handle per-batch prefill separately)
+        if T0 + int(max_new_tokens) > int(self.max_len):
+            raise ValueError(
+                f"prompt {T0} + max_new_tokens {max_new_tokens} exceeds "
+                f"max_len {self.max_len}; shorten history/observation")
         dev = self.device
         # Batched KV cache
         est = estimate_kv_cache_mb(B, self.nlayers, self.Hk, self.max_len, self.Dh)

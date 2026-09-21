@@ -5,6 +5,7 @@ __pycache__/
 .pytest_cache/
 .hypothesis/
 .coverage
+htmlcov/
 
 # envs / packaging
 .venv/
@@ -35,3 +36,13 @@ benchmarks/results/*.json
 *.swo
 .vscode/
 .idea/
+
+# generated roll-up (keep local only)
+COMPLETE.md
+
+# test suites run locally, not versioned
+tests/
+
+# node app build outputs (rebuild with npm install && npm run build)
+tui-ink/node_modules/
+tui-ink/dist/

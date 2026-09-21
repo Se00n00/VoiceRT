@@ -68,12 +68,16 @@ class TestEndpoints(unittest.TestCase):
 
         paths = sorted({r.path for r in S.router.routes})
         self.assertEqual(paths, ["/health", "/metrics", "/talk"])
+        # browser harness lives on its own router (single-model, no sidecar)
+        bpaths = sorted({r.path for r in S.browser_router.routes})
+        self.assertEqual(bpaths, ["/browser/act", "/browser/tools", "/tts/say"])
 
     def test_openapi_lists_talk(self):
         # FastAPI skips WS routes in OpenAPI; server.py declares /talk
         # by hand so it stays visible in /docs and /openapi.json.
         paths = set(_client().get("/openapi.json").json()["paths"])
-        self.assertEqual(paths, {"/health", "/metrics", "/talk"})
+        self.assertTrue({"/health", "/metrics", "/talk"} <= paths)
+        self.assertTrue({"/browser/act", "/browser/tools", "/tts/say"} <= paths)
 
     def test_health(self):
         r = _client().get("/health")

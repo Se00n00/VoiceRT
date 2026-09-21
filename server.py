@@ -36,9 +36,10 @@ import numpy as np
 from fastapi import APIRouter, FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-__all__ = ["create_app", "app", "router"]
+__all__ = ["create_app", "app", "router", "browser_router"]
 
 router = APIRouter()
+browser_router = APIRouter()
 
 CLIENT_SR = 16000
 END_SILENCE_S = 0.8
@@ -83,7 +84,7 @@ def get_agent():
             # enable paged only when CUDA + weights are usable; VoiceAgent.warm will
             # degrade gracefully to fused path if engine fails (OOM / missing)
             if torch.cuda.is_available():
-                cfg = VoiceAgentConfig(llm_paged=True, llm_paged_blocks=16,
+                cfg = VoiceAgentConfig(llm_paged=True, llm_paged_blocks=32,
                                        llm_paged_batch_size=4)
                 _agent = VoiceAgent(cfg)
             else:
@@ -374,6 +375,118 @@ async def talk(ws: WebSocket):
             await run_turn(audio)
 
 
+@browser_router.get("/browser/tools")
+def browser_tools():
+    """Tool schema the Chrome extension uses to snapshot + validate."""
+    from src.tools.schema import ALLOWED_OPS, BROWSER_PREAMBLE
+
+    return {
+        "ops": list(ALLOWED_OPS),
+        "preamble": BROWSER_PREAMBLE,
+        "snapshot": [{"ref": 1, "role": "button", "name": "Log in"}],
+        "action_example": {"action": "click", "ref": 1},
+        "model": "single-qwen3-0.6B",
+    }
+
+
+@browser_router.post("/browser/act")
+async def browser_act(payload: dict):
+    """One single-model step: chat text OR one BrowserAction.
+
+    Request: {text, url?, snapshot?:[{ref,role,name}], observation?,
+              session_id?}
+    Response: {kind: action|chat, action?|reply, sensitive, raw}
+    The SAME LlmModel from VoiceAgent is used — no sidecar, no router.
+    """
+    import time as _t
+
+    t0 = _t.perf_counter()
+    text = str((payload or {}).get("text", "") or "")[:2000]
+    url = str((payload or {}).get("url", "") or "")[:2000]
+    observation = str((payload or {}).get("observation", "") or "")[:1000]
+    snapshot = (payload or {}).get("snapshot") or []
+    sid = str((payload or {}).get("session_id", "") or "")[:64] or None
+    if not text.strip():
+        return {"kind": "error", "message": "empty text"}
+    if not isinstance(snapshot, list):
+        return {"kind": "error", "message": "snapshot must be a list"}
+    snapshot = snapshot[:80]
+    agent = get_agent()
+    llm = getattr(agent, "llm", None)
+    if llm is None or not hasattr(llm, "messages_for_browser"):
+        return {"kind": "error",
+                "message": "browser llm unavailable (agent has no LlmModel)"}
+    history = []
+    if sid is not None:
+        try:
+            history = agent.sessions.history(sid)
+        except Exception:
+            history = []
+    try:
+        from src.agent.browser import propose_action
+        from src.tools.schema import is_sensitive, parse_action
+
+        out = await propose_action(
+            llm=llm, text=text, history=history,
+            snapshot_nodes=snapshot, url=url, observation=observation)
+        _record_event("browser")
+        _record_turn(_t.perf_counter() - t0)
+        if out.get("kind") == "action":
+            act = parse_action(out.get("raw", ""))
+            out["sensitive"] = bool(
+                is_sensitive(act)) if act is not None else False
+            if sid is not None and act is not None:
+                try:
+                    agent.sessions.remember_turn(
+                        sid, f"{text} [{url}]", out.get("raw", "")[:500])
+                except Exception:
+                    pass
+        else:
+            out["sensitive"] = False
+            if sid is not None:
+                try:
+                    agent.sessions.remember_turn(sid, text, out.get("reply", ""))
+                except Exception:
+                    pass
+        return out
+    except Exception as exc:  # never 500 — extension loops on error
+        _record_turn(_t.perf_counter() - t0, err=True)
+        return {"kind": "error", "message": str(exc)[:300]}
+
+
+@browser_router.post("/tts/say")
+async def tts_say(payload: dict):
+    """Speak text with the server Kokoro voice (for the visualizer pill).
+
+    Request: {text} (cap 500 chars). Response: {kind: audio, wav_b64
+    (float32 LE b64, same encoding as /talk tts frames), sr, sentence}.
+    The extension plays it through WebAudio + AnalyserNode so the agent
+    voice renders in the pill visualizer instead of speechSynthesis.
+    """
+    import time as _t
+
+    t0 = _t.perf_counter()
+    text = str((payload or {}).get("text", "") or "")[:500]
+    if not text.strip():
+        return {"kind": "error", "message": "empty text"}
+    agent = get_agent()
+    tts = getattr(agent, "tts", None)
+    if tts is None or not hasattr(tts, "speak"):
+        return {"kind": "error", "message": "tts unavailable"}
+    try:
+        out = await tts.speak(text)
+        _record_event("tts")
+        _record_turn(_t.perf_counter() - t0)
+        arr = np.ascontiguousarray(np.asarray(out.wav, dtype=np.float32))
+        return {"kind": "audio",
+                "wav_b64": base64.b64encode(arr.tobytes()).decode(),
+                "sr": int(out.sample_rate),
+                "sentence": str(out.sentence or text)[:500]}
+    except Exception as exc:  # never 500
+        _record_turn(_t.perf_counter() - t0, err=True)
+        return {"kind": "error", "message": str(exc)[:300]}
+
+
 # FastAPI's OpenAPI generator only documents HTTP routes, so the WS
 # route is invisible in /docs and /openapi.json unless we declare it
 # by hand (documented as GET: a WebSocket handshake IS an HTTP upgrade).
@@ -405,7 +518,11 @@ _TALK_OPENAPI = {
 
 
 def create_app(agent=None):
-    """Build the 3-endpoint app; inject an agent (tests) or warm lazily."""
+    """Build the voice + browser app; inject an agent (tests) or warm lazily.
+
+    ``router`` keeps exactly /health, /metrics, /talk (voice loop).
+    ``browser_router`` adds /browser/tools + /browser/act (extension).
+    """
     from fastapi import FastAPI
 
     global _agent
@@ -419,6 +536,7 @@ def create_app(agent=None):
         allow_headers=["*"],
     )
     app.include_router(router)
+    app.include_router(browser_router)
 
     _base_openapi = app.openapi
 
