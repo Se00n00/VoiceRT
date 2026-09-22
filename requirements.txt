@@ -12,6 +12,14 @@
 #   torch.compile (see models/tts.py). Older transformers may
 #   behave differently under compile; eager still works.
 torch==2.5.1
+# - torchvision: lockstep match for torch 2.5.1 is 0.20.1 (patch versions
+#   must agree: 0.20.0 wants torch==2.5.0 and breaks resolution). Kaggle
+#   pre-installs torchvision 0.25.0 (built for torch 2.10); with our torch
+#   downgrade that combo crashes inside transformers' image_utils import
+#   chain (register_fake torchvision::nms) and kills every model warm.
+#   Pinning the matching version makes pip downgrade it deterministically.
+#   (torchaudio stays version-mismatched on Kaggle but is unused by us.)
+torchvision==0.20.1
 triton==3.1.0
 transformers==5.17.0
 # - websockets: REQUIRED for uvicorn to accept WS /talk. Without it
