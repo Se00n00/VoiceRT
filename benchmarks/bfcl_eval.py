@@ -130,10 +130,18 @@ def parse_gt_string(s):
 # -- AST comparison (BFCL any-of-lists semantics, type-lenient) -----------
 
 def _val_match(pred, accepted):
-    """Predicted value matches if it equals ANY acceptable value."""
+    """Predicted value matches if it equals ANY acceptable value.
+
+    Accepts nested single-element lists (e.g. SQL GT like [["name"]]):
+    one level is unwrapped before comparing. Type-lenient throughout.
+    """
     for acc in accepted:
         if pred == acc:
             return True
+        if isinstance(acc, list) and len(acc) == 1:
+            if _val_match(pred, [acc[0]]):
+                return True
+            continue
         ps, vs = str(pred).strip(), str(acc).strip()
         if ps == vs or ps.lower() == vs.lower():
             return True
@@ -180,6 +188,102 @@ def _required_of(spec):
         return list((spec or {}).get("parameters", {}).get("required", []) or [])
     except Exception:
         return []
+
+
+# -- full-dataset machinery: filtering, resume, isolation ---------------
+
+PROMPT_TOKEN_BUDGET = 7000
+"""Skip cases whose estimated prompt exceeds this (max_len 8192 minus gen)."""
+
+
+def load_manifest(path):
+    """Manifest loader: .json (array or {cases:[...]}) or .jsonl.gz.
+
+    Full-dataset manifests ship gzipped (1.6MB vs 28MB). Pure.
+    """
+    if str(path).endswith(".gz"):
+        import gzip
+
+        with gzip.open(path, "rt", encoding="utf-8") as f:
+            return [json.loads(line) for line in f if line.strip()]
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    if isinstance(data, dict) and "cases" in data:
+        data = data["cases"]
+    return data
+
+
+def case_key(case) -> str:
+    """Composite key: ids collide across versions (simple_0 x3)."""
+    return f"{case.get('version', '?')}/{case.get('id', '?')}"
+
+
+def filter_cases(cases, categories=None, done=None):
+    """Pure: keep cases matching categories and not already done."""
+    cats = set(categories or [])
+    done = set(done or [])
+    return [c for c in cases
+            if (not cats or c.get("category") in cats)
+            and case_key(c) not in done]
+
+
+def load_done_ids(path):
+    """Row ids (composite keys) from a prior results file. Never raises."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        rows = data.get("rows", data) if isinstance(data, dict) else data
+        return {f"{r.get('version', '?')}/{r.get('id', '?')}"
+                for r in rows if isinstance(r, dict)}
+    except Exception:
+        return set()
+
+
+def _turn_texts(case):
+    """All user texts in a case (single- or multi-turn) for budgeting."""
+    q = case.get("question")
+    if isinstance(q, str):
+        return [q]
+    texts = []
+    if isinstance(q, list):
+        for turn in q:
+            msgs = turn if isinstance(turn, list) else [turn]
+            for m in msgs:
+                if isinstance(m, dict) and m.get("role") == "user":
+                    texts.append(str(m.get("content", "")))
+    return texts or [""]
+
+
+def estimate_case_tokens(case, max_tokens: int) -> int:
+    """Rough prompt size (chars/4) incl. system + tools + worst turn."""
+    tools = case.get("functions", [])
+    if isinstance(tools, dict):
+        tools = [tools]
+    try:
+        tools_s = json.dumps(tools)
+    except Exception:
+        tools_s = ""
+    worst = max((len(t) for t in _turn_texts(case)), default=0)
+    return (len(SYSTEM) + worst + len(tools_s)) // 4 + int(max_tokens)
+
+
+def skipped_row(case, reason: str) -> dict:
+    return {
+        "id": case.get("id"), "version": case.get("version"),
+        "category": case.get("category"), "prompt": _user_text(case.get("question"))[:200],
+        "expected_tool": None, "expect_none": False,
+        "tp": 0, "fp": 0, "fn": 0, "first_tp": 0,
+        "arg_valid": None, "retries": 0, "steps": 0, "attempts": 0,
+        "passed": False, "status": "skipped", "status_reason": reason,
+        "first_calls": [], "first_raw": "", "seconds": 0.0,
+    }
+
+
+def error_row(case, message: str, seconds: float) -> dict:
+    row = skipped_row(case, "")
+    row.update(status="error", status_reason=str(message)[:300],
+               seconds=round(seconds, 2))
+    return row
 
 
 def _arg_valid(name, args, spec_by_name):
@@ -382,12 +486,26 @@ async def main_async(args, cases):
 
     rows = []
     for case in cases:
+        est = estimate_case_tokens(case, max_tokens)
+        if est > PROMPT_TOKEN_BUDGET:
+            row = skipped_row(case, f"prompt ~{est} tok > {PROMPT_TOKEN_BUDGET} budget")
+            rows.append(row)
+            print(f"[SKIP] {row['id']:24s} {row['status_reason']}", flush=True)
+            continue
         t0 = time.perf_counter()
-        if case.get("category") == "multi_turn":
-            row = await run_multiturn(cm, llm, case, max_tokens)
-        else:
-            row = await run_single(cm, llm, case, max_tokens, args.k)
-        row["seconds"] = round(time.perf_counter() - t0, 2)
+        try:
+            if case.get("category") == "multi_turn":
+                row = await run_multiturn(cm, llm, case, max_tokens)
+            else:
+                row = await run_single(cm, llm, case, max_tokens, args.k)
+            row["seconds"] = round(time.perf_counter() - t0, 2)
+            row["status"] = "ok"
+        except Exception as exc:
+            row = error_row(case, f"{type(exc).__name__}: {exc}",
+                            time.perf_counter() - t0)
+            print(f"[ERROR] {row['id']:24s} {row['status_reason']}", flush=True)
+            rows.append(row)
+            continue
         rows.append(row)
         first_calls = row.get("first_calls") or []
         got = first_calls[0][0] if first_calls else "none"
@@ -411,8 +529,12 @@ def summarize(rows):
     steps = [r.get("steps", 1) for r in rows]
     dts = sorted(r["seconds"] for r in rows)
     irrel = [r for r in rows if r.get("expect_none")]
+    skipped = sum(1 for r in rows if r.get("status") == "skipped")
+    errored = sum(1 for r in rows if r.get("status") == "error")
     return {
         "n": len(rows),
+        "n_skipped": skipped,
+        "n_errors": errored,
         "pass_at_k": round(sum(1 for r in rows if r["passed"]) / len(rows), 3) if rows else 0.0,
         "tool_precision": round(prec, 3),
         "tool_recall": round(rec, 3),
@@ -440,14 +562,16 @@ def main():
     ap.add_argument("--k", type=int, default=3)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--offset", type=int, default=0)
+    ap.add_argument("--categories", default="",
+                    help="comma list to keep, e.g. simple,multiple "
+                         "(default: all categories in the manifests)")
+    ap.add_argument("--resume-from", default="",
+                    help="prior results JSON: skip ids already present "
+                         "(chunked multi-session full runs)")
     args = ap.parse_args()
     cases = []
     for path in args.manifests:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, dict) and "cases" in data:
-            data = data["cases"]
-        cases.extend(data)
+        cases.extend(load_manifest(path))
     # V1 hand grades join
     try:
         with open("benchmarks/bfcl_v1_grades.json", encoding="utf-8") as f:
@@ -462,6 +586,14 @@ def main():
         cases = cases[args.offset:]
     if args.limit:
         cases = cases[:args.limit]
+    cats = [c.strip() for c in (args.categories or "").split(",") if c.strip()]
+    done = load_done_ids(args.resume_from) if args.resume_from else set()
+    n0 = len(cases)
+    cases = filter_cases(cases, categories=cats or None, done=done or None)
+    print(f"cases: {len(cases)} (from {n0}"
+          f"{', categories=' + ','.join(cats) if cats else ''}"
+          f"{', resumed-skipped=' + str(n0 - len(cases)) if done else ''})",
+          flush=True)
     rows, meta = asyncio.run(main_async(args, cases))
     summary = summarize(rows)
     print("---")

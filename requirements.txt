@@ -48,7 +48,16 @@ pyyaml==6.0.3
 kokoro==0.9.4
 # - langgraph: the voice-turn agent is a compiled StateGraph
 #   (src/agent/graph.py). Pulls langchain-core transitively.
+# - langchain/deepagents/langchain-core: PINNED to the tested combo.
+#   Kaggle pre-installs langchain 1.2.15, which declares itself
+#   incompatible with langgraph 1.2.11 — with these floating, pip keeps
+#   the broken pair and every agent turn dies at graph-build time
+#   (warm succeeds, then 0 steps / 0.0s / empty reply). Do NOT unpin
+#   without re-running the full agent path (at least one live turn).
 langgraph==1.2.11
+langchain==1.4.2
+langchain-core==1.6.3
+deepagents==0.7.16
 # - textual: the opencode-style full-screen TUI (tui.py). Not needed
 #   for the server; install only for the terminal app.
 textual==8.2.8
