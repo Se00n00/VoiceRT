@@ -1,8 +1,8 @@
 """Terminal bridge: FastAPI service for the Ink TUI (stock React/Ink).
 
-Runs the local voice pipeline + LangGraph terminal harness and exposes
-it over HTTP + WebSocket on :8004. ``server.py`` is untouched — this is a
-separate process; run ONE of them (same 4GB GPU).
+Runs the unified VoiceAgent (voice + terminal turns over one deepagents
+loop) and exposes it over HTTP + WebSocket on :8004. ``server.py`` stays
+out of it — this is a separate process; run ONE of them (same 4GB GPU).
 
 Endpoints:
 - ``GET /health`` — {ok, agent_loaded, missing}
@@ -185,59 +185,6 @@ def get_agent():
     return _agent
 
 
-_deep_harness = None
-_deep_client = None
-
-async def get_deep_harness():
-    """Get or create the autonomous DeepAgent harness (MCP + todos)."""
-    global _deep_harness, _deep_client
-    if _deep_harness is not None:
-        return _deep_harness
-    try:
-        from src.agent.deep import DeepAgentHarness
-
-        agent_llm = get_agent().llm
-        # Try to create with MCP (local python process)
-        try:
-            h = await DeepAgentHarness.create(agent_llm, use_mcp=True)
-            _deep_harness = h
-            _deep_client = getattr(h, "_mcp_client", None)
-            return h
-        except Exception:
-            # Fallback without MCP
-            h = DeepAgentHarness(agent_llm, mcp_tools=[])
-            # DeepAgentHarness.__init__ already builds sync agent
-            _deep_harness = h
-            return h
-    except Exception:
-        return None
-
-def get_harness(confirm_fn=None, use_deep: bool = False):
-    """Get harness — deep if requested and available, else terminal."""
-    if use_deep:
-        # Sync fallback: try to get already-created deep harness
-        if _deep_harness is not None:
-            return _deep_harness
-        # Otherwise fall back to terminal for sync callers
-    from src.agent.terminal import TerminalConfig, TerminalHarness
-
-    agent = get_agent()
-    return TerminalHarness(
-        llm=agent.llm, tts=agent.tts, sessions=agent.sessions,
-        config=TerminalConfig(), confirm_fn=confirm_fn)
-
-async def get_harness_async(confirm_fn=None, use_deep: bool = True):
-    """Async version that can create deep harness with MCP."""
-    if use_deep:
-        h = await get_deep_harness()
-        if h is not None:
-            # Patch confirm_fn if provided (for autonomous, confirm is auto)
-            if confirm_fn is not None:
-                h._agent  # keep original; deep agent handles confirm via policy
-            return h
-    return get_harness(confirm_fn=confirm_fn, use_deep=False)
-
-
 def _wav_b64(wav: np.ndarray) -> str:
     arr = np.ascontiguousarray(np.asarray(wav, dtype=np.float32))
     return base64.b64encode(arr.tobytes()).decode()
@@ -351,11 +298,12 @@ def create_app(agent=None):
                 pending["event"] = None
             return bool(pending["ok"])
 
-        harness = get_harness(confirm_fn=confirm_fn)
+        harness = get_agent()
 
         async def run_one(text, sid, cwd):
             try:
-                async for event in harness.run_turn(text, session_id=sid, cwd=cwd):
+                async for event in harness.run_text(text, session_id=sid, cwd=cwd,
+                                                    confirm_fn=confirm_fn):
                     if event.node != "term":
                         continue
                     d = dict(event.data or {})
@@ -416,23 +364,17 @@ def create_app(agent=None):
 
     @app.websocket("/deep")
     async def deep(ws: WebSocket):
-        """Autonomous DeepAgent (MCP + todos). Same protocol as /term but fully autonomous."""
+        """Autonomous agent over the same VoiceAgent (no confirm gate)."""
         await ws.accept()
-        # No confirm gate — deep agent is autonomous via policy
-        try:
-            harness = await get_deep_harness()
-        except Exception as e:
-            await ws.send_json({"event": "error", "message": f"deep agent unavailable: {e}"[:300]})
-            return
-        if harness is None:
-            await ws.send_json({"event": "error", "message": "deep agent not ready"})
-            return
+        harness = get_agent()
         turn_task = {"task": None}
         closed = {"done": False}
 
         async def run_one(text, sid, cwd):
             try:
-                async for event in harness.run_turn(text, session_id=sid, cwd=cwd):
+                # autonomous: policy still denies breakers, confirms auto-pass
+                async for event in harness.run_text(text, session_id=sid, cwd=cwd,
+                                                    confirm_fn=lambda action: True):
                     d = dict(event.data or {})
                     wav = d.pop("wav", None)
                     if wav is not None:
@@ -485,12 +427,6 @@ def create_app(agent=None):
             print("bridge ready", flush=True)
             if getattr(ag, "missing", []):
                 print(f"bridge missing: {ag.missing}", flush=True)
-            # Pre-warm autonomous DeepAgent (MCP + todos) in background
-            try:
-                await get_deep_harness()
-                print("deep agent ready (MCP + todos)", flush=True)
-            except Exception as e:
-                print(f"deep agent not ready: {e}", flush=True)
         except Exception as exc:
             print(f"bridge not warmed: {exc}", flush=True)
 

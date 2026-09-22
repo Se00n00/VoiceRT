@@ -1,18 +1,12 @@
-"""Terminal harness: single-model voice agent for the shell, via the agent lib.
+"""Terminal tools + execution for the unified agent (no harness here).
 
-Same contract as before: the ONE model either chats (plain text, spoken
-back) or emits tool calls per step — but there is NO hand-rolled workflow
-here. The turn runs on :func:`langchain.agents.create_agent` (model +
-9 local tools, no extra middleware), and this module only translates:
+The turn loop lives in :class:`src.main.VoiceAgent`, which builds a
+deepagents agent over :func:`build_terminal_tools` each turn. This module
+keeps the pieces with their own unit tests:
 
-- model/tool events -> :class:`AgentEvent` (action/observation/thinking/
-  token/chat/summary/confirm/deny/error/audio — the TUI/bridge/CLI shape)
-- policy (:func:`check_policy`) + ``confirm_fn`` (``y/n``, default denies)
-  enforced inside the tool functions, so every entry point is protected
-- TTS the final reply head, session memory, per-turn persistent shell
-
-No checkpointer: memory lives in ``LangChainSessionMemory`` (RAM-only),
-same as the voice loop.
+- :func:`run_command` — one validated action, host or sandbox shell
+- :func:`build_terminal_tools` — local LangChain tools over a TurnCtx
+- policy gate + confirm plumbing (``_guarded``), diff previews, speak head
 """
 import asyncio
 import os
@@ -20,44 +14,16 @@ import subprocess
 from dataclasses import dataclass, field
 from typing import Any
 
-from src.agent.events import AgentEvent
-from src.agent.memory import LangChainSessionMemory
 from src.tools.terminal import (
     TerminalAction,
     check_policy,
-    is_degenerate,
-    parse_bare_tail,
-    parse_terminal_action,
-    parse_xml_action,
 )
 
 __all__ = [
-    "TerminalConfig",
-    "TerminalHarness",
     "TurnCtx",
     "build_terminal_tools",
     "run_command",
 ]
-
-
-@dataclass(frozen=True)
-class TerminalConfig:
-    """Per-harness knobs. Not YAML — construct in code."""
-
-    max_steps: int = 6
-    # Think + tool call needs room in ONE step: a MiniCPM/Qwen thinking
-    # trace alone is often 100-150 tokens, plus 30-80 for the call.
-    # 256 fits the context comfortably; MiniCPM thinking models get 320
-    # (see LocalChatModel._step_budget).
-    max_tokens_per_step: int = 256
-    cwd: str = "."
-    timeout_s: float = 30.0
-    out_cap: int = 6000
-    # Docker sandbox for tool execution (None = host, as before).
-    # Set to SandboxConfig(...) to run exec/exec_bg/poll inside a
-    # per-turn container (host cwd bind-mounted at /work). File ops stay
-    # host-side on the same tree; spawn_terminal always stays on host.
-    sandbox: Any = None
 
 
 def _edit_diff(src: str, anchor: str, new: str, ctx: int = 3) -> str:
@@ -111,13 +77,22 @@ def run_command(action: TerminalAction, cwd: str = ".",
             if len(out) > out_cap:
                 out = out[:out_cap] + f"\n…[truncated {len(out)} chars]"
             return f"rc={p.returncode}\n{out.strip() or '(no output)'}"
-        if action.op == "spawn_terminal":
-            from src.mcp.terminal_spawn import spawn_terminal_window
+        if action.op == "python_exec":
+            # Python in an isolated container (canonical impl; no confirm:
+            # read-only-equivalent compute, policy allows it outright)
+            from src.agent.mcp.tools import python_exec as run_python
 
-            res = spawn_terminal_window(command=action.command, cwd=cwd or None, title=action.title)
-            if res.get("ok"):
-                return f"spawned terminal {res['terminal_id']} cwd={res['cwd']} cmd={res['command']}"
-            return f"error: {res.get('error')}"
+            return run_python(action.code.strip())
+        if action.op == "fetch":
+            # web page as text (canonical impl; policy already allowed it)
+            from src.agent.mcp.tools import fetch as fetch_url
+
+            return fetch_url(action.path.strip())
+        if action.op == "searxng":
+            # web search via local SearXNG (canonical impl)
+            from src.agent.mcp.tools import searxng_search
+
+            return searxng_search(action.pattern.strip())
         if action.op == "exec_bg":
             if jm is None:
                 return "error: background jobs unavailable (no shell context)"
@@ -130,96 +105,33 @@ def run_command(action: TerminalAction, cwd: str = ".",
             prefix = "running" if r.get("running") else f"done rc={r.get('rc')}"
             return f"{prefix} {r.get('job','')}\n{(r.get('output','') or '').strip() or '(no output)'}"
         if action.op == "edit":
+            # canonical impl (roots = turn cwd); strings verified by suite
+            from src.agent.mcp.tools import fs_edit
+
             base = os.path.abspath(cwd or ".")
-            full = os.path.abspath(os.path.join(base, action.path.strip()))
-            if not full.startswith(base):
-                return "denied: path escapes cwd"
-            try:
-                with open(full, "r", errors="replace") as f:
-                    src = f.read()
-            except FileNotFoundError:
-                return f"error: no such file {action.path.strip()}"
-            except Exception as exc:
-                return f"error: {exc}"
-            if action.anchor not in src:
-                return "error: anchor not found (must copy verbatim from the file)"
-            if src.count(action.anchor) > 1:
-                return "error: anchor not unique (appears %d times)" % src.count(action.anchor)
-            diff = _edit_diff(src, action.anchor, action.text)
-            try:
-                with open(full, "w") as f:
-                    f.write(src.replace(action.anchor, action.text, 1))
-            except Exception as exc:
-                return f"error: {exc}"
-            return "patched %s with:\n%s" % (action.path.strip(), diff)
+            return fs_edit(action.path.strip(), action.anchor, action.text,
+                           roots=[base])
         if action.op == "grep":
+            from src.agent.mcp.tools import fs_grep
+
             base = os.path.abspath(cwd or ".")
-            path = action.path.strip() or "."
-            full = os.path.abspath(os.path.join(base, path))
-            if not full.startswith(base):
-                return "denied: path escapes cwd"
-            try:
-                import re as _re
-                pat = _re.compile(action.pattern)
-            except Exception as exc:
-                return f"error: bad pattern: {exc}"
-            hits = []
-            for root, _, files in os.walk(full if os.path.isdir(full) else os.path.dirname(full)):
-                rel_root = os.path.relpath(root, base)
-                if rel_root.startswith(".git") or "__pycache__" in rel_root:
-                    continue
-                for name in files:
-                    f = os.path.join(root, name)
-                    try:
-                        txt = open(f, "r", errors="replace").read()
-                    except Exception:
-                        continue
-                    for lno, line in enumerate(txt.splitlines(), 1):
-                        if pat.search(line):
-                            hits.append(f"{os.path.relpath(f, base)}:{lno}: {line.strip()[:200]}")
-                            if len(hits) >= 80:
-                                break
-                    if len(hits) >= 80:
-                        break
-                if len(hits) >= 80:
-                    break
-            return "\n".join(hits) or "(no matches)"
+            return fs_grep(action.pattern, action.path.strip() or ".",
+                           roots=[base], rel_base=base)
         if action.op == "list":
-            target = action.path.strip() or "."
+            from src.agent.mcp.tools import fs_list
+
             base = os.path.abspath(cwd or ".")
-            full = os.path.abspath(os.path.join(base, target))
-            if not full.startswith(base):
-                return "denied: path escapes cwd"
-            try:
-                names = sorted(os.listdir(full))
-            except Exception as exc:
-                return f"error: {exc}"
-            return "\n".join(names[:200]) or "(empty)"
+            return fs_list(action.path.strip() or ".", roots=[base])
         if action.op == "read":
+            from src.agent.mcp.tools import fs_read
+
             base = os.path.abspath(cwd or ".")
-            full = os.path.abspath(os.path.join(base, action.path.strip()))
-            if not full.startswith(base):
-                return "denied: path escapes cwd"
-            try:
-                with open(full, "r", errors="replace") as f:
-                    data = f.read(out_cap + 1)
-            except Exception as exc:
-                return f"error: {exc}"
-            if len(data) > out_cap:
-                data = data[:out_cap] + "\n…[truncated]"
-            return data or "(empty file)"
+            return fs_read(action.path.strip(), roots=[base], out_cap=out_cap)
         if action.op == "write":
+            from src.agent.mcp.tools import fs_write
+
             base = os.path.abspath(cwd or ".")
-            full = os.path.abspath(os.path.join(base, action.path.strip()))
-            if not full.startswith(base):
-                return "denied: path escapes cwd"
-            try:
-                os.makedirs(os.path.dirname(full) or base, exist_ok=True)
-                with open(full, "w") as f:
-                    f.write(action.text)
-            except Exception as exc:
-                return f"error: {exc}"
-            return f"wrote {len(action.text)} chars to {action.path.strip()}"
+            return fs_write(action.path.strip(), action.text, roots=[base])
         return f"unknown op: {action.op}"
     except subprocess.TimeoutExpired:
         return f"timeout after {timeout_s:.0f}s"
@@ -240,7 +152,7 @@ def _speak_head(reply: str, limit: int = 280) -> str:
 
 @dataclass
 class TurnCtx:
-    """Per-turn execution context shared by the 9 local tools."""
+    """Per-turn execution context shared by the local tools."""
 
     shell: Any = None
     cwd: str = "."
@@ -341,7 +253,7 @@ def _guarded(ctx: TurnCtx, action: TerminalAction) -> str | None:
 
 
 def build_terminal_tools(ctx: TurnCtx) -> list:
-    """9 local LangChain tools closing over this turn's shell + policy."""
+    """11 local LangChain tools closing over this turn's shell + policy."""
     from langchain_core.tools import StructuredTool
 
     def _exec(command: str) -> str:
@@ -376,10 +288,17 @@ def build_terminal_tools(ctx: TurnCtx) -> list:
         """List directory entries below the working directory."""
         return _guarded(ctx, TerminalAction(op="list", path=path)) or ""
 
-    def _spawn_terminal(command: str = "", cwd: str = "", title: str = "") -> str:
-        """Spawn a new OS terminal window. Use for opencode/htop/interactive TUIs."""
-        return _guarded(ctx, TerminalAction(op="spawn_terminal", command=command,
-                                            cwd=cwd, title=title)) or ""
+    def _python_exec(code: str) -> str:
+        """Run Python code inside an isolated container (no shell, no host files)."""
+        return _guarded(ctx, TerminalAction(op="python_exec", code=code)) or ""
+
+    def _fetch(path: str) -> str:
+        """Fetch a web page (http/https) and return its text."""
+        return _guarded(ctx, TerminalAction(op="fetch", path=path)) or ""
+
+    def _searxng(pattern: str) -> str:
+        """Web search via the local SearXNG instance. Returns titles, URLs, snippets."""
+        return _guarded(ctx, TerminalAction(op="searxng", pattern=pattern)) or ""
 
     return [
         StructuredTool.from_function(_exec, name="exec"),
@@ -390,302 +309,9 @@ def build_terminal_tools(ctx: TurnCtx) -> list:
         StructuredTool.from_function(_edit, name="edit"),
         StructuredTool.from_function(_grep, name="grep"),
         StructuredTool.from_function(_list, name="list"),
-        StructuredTool.from_function(_spawn_terminal, name="spawn_terminal"),
+        StructuredTool.from_function(_python_exec, name="python_exec"),
+        StructuredTool.from_function(_fetch, name="fetch"),
+        StructuredTool.from_function(_searxng, name="searxng"),
     ]
 
 
-def _lc_messages(history: list) -> list:
-    """Session dicts -> LangChain messages (user/assistant only)."""
-    from langchain_core.messages import AIMessage, HumanMessage
-
-    out = []
-    for m in history or []:
-        if not isinstance(m, dict):
-            continue
-        role, content = m.get("role"), str(m.get("content", "") or "")
-        if role == "assistant":
-            out.append(AIMessage(content=content))
-        elif role == "user":
-            out.append(HumanMessage(content=content))
-    return out
-
-
-def _chunk_pieces(chunk) -> list[str]:
-    content = getattr(chunk, "content", "")
-    if isinstance(content, str):
-        return [content] if content else []
-    if isinstance(content, list):
-        parts = []
-        for b in content:
-            if isinstance(b, dict) and isinstance(b.get("text"), str):
-                parts.append(b["text"])
-            elif isinstance(b, str):
-                parts.append(b)
-        return [p for p in parts if p]
-    return []
-
-
-class TerminalHarness:
-    """One shared-model terminal agent: text in, actions + speech out.
-
-    No custom graph: each turn builds a stock
-    :func:`langchain.agents.create_agent` (model + 9 local tools) and
-    streams its events as :class:`AgentEvent`.
-    """
-
-    def __init__(self, llm, tts=None, sessions=None,
-                 config: TerminalConfig | None = None, confirm_fn=None):
-        self.llm = llm
-        self.tts = tts
-        self.sessions = sessions or LangChainSessionMemory()
-        self.config = config or TerminalConfig()
-        self.confirm_fn = confirm_fn
-        self.approvals: dict[str, set[str]] = {}  # sid -> set of approved command prefixes
-
-    def remember_approval(self, session_id: str, command: str):
-        """Remember that this session approved a command prefix."""
-        if not session_id or not command:
-            return
-        self.approvals.setdefault(session_id, set()).add(command.strip().split()[0][:40])
-
-    def is_approved(self, session_id: str | None, action: TerminalAction) -> bool:
-        if not session_id:
-            return False
-        allow = self.approvals.get(session_id, set())
-        if not allow:
-            return False
-        cmd = getattr(action, "command", "") or ""
-        first = cmd.strip().split()[0] if cmd.strip() else ""
-        return first in allow or action.op in allow
-
-    def _build_agent(self, ctx: TurnCtx):
-        from langchain.agents import create_agent
-
-        from src.agent.chat_model import LocalChatModel
-        from src.tools.terminal import TERMINAL_PREAMBLE
-
-        system = TERMINAL_PREAMBLE + (
-            "\n\nWork until done: use tools step by step, then give one "
-            "short final reply.")
-        return create_agent(
-            LocalChatModel(llm=self.llm),
-            build_terminal_tools(ctx),
-            system_prompt=system,
-        )
-
-    async def run_turn(self, text: str, session_id: str | None = None,
-                       cwd: str | None = None):
-        """Run one turn, yielding :class:`AgentEvent` per step."""
-        from langchain_core.messages import AIMessageChunk
-
-        from src.models.llm import split_thinking
-
-        if not str(text or "").strip():
-            raise ValueError("empty text")
-        sid = session_id
-        # execution backend: host shell, or a per-turn docker container
-        # (exec inside, file ops on the bind-mounted tree, spawn on host).
-        from src.agent.shell import PersistentShell
-        sandbox = None
-        if getattr(self.config, "sandbox", None) is not None:
-            from src.sandbox.docker import DockerShell
-
-            sandbox = self.config.sandbox.create(host_cwd=cwd or self.config.cwd)
-            try:
-                sandbox.ensure_running()
-            except Exception as exc:
-                yield AgentEvent(node="term", kind="error",
-                                 data={"message": f"sandbox: {exc}"[:300]})
-                yield AgentEvent(node="term", kind="summary", data={
-                    "text": str(text), "reply": "", "thinking": "",
-                    "session_id": sid})
-                return
-            shell = DockerShell(sandbox, timeout_s=self.config.timeout_s)
-        else:
-            shell = PersistentShell(cwd=cwd or self.config.cwd, timeout_s=self.config.timeout_s)
-        ctx = TurnCtx(shell=shell, cwd=cwd or self.config.cwd,
-                      approvals=set(self.approvals.get(sid, set())) if sid else set(),
-                      confirm_fn=self.confirm_fn,
-                      loop=asyncio.get_running_loop(), cfg=self.config,
-                      sandbox=sandbox)
-        # wrap confirm to support "always" -> remember approval
-        orig_confirm = self.confirm_fn
-
-        async def _confirm_wrapper(action):
-            res = None
-            if orig_confirm is not None:
-                res = (await orig_confirm(action)
-                       if asyncio.iscoroutinefunction(orig_confirm)
-                       else orig_confirm(action))
-            if isinstance(res, str) and res.lower() in ("always", "a", "allowlist"):
-                if sid:
-                    self.remember_approval(sid, getattr(action, "command", "") or getattr(action, "op", ""))
-                    ctx.approvals.add(_approval_key(action))
-                return "always"
-            return bool(res) if res is not None else False
-
-        ctx.confirm_fn = _confirm_wrapper
-        agent = self._build_agent(ctx)
-        user_text = str(text) + f"\nCWD: {ctx.cwd} SHELL: bash"
-        lc_history = _lc_messages(self.sessions.history(sid) if sid else [])
-        from langchain_core.messages import HumanMessage
-        lc_msgs = lc_history + [HumanMessage(content=user_text)]
-
-        final_reply = ""
-        did_work = False
-        last_think = ""
-        drained = 0
-
-        def _drain():
-            """Policy sink (confirm/deny) recorded by the tools, in order."""
-            nonlocal drained
-            while drained < len(ctx.sink):
-                kind, data = ctx.sink[drained]
-                drained += 1
-                yield AgentEvent(node="term", kind=kind, data=data)
-
-        def _norm_msg(m):
-            if isinstance(m, dict):
-                return (m.get("type") or m.get("role") or "",
-                        m.get("content", ""), m.get("tool_calls"),
-                        m.get("additional_kwargs") or {})
-            return (getattr(m, "type", None) or "",
-                    getattr(m, "content", ""),
-                    getattr(m, "tool_calls", None),
-                    getattr(m, "additional_kwargs", None) or {})
-
-        def _think_of(ak) -> str:
-            return str(ak.get("thinking", "") or "") if isinstance(ak, dict) else ""
-
-        def _resolve_reply(content: str) -> str:
-            """Text-only AI content -> reply; legacy done envelopes resolve."""
-            txt = str(content or "").strip()
-            if not txt:
-                return ""
-            for cand in (parse_terminal_action(txt), parse_xml_action(txt),
-                         parse_bare_tail(txt)):
-                if cand is not None and cand.op == "done":
-                    return cand.reply or ""
-            return txt
-
-        rl = 10 + int(getattr(self.config, "max_steps", 6) or 6) * 5
-        try:
-            stream = agent.astream({"messages": lc_msgs},
-                                   config={"recursion_limit": rl},
-                                   stream_mode=["messages", "updates"])
-            async for chunk in stream:
-                if isinstance(chunk, tuple) and len(chunk) == 2:
-                    mode, payload = chunk
-                else:
-                    mode, payload = "updates", chunk
-                if mode == "messages":
-                    msg, _meta = payload if isinstance(payload, (tuple, list)) else (payload, {})
-                    if isinstance(msg, AIMessageChunk):
-                        for piece in _chunk_pieces(msg):
-                            yield AgentEvent(node="term", kind="token",
-                                             data={"piece": piece[:500]})
-                    continue
-                # updates mode: node -> {messages: [...]}
-                if not isinstance(payload, dict):
-                    continue
-                for ev in _drain():
-                    yield ev
-                for _node, data in payload.items():
-                    msgs = data.get("messages", []) if isinstance(data, dict) else []
-                    for m in msgs if isinstance(msgs, list) else []:
-                        role, content, tool_calls, ak = _norm_msg(m)
-                        if isinstance(content, list):
-                            content = " ".join(
-                                str(c.get("text", c)) for c in content
-                                if isinstance(c, dict))
-                        if role in ("ai", "assistant"):
-                            think = _think_of(ak)
-                            if think and think != last_think:
-                                last_think = think
-                                yield AgentEvent(node="term", kind="thinking",
-                                                 data={"text": think[:2000]})
-                            if tool_calls:
-                                for tc in tool_calls:
-                                    if isinstance(tc, dict):
-                                        name = tc.get("name", "?")
-                                        args = tc.get("args") or {}
-                                    else:
-                                        name = getattr(tc, "name", "?")
-                                        args = getattr(tc, "args", {}) or {}
-                                    if not isinstance(args, dict):
-                                        args = {}
-                                    yield AgentEvent(
-                                        node="term", kind="action",
-                                        data={"action": {"action": name, **args}})
-                                    did_work = True
-                                # tool-call message bodies (often the raw
-                                # envelope) are not the reply; the model's
-                                # next text turn decides it.
-                            elif str(content or "").strip():
-                                final_reply = _resolve_reply(content)
-                        elif role == "tool":
-                            did_work = True
-                            obs = str(content or "")
-                            if obs.startswith("Blocked:"):
-                                yield AgentEvent(
-                                    node="term", kind="deny",
-                                    data={"reason": obs[len("Blocked:"):].strip()[:300]})
-                            elif obs.startswith("Cancelled"):
-                                yield AgentEvent(
-                                    node="term", kind="deny",
-                                    data={"reason": "denied by user"})
-                            else:
-                                yield AgentEvent(
-                                    node="term", kind="observation",
-                                    data={"observation": obs[:1200]})
-                        # human/system/tool-echoes: not UI events
-            for ev in _drain():
-                yield ev
-        except Exception as exc:  # never kill the turn on engine errors
-            yield AgentEvent(node="term", kind="error",
-                             data={"message": str(exc)[:300]})
-        finally:
-            try:
-                shell.close()
-            except Exception:
-                pass
-            if sandbox is not None:
-                try:
-                    sandbox.close()
-                except Exception:
-                    pass
-
-        # thinking never voiced/memorized — only the answer is
-        thinking, reply = split_thinking(final_reply)
-        if thinking and thinking != last_think:
-            yield AgentEvent(node="term", kind="thinking",
-                             data={"text": thinking[:2000]})
-        if not reply and did_work:
-            reply = "Done."
-        if reply and is_degenerate(reply):
-            yield AgentEvent(node="term", kind="error",
-                             data={"message": "model output degenerate"})
-            reply = "Sorry — I garbled that. Try rephrasing."
-        if reply or did_work:
-            if not reply:
-                reply = "Done."
-            yield AgentEvent(node="term", kind="chat", data={"reply": reply})
-        if self.tts is not None and reply:
-            try:
-                out = await self.tts.speak(_speak_head(reply))
-                import numpy as _np
-
-                yield AgentEvent(node="term", kind="audio", data={
-                    "wav": _np.asarray(out.wav, dtype="float32"),
-                    "sr": int(out.sample_rate), "sentence": reply[:500]})
-            except Exception as exc:
-                yield AgentEvent(node="term", kind="error",
-                                 data={"message": f"tts failed: {exc}"[:200]})
-        if sid and (text or reply):
-            try:
-                self.sessions.remember_turn(sid, str(text), reply)
-            except Exception:
-                pass
-        yield AgentEvent(node="term", kind="summary", data={
-            "text": str(text), "reply": reply,
-            "thinking": thinking[:2000], "session_id": sid})

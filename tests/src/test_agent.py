@@ -1,6 +1,7 @@
-"""New-stack tests: dataclass configs, facades, turn graph, VoiceAgent.
+"""Unified VoiceAgent tests: config, voice turns, injection, memory.
 
-No weights, no GPU: model legs are faked at the clean-class boundary.
+No weights, no GPU: legs are faked; the deep-agent loop runs for real
+through LocalChatModel with scripted raw outputs.
 """
 import unittest
 
@@ -21,6 +22,9 @@ class TestConfigs(unittest.TestCase):
         self.assertEqual(cfg.vad.threshold, 0.5)
         self.assertEqual(cfg.llm.max_tokens, 48)
         self.assertEqual(cfg.max_audio_s, 60.0)
+        self.assertEqual(cfg.sessions_dir, "sessions")
+        self.assertEqual(cfg.max_agent_steps, 6)
+        self.assertIsNone(cfg.sandbox)
         # overrides bind in code, not YAML
         custom = VoiceAgentConfig(vad=VadConfig(threshold=0.7))
         self.assertEqual(custom.vad.threshold, 0.7)
@@ -44,6 +48,14 @@ class TestConfigs(unittest.TestCase):
                 body = f.read()
             self.assertNotIn("import yaml", body, path)
             self.assertNotIn("configs/", body, path)
+
+    def test_chat_model_wraps_local_llm(self):
+        from src.agent.chat_model import LocalChatModel
+        from src.main import VoiceAgent
+
+        ag = VoiceAgent()
+        self.assertIsInstance(ag.chat_model, LocalChatModel)
+        self.assertIs(ag.chat_model.llm, ag.llm)
 
 
 class TestFacades(unittest.TestCase):
@@ -76,54 +88,6 @@ class TestFacades(unittest.TestCase):
         self.assertEqual(len(new_session_id()), 32)
 
 
-class TestTurnGraph(unittest.TestCase):
-    def test_graph_nodes(self):
-        from src.main import VoiceAgent
-
-        nodes = set(VoiceAgent()._compiled().get_graph().nodes)
-        self.assertTrue({"vad", "stt", "respond", "silence"} <= nodes)
-
-    def test_router(self):
-        from src.agent.nodes import route_after_vad
-
-        self.assertEqual(route_after_vad({"segments": [[0.0, 0.5]]}), "stt")
-        self.assertEqual(route_after_vad({"segments": []}), "silence")
-        self.assertEqual(route_after_vad({}), "silence")
-
-    def test_vad_node_unit(self):
-        import asyncio
-
-        import numpy as np
-
-        from src.agent.nodes import vad_node
-
-        events = []
-        update = asyncio.run(vad_node(
-            {"audio": np.zeros(16000, dtype=np.float32), "sr": 16000,
-             "node_s": {}},
-            vad=_FakeVad([(0.0, 0.5)]), writer=events.append))
-        self.assertEqual(len(events), 1)
-        self.assertEqual((events[0].node, events[0].kind),
-                         ("vad", "segments"))
-        self.assertEqual(update["segments"], [[0.0, 0.5]])
-        self.assertIn("vad", update["node_s"])
-
-    def test_silence_node_unit(self):
-        import asyncio
-        import time
-
-        from src.agent.nodes import silence_node
-
-        events = []
-        update = asyncio.run(silence_node(
-            {"sid": "s", "t0": time.perf_counter(), "node_s": {}},
-            writer=events.append))
-        kinds = [(e.node, e.kind) for e in events]
-        self.assertEqual(kinds, [("stt", "text"), ("turn", "summary")])
-        self.assertTrue(update["silent"])
-        self.assertEqual(events[-1].data["reply"], "")
-
-
 class _FakeVad:
     def __init__(self, segs):
         self._segs = segs
@@ -150,18 +114,38 @@ class _FakeStt:
                          dur_s=len(audio) / float(sr))
 
 
+def _chips(raw):
+    from src.models.llm import LlmToken
+
+    words = raw.split(" ") or [raw]
+    return [LlmToken(token_id=100 + i, piece=(w + " "), first=(i == 0))
+            for i, w in enumerate(words)]
+
+
 class _FakeLlm:
-    def messages(self, text, history=None):
+    """Scripted leg with streaming (chips) like the real LlmModel."""
+
+    def __init__(self, raws):
+        self.raws = list(raws)
+        self._full = ""
+
+    def messages_for_terminal(self, text, history=None, cwd="", observation=""):
         return [{"role": "user", "content": text}]
 
+    async def generate(self, messages, max_tokens=None, tools=None, stop=None):
+        from src.models.llm import LlmResult
+
+        self.last_tools = tools
+        return LlmResult(text=self.raws.pop(0) if self.raws else "done chatting.")
+
+    async def stream(self, messages, max_tokens=None, tools=None, stop=None):
+        raw = self.raws.pop(0) if self.raws else "done chatting."
+        self._full = raw
+        for tok in _chips(raw):
+            yield tok
+
     async def decode(self, ids):
-        return "Hi there."
-
-    async def stream(self, messages, max_tokens=None):
-        from src.models.llm import LlmToken
-
-        yield LlmToken(token_id=1, piece="Hi ", first=True)
-        yield LlmToken(token_id=2, piece="there.", first=False)
+        return self._full
 
 
 class _FakeTts:
@@ -169,20 +153,29 @@ class _FakeTts:
         import numpy as np
 
         self._wav = np.zeros(240, dtype=np.float32)
+        self.spoken = []
 
     async def speak(self, text):
         from src.models.tts import TtsAudio
 
+        self.spoken.append(text)
         return TtsAudio(wav=self._wav, sample_rate=24000, sentence=text,
                         synth_s=0.01)
 
 
-def _agent_with(segs):
-    from src.main import VoiceAgent
+def _agent_with(segs, raws, **kw):
+    import tempfile
 
-    ag = VoiceAgent()
+    from src.agent.chat_model import LocalChatModel
+    from src.main import VoiceAgent, VoiceAgentConfig
+
+    cfg = {"sessions_dir": tempfile.mkdtemp(prefix="vagent-")}
+    cfg.update(kw)
+    ag = VoiceAgent(VoiceAgentConfig(**cfg))
+    llm = _FakeLlm(raws)
     ag.vad, ag.stt, ag.llm, ag.tts = (_FakeVad(segs), _FakeStt(),
-                                      _FakeLlm(), _FakeTts())
+                                      llm, _FakeTts())
+    ag.chat_model = LocalChatModel(llm=llm)
     return ag
 
 
@@ -215,80 +208,49 @@ class TestThinking(unittest.TestCase):
 
     def test_voice_thinking_not_spoken(self):
         import asyncio
-        import time
-
         import numpy as np
 
-        from src.agent.nodes import respond_node
-        from src.models.llm import LlmToken
-
-        class ThinkLlm(_FakeLlm):
-            async def decode(self, ids):
-                return "<think>choose greeting</think>Hi there."
-
-            async def stream(self, messages, max_tokens=None):
-                for i, piece in enumerate(["<think>choose ", "greeting</think>",
-                                           "Hi ", "there."]):
-                    yield LlmToken(token_id=10 + i, piece=piece, first=(i == 0))
-
-        tts = _FakeTts()
-        spoken = []
-        orig = tts.speak
-
-        async def spy(text):
-            spoken.append(text)
-            return await orig(text)
-
-        tts.speak = spy  # type: ignore
-        events = []
-        state = {"text": "hi", "history": [], "sid": "s",
-                 "remember": False, "node_s": {},
-                 "t0": time.perf_counter()}
-        asyncio.run(respond_node(state, llm=ThinkLlm(), tts=tts,
-                                 sessions=None, writer=events.append))
+        ag = _agent_with([(0.0, 0.5)],
+                         ["<think>choose greeting</think>Hi there."])
+        tts = ag.tts
+        events = asyncio.run(_collect_call(
+            ag, np.zeros(16000, dtype=np.float32), sr=16000))
         kinds = [(e.node, e.kind) for e in events]
         self.assertIn(("llm", "thinking"), kinds)
         think = [e for e in events if e.kind == "thinking"][0]
         self.assertIn("choose greeting", think.data["text"])
-        # thoughts never reach TTS; answer does, whole
-        self.assertTrue(spoken)
-        self.assertFalse(any("choose greeting" in s for s in spoken))
-        self.assertIn(("llm", "done"), kinds)
-        done = [e for e in events if e.kind == "done"][0]
-        self.assertEqual(done.data["text"], "Hi there.")
+        # thoughts never reach TTS; the answer does, whole
+        self.assertTrue(tts.spoken)
+        self.assertFalse(any("choose greeting" in s for s in tts.spoken))
+        self.assertEqual("".join(tts.spoken), "Hi there.")
         self.assertEqual(events[-1].data["reply"], "Hi there.")
 
     def test_voice_no_think_unchanged(self):
         import asyncio
-        import time
+        import numpy as np
 
-        from src.agent.nodes import respond_node
-
-        tts = _FakeTts()
-        events = []
-        state = {"text": "hi", "history": [], "sid": "s",
-                 "remember": False, "node_s": {},
-                 "t0": time.perf_counter()}
-        asyncio.run(respond_node(state, llm=_FakeLlm(), tts=tts,
-                                 sessions=None, writer=events.append))
+        ag = _agent_with([(0.0, 0.5)], ["Hi there."])
+        events = asyncio.run(_collect_call(
+            ag, np.zeros(16000, dtype=np.float32), sr=16000))
         kinds = [(e.node, e.kind) for e in events]
         self.assertNotIn(("llm", "thinking"), kinds)
         self.assertEqual(events[-1].data["reply"], "Hi there.")
+
+
+async def _collect_call(ag, audio, **kw):
+    return [e async for e in ag(audio, **kw)]
 
 
 class TestVoiceAgent(unittest.TestCase):
     def _run(self, ag, audio, **kw):
         import asyncio
 
-        async def collect():
-            return [e async for e in ag(audio, **kw)]
-
-        return asyncio.run(collect())
+        return asyncio.run(_collect_call(ag, audio, **kw))
 
     def test_event_order(self):
         import numpy as np
 
-        ag = _agent_with([(0.0, 0.5)])
+        ag = _agent_with([(0.0, 0.5)], ["Hi there."])
         events = self._run(ag, np.zeros(16000, dtype=np.float32), sr=16000)
         kinds = [(e.node, e.kind) for e in events]
         self.assertEqual(kinds[0], ("vad", "segments"))
@@ -304,10 +266,25 @@ class TestVoiceAgent(unittest.TestCase):
         llm_kinds = [k for n, k in kinds if n == "llm"]
         self.assertEqual(llm_kinds[-1], "done")
 
+    def test_voice_tool_call_runs(self):
+        import numpy as np
+
+        ag = _agent_with([(0.0, 0.5)],
+                         ['{"action": "exec", "command": "echo hi"}',
+                          '{"action": "done", "reply": "Did it."}'])
+        events = self._run(ag, np.zeros(16000, dtype=np.float32), sr=16000)
+        kinds = [(e.node, e.kind) for e in events]
+        self.assertIn(("term", "action"), kinds)
+        self.assertIn(("term", "observation"), kinds)
+        obs = [e for e in events if e.kind == "observation"][0]
+        self.assertIn("hi", obs.data["observation"])
+        self.assertEqual(events[-1].data["reply"], "Did it.")
+        self.assertEqual("".join(ag.tts.spoken), "Did it.")
+
     def test_silence_short_circuits(self):
         import numpy as np
 
-        ag = _agent_with([])
+        ag = _agent_with([], [])
         events = self._run(ag, np.zeros(16000, dtype=np.float32), sr=16000)
         kinds = [(e.node, e.kind) for e in events]
         self.assertEqual(kinds[0], ("vad", "segments"))
@@ -318,7 +295,7 @@ class TestVoiceAgent(unittest.TestCase):
     def test_session_memory(self):
         import numpy as np
 
-        ag = _agent_with([(0.0, 0.5)])
+        ag = _agent_with([(0.0, 0.5)], ["Hi there."])
         audio = np.zeros(16000, dtype=np.float32)
         self._run(ag, audio, sr=16000, session_id="s1")
         self._run(ag, audio, sr=16000, session_id="s1")
@@ -328,12 +305,76 @@ class TestVoiceAgent(unittest.TestCase):
     def test_guards(self):
         import numpy as np
 
-        ag = _agent_with([(0.0, 0.5)])
+        ag = _agent_with([(0.0, 0.5)], ["Hi there."])
         with self.assertRaises(ValueError):
             self._run(ag, np.zeros(0, dtype=np.float32))
         big = np.zeros(61 * 16000, dtype=np.float32)
         with self.assertRaises(ValueError):
             self._run(ag, big)
+
+    def test_injected_message_queued_then_drains(self):
+        import asyncio
+        import numpy as np
+
+        gate = asyncio.Event()
+
+        class GateLlm:
+            """Generate-only leg (no stream): first call blocks on gate."""
+
+            def __init__(self, raws):
+                self.raws = list(raws)
+                self.calls = 0
+
+            def messages_for_terminal(self, text, history=None, cwd="",
+                                      observation=""):
+                return [{"role": "user", "content": text}]
+
+            async def generate(self, messages, max_tokens=None,
+                               tools=None, stop=None):
+                from src.models.llm import LlmResult
+
+                self.calls += 1
+                if self.calls == 1:
+                    await gate.wait()
+                return LlmResult(
+                    text=self.raws.pop(0) if self.raws else "done chatting.")
+
+            async def decode(self, ids):
+                return ""
+
+        ag = _agent_with([(0.0, 0.5)], ["working on it", "second done"])
+        ag.llm = GateLlm(["working on it", "second done"])
+        from src.agent.chat_model import LocalChatModel
+
+        ag.chat_model = LocalChatModel(llm=ag.llm)
+        audio = np.zeros(16000, dtype=np.float32)
+
+        async def go():
+            t1 = asyncio.create_task(_collect_call(ag, audio, sr=16000,
+                                                  session_id="s9"))
+            for _ in range(200):
+                if ag.llm.calls >= 1:
+                    break
+                await asyncio.sleep(0.01)
+            second = await _collect_call(ag, audio, sr=16000,
+                                         session_id="s9")
+            gate.set()
+            first = await t1
+            return first, second
+
+        first, second = asyncio.run(go())
+        # contender runs VAD/STT, then sees exactly one queued event and an
+        # empty summary (its text was injected into the active turn)
+        skinds = [(e.node, e.kind) for e in second]
+        self.assertIn(("term", "queued"), skinds)
+        self.assertNotIn(("llm", "done"), skinds)
+        self.assertEqual(second[-1].data["reply"], "")
+        # the active turn drains the injection: both replies surface in order
+        chats = [e.data["text"] for e in first
+                 if e.node == "llm" and e.kind == "done"]
+        self.assertEqual(chats, ["working on it", "second done"])
+        self.assertEqual(first[-1].data["reply"], "second done")
+        self.assertEqual(len(ag.sessions.history("s9")), 4)
 
 
 if __name__ == "__main__":

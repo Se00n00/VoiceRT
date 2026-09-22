@@ -20,8 +20,8 @@ voice-pipeline/
 │   │   ├── vad.py / stt.py / llm.py / tts.py
 │   │   ├── runtime/         # device/memory/profiler/tensor + capacity/scheduler
 │   │   └── triton_kernels/  # hand-written kernels + per-leg surfaces
-│   ├── agent/               # LangGraph turn graph + node events
-│   └── main.py              # VoiceAgent: VAD -> STT -> LLM -> TTS loop
+│   ├── agent/               # events, JSON sessions, terminal tools, LC model
+│   └── main.py              # VoiceAgent: VAD -> STT -> deep-agent LLM -> TTS
 ├── models/
 │   ├── qwen.py              # QwenEngine: weights + KVCache + greedy decode
 │   ├── whisper.py           # WhisperEngine: mel + encoder + decoder

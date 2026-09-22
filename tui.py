@@ -118,7 +118,6 @@ class VoiceTermApp(App):
         super().__init__()
         self.seconds = seconds
         self.agent = None
-        self.harness = None
         self.sid = uuid.uuid4().hex
         self.cwd = os.getcwd()
         self.busy = False
@@ -181,12 +180,7 @@ class VoiceTermApp(App):
         # idempotent second pass: wires paged engine + missing list + flag
         # (leg backends/tokenizers are cached, so this is fast).
         await agent.warm()
-        from src.agent.terminal import TerminalConfig, TerminalHarness
-
         self.agent = agent
-        self.harness = TerminalHarness(
-            llm=agent.llm, tts=agent.tts, sessions=agent.sessions,
-            config=TerminalConfig(cwd=self.cwd), confirm_fn=self._confirm)
         missing = getattr(agent, "missing", [])
         if missing:
             self.conv.write(f"[yellow]degraded: {missing}[/yellow]")
@@ -222,7 +216,7 @@ class VoiceTermApp(App):
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
         self.entry.value = ""
-        if not text or self.busy or self.harness is None:
+        if not text or self.busy or self.agent is None:
             return
         if text.startswith("/"):
             await self._command(text)
@@ -242,8 +236,6 @@ class VoiceTermApp(App):
             self.conv.clear()
         elif cmd == "/cwd" and arg and os.path.isdir(arg):
             self.cwd = os.path.abspath(arg)
-            self.harness.config = type(self.harness.config)(
-                **{**self.harness.config.__dict__, "cwd": self.cwd})
             self.conv.write(f"[green]cwd {self.cwd}[/green]")
             self._status()
         elif cmd == "/voice":
@@ -255,7 +247,7 @@ class VoiceTermApp(App):
             self.conv.write(f"[red]unknown {cmd} — /help[/red]")
 
     def action_voice(self) -> None:
-        if not self.busy and self.harness is not None and self.entry.value.strip() == "":
+        if not self.busy and self.agent is not None and self.entry.value.strip() == "":
             self.run_worker(self._voice_turn(), exclusive=True)
 
     # -- turns ----------------------------------------------------------
@@ -293,7 +285,8 @@ class VoiceTermApp(App):
         saw = {"chat": False}
 
         async def _run():
-            async for event in self.harness.run_turn(text, session_id=self.sid, cwd=self.cwd):
+            async for event in self.agent.run_text(text, session_id=self.sid, cwd=self.cwd,
+                                                   confirm_fn=self._confirm):
                 if event.node != "term":
                     continue
                 d = event.data or {}
@@ -301,7 +294,7 @@ class VoiceTermApp(App):
                     self._stream_clear()
                     a = d.get("action", {})
                     self.conv.write(f"[dim]▸ {a.get('action')}: "
-                                    f"{a.get('command') or a.get('path') or a.get('pattern') or ''}[/dim]")
+                                    f"{a.get('command') or a.get('path') or a.get('pattern') or (a.get('code') or '')[:60] or ''}[/dim]")
                 elif event.kind == "thinking":
                     # Think traces are first-class: dimmed, never dropped —
                     # but never twice: skip exact repeats of the last trace.
@@ -324,6 +317,9 @@ class VoiceTermApp(App):
                 elif event.kind == "deny":
                     self._stream_clear()
                     self.conv.write(f"[red]✕ {d.get('reason')}[/red]")
+                elif event.kind == "queued":
+                    self.conv.write(f"[dim]⏳ queued behind the active turn "
+                                    f"(#{d.get('position', '?')}) — injected next[/dim]")
                 elif event.kind == "chat":
                     self._stream_clear()
                     reply = str(d.get("reply", "") or "")

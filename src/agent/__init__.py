@@ -1,40 +1,20 @@
-"""Agent: LangGraph turn graph over per-node stream events."""
+"""Agent: event currency, session memory, terminal tools.
+
+The turn loop lives in :class:`src.main.VoiceAgent` (deepagents over the
+local model). This package holds the pieces: per-node stream events,
+session stores (RAM + JSON-file), and the terminal toolset.
+"""
 from src.agent.events import AgentEvent, NODES
-from src.agent.graph import build_turn_graph
-from src.agent.memory import LCSessionHistory, LangChainSessionMemory
-from src.agent.terminal import (
-    TerminalConfig,
-    TerminalHarness,
-    TurnCtx,
-    build_terminal_tools,
-    run_command,
+from src.agent.memory import (
+    JsonSessionMemory,
+    LangChainSessionMemory,
+    LCSessionHistory,
 )
-from src.agent.nodes import (
-    respond_node,
-    route_after_vad,
-    silence_node,
-    stt_node,
-    turn_summary,
-    vad_node,
-)
-from src.agent.state import AgentState
 
 __all__ = [
     "AgentEvent",
+    "NODES",
+    "JsonSessionMemory",
     "LangChainSessionMemory",
     "LCSessionHistory",
-    "TerminalConfig",
-    "TerminalHarness",
-    "TurnCtx",
-    "build_terminal_tools",
-    "run_command",
-    "NODES",
-    "AgentState",
-    "build_turn_graph",
-    "vad_node",
-    "stt_node",
-    "respond_node",
-    "silence_node",
-    "route_after_vad",
-    "turn_summary",
 ]

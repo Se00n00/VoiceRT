@@ -7,7 +7,6 @@ lives in :mod:`src.tools.terminal` (the browser schema was removed
 with the extension).
 """
 from src.tools.terminal import (
-    TERMINAL_PREAMBLE,
     TERMINAL_TOOLS,
     TerminalAction,
     check_policy,
@@ -19,7 +18,6 @@ from src.tools.terminal import (
 
 __all__ = [
     "ALLOWED_OPS",
-    "TERMINAL_PREAMBLE",
     "TERMINAL_TOOLS",
     "TerminalAction",
     "check_policy",

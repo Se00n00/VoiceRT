@@ -1,0 +1,1514 @@
+[
+ {
+  "id": "simple_0",
+  "version": "v2",
+  "category": "simple",
+  "file": "BFCL_v2_simple.json",
+  "index": 0,
+  "question": [
+   {
+    "role": "user",
+    "content": "Find the area of a triangle with a base of 10 units and height of 5 units."
+   }
+  ],
+  "functions": [
+   {
+    "name": "calculate_triangle_area",
+    "description": "Calculate the area of a triangle given its base and height.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "base": {
+       "type": "integer",
+       "description": "The base of the triangle."
+      },
+      "height": {
+       "type": "integer",
+       "description": "The height of the triangle."
+      },
+      "unit": {
+       "type": "string",
+       "description": "The unit of measure (defaults to 'units' if not specified)"
+      }
+     },
+     "required": [
+      "base",
+      "height"
+     ]
+    }
+   }
+  ],
+  "expected": [
+   {
+    "calculate_triangle_area": {
+     "base": [
+      10
+     ],
+     "height": [
+      5
+     ],
+     "unit": [
+      "units",
+      ""
+     ]
+    }
+   }
+  ],
+  "expected_kind": "ast"
+ },
+ {
+  "id": "simple_44",
+  "version": "v2",
+  "category": "simple",
+  "file": "BFCL_v2_simple.json",
+  "index": 44,
+  "question": [
+   {
+    "role": "user",
+    "content": "Calculate the electric field strength 4 meters away from a charge of 0.01 Coulombs."
+   }
+  ],
+  "functions": [
+   {
+    "name": "calculate_electric_field_strength",
+    "description": "Calculate the electric field strength at a certain distance from a point charge.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "charge": {
+       "type": "float",
+       "description": "The charge in Coulombs."
+      },
+      "distance": {
+       "type": "integer",
+       "description": "The distance from the charge in meters."
+      },
+      "medium": {
+       "type": "string",
+       "description": "The medium in which the charge and the point of calculation is located. Default is 'vacuum'."
+      }
+     },
+     "required": [
+      "charge",
+      "distance"
+     ]
+    }
+   }
+  ],
+  "expected": [
+   {
+    "calculate_electric_field_strength": {
+     "charge": [
+      0.01
+     ],
+     "distance": [
+      4
+     ],
+     "medium": [
+      "",
+      "vacuum"
+     ]
+    }
+   }
+  ],
+  "expected_kind": "ast"
+ },
+ {
+  "id": "simple_89",
+  "version": "v2",
+  "category": "simple",
+  "file": "BFCL_v2_simple.json",
+  "index": 89,
+  "question": [
+   {
+    "role": "user",
+    "content": "Fetch all records for students studying Science in 'Bluebird High School' from the StudentDB."
+   }
+  ],
+  "functions": [
+   {
+    "name": "db_fetch_records",
+    "description": "Fetch records from a specified database table based on certain conditions.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "database_name": {
+       "type": "string",
+       "description": "The name of the database."
+      },
+      "table_name": {
+       "type": "string",
+       "description": "The name of the table from which records need to be fetched."
+      },
+      "conditions": {
+       "type": "dict",
+       "properties": {
+        "department": {
+         "type": "string",
+         "description": "The name of the department of students."
+        },
+        "school": {
+         "type": "string",
+         "description": "The name of the school students are enrolled in."
+        }
+       },
+       "description": "The conditions based on which records are to be fetched."
+      },
+      "fetch_limit": {
+       "type": "integer",
+       "description": "Limits the number of records to be fetched. Default is 0, which means no limit."
+      }
+     },
+     "required": [
+      "database_name",
+      "table_name",
+      "conditions"
+     ]
+    }
+   }
+  ],
+  "expected": [
+   {
+    "db_fetch_records": {
+     "database_name": [
+      "StudentDB"
+     ],
+     "table_name": [
+      "students"
+     ],
+     "conditions": [
+      {
+       "department": [
+        "Science"
+       ],
+       "school": [
+        "Bluebird High School",
+        "Bluebird HS"
+       ]
+      }
+     ],
+     "fetch_limit": [
+      "",
+      0
+     ]
+    }
+   }
+  ],
+  "expected_kind": "ast"
+ },
+ {
+  "id": "simple_133",
+  "version": "v2",
+  "category": "simple",
+  "file": "BFCL_v2_simple.json",
+  "index": 133,
+  "question": [
+   {
+    "role": "user",
+    "content": "Predict the future value of a $5000 investment with an annual interest rate of 5% in 3 years with monthly compounding."
+   }
+  ],
+  "functions": [
+   {
+    "name": "finance.predict_future_value",
+    "description": "Calculate the future value of an investment given its present value, interest rate, the number of compounding periods per year, and the time horizon.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "present_value": {
+       "type": "integer",
+       "description": "The present value of the investment."
+      },
+      "annual_interest_rate": {
+       "type": "float",
+       "description": "The annual interest rate of the investment."
+      },
+      "compounding_periods_per_year": {
+       "type": "integer",
+       "description": "The number of times that interest is compounded per year. Default is 1 (annually)."
+      },
+      "time_years": {
+       "type": "integer",
+       "description": "The investment horizon in years."
+      }
+     },
+     "required": [
+      "present_value",
+      "annual_interest_rate",
+      "time_years"
+     ]
+    }
+   }
+  ],
+  "expected": [
+   {
+    "finance.predict_future_value": {
+     "present_value": [
+      5000
+     ],
+     "annual_interest_rate": [
+      0.05
+     ],
+     "compounding_periods_per_year": [
+      12
+     ],
+     "time_years": [
+      3
+     ]
+    }
+   }
+  ],
+  "expected_kind": "ast"
+ },
+ {
+  "id": "simple_177",
+  "version": "v2",
+  "category": "simple",
+  "file": "BFCL_v2_simple.json",
+  "index": 177,
+  "question": [
+   {
+    "role": "user",
+    "content": "Find all Patent lawsuit cases of Facebook in 2018."
+   }
+  ],
+  "functions": [
+   {
+    "name": "get_lawsuit_cases",
+    "description": "Retrieve all lawsuit cases related to a specific company during a particular year.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "company_name": {
+       "type": "string",
+       "description": "The name of the company."
+      },
+      "year": {
+       "type": "integer",
+       "description": "The specific year to search for lawsuit cases."
+      },
+      "status": {
+       "type": "string",
+       "enum": [
+        "open",
+        "closed",
+        "all"
+       ],
+       "description": "The status of the lawsuit cases to retrieve. If not specified, defaults to 'all'."
+      }
+     },
+     "required": [
+      "company_name",
+      "year"
+     ]
+    }
+   }
+  ],
+  "expected": [
+   {
+    "get_lawsuit_cases": {
+     "company_name": [
+      "Facebook"
+     ],
+     "year": [
+      2018
+     ],
+     "status": [
+      "all",
+      ""
+     ]
+    }
+   }
+  ],
+  "expected_kind": "ast"
+ },
+ {
+  "id": "simple_222",
+  "version": "v2",
+  "category": "simple",
+  "file": "BFCL_v2_simple.json",
+  "index": 222,
+  "question": [
+   {
+    "role": "user",
+    "content": "Can you calculate my Body Mass Index (BMI) given my weight is 70 kg and height is 180 cm?"
+   }
+  ],
+  "functions": [
+   {
+    "name": "calculate_bmi",
+    "description": "Calculate the Body Mass Index based on given weight and height.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "weight": {
+       "type": "integer",
+       "description": "The weight of a person in kilograms."
+      },
+      "height": {
+       "type": "integer",
+       "description": "The height of a person in centimeters."
+      },
+      "unit": {
+       "type": "string",
+       "description": "Optional. The measurement system to be used for the result. The default is 'metric'."
+      }
+     },
+     "required": [
+      "weight",
+      "height"
+     ]
+    }
+   }
+  ],
+  "expected": [
+   {
+    "calculate_bmi": {
+     "weight": [
+      70
+     ],
+     "height": [
+      180
+     ],
+     "unit": [
+      "",
+      "metric"
+     ]
+    }
+   }
+  ],
+  "expected_kind": "ast"
+ },
+ {
+  "id": "simple_266",
+  "version": "v2",
+  "category": "simple",
+  "file": "BFCL_v2_simple.json",
+  "index": 266,
+  "question": [
+   {
+    "role": "user",
+    "content": "What is the value of the sculpture 'The Thinker' by Rodin?"
+   }
+  ],
+  "functions": [
+   {
+    "name": "get_sculpture_value",
+    "description": "Retrieve the current market value of a particular sculpture by a specific artist.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "sculpture": {
+       "type": "string",
+       "description": "The name of the sculpture."
+      },
+      "artist": {
+       "type": "string",
+       "description": "The name of the artist who created the sculpture."
+      },
+      "year": {
+       "type": "integer",
+       "description": "The year the sculpture was created. This is optional and is not required for all sculptures. Default is the most recent year."
+      }
+     },
+     "required": [
+      "sculpture",
+      "artist"
+     ]
+    }
+   }
+  ],
+  "expected": [
+   {
+    "get_sculpture_value": {
+     "sculpture": [
+      "The Thinker"
+     ],
+     "artist": [
+      "Rodin"
+     ],
+     "year": [
+      ""
+     ]
+    }
+   }
+  ],
+  "expected_kind": "ast"
+ },
+ {
+  "id": "simple_310",
+  "version": "v2",
+  "category": "simple",
+  "file": "BFCL_v2_simple.json",
+  "index": 310,
+  "question": [
+   {
+    "role": "user",
+    "content": "What are the career stats of basketball player LeBron James?"
+   }
+  ],
+  "functions": [
+   {
+    "name": "get_career_stats",
+    "description": "Retrieve the career statistics of a basketball player based on the player's name.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "player_name": {
+       "type": "string",
+       "description": "The name of the basketball player."
+      },
+      "team": {
+       "type": "string",
+       "description": "The team that the player currently plays for or has played for (Optional). Default to use all teams if not specified."
+      }
+     },
+     "required": [
+      "player_name"
+     ]
+    }
+   }
+  ],
+  "expected": [
+   {
+    "get_career_stats": {
+     "player_name": [
+      "LeBron James"
+     ],
+     "team": [
+      ""
+     ]
+    }
+   }
+  ],
+  "expected_kind": "ast"
+ },
+ {
+  "id": "simple_355",
+  "version": "v2",
+  "category": "simple",
+  "file": "BFCL_v2_simple.json",
+  "index": 355,
+  "question": [
+   {
+    "role": "user",
+    "content": "How many calories in the Beef Lasagna Recipe from Foodnetwork.com?"
+   }
+  ],
+  "functions": [
+   {
+    "name": "recipe_info.get_calories",
+    "description": "Retrieve the amount of calories from a specific recipe in a food website.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "website": {
+       "type": "string",
+       "description": "The food website that has the recipe."
+      },
+      "recipe": {
+       "type": "string",
+       "description": "Name of the recipe."
+      },
+      "optional_meal_time": {
+       "type": "string",
+       "description": "Specific meal time of the day for the recipe (optional, could be 'Breakfast', 'Lunch', 'Dinner'). Default is all if not specified."
+      }
+     },
+     "required": [
+      "website",
+      "recipe"
+     ]
+    }
+   }
+  ],
+  "expected": [
+   {
+    "recipe_info.get_calories": {
+     "website": [
+      "Foodnetwork.com"
+     ],
+     "recipe": [
+      "Beef Lasagna"
+     ],
+     "optional_meal_time": [
+      ""
+     ]
+    }
+   }
+  ],
+  "expected_kind": "ast"
+ },
+ {
+  "id": "simple_399",
+  "version": "v2",
+  "category": "simple",
+  "file": "BFCL_v2_simple.json",
+  "index": 399,
+  "question": [
+   {
+    "role": "user",
+    "content": "Find me the best Italian restaurants in New York City with average customer ratings of more than 4 and accepts credit cards."
+   }
+  ],
+  "functions": [
+   {
+    "name": "restaurant_search",
+    "description": "Locates top rated restaurants based on specific criteria such as type of cuisine, ratings, and facilities.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "location": {
+       "type": "string",
+       "description": "The city and state, e.g. New York City, NY"
+      },
+      "cuisine": {
+       "type": "string",
+       "description": "Preferred type of cuisine e.g., Italian, Indian, American, etc."
+      },
+      "rating": {
+       "type": "integer",
+       "description": "Minimum average customer rating out of 5"
+      },
+      "accepts_credit_cards": {
+       "type": "boolean",
+       "description": "If the restaurant should accept credit cards."
+      }
+     },
+     "required": [
+      "location",
+      "cuisine",
+      "rating",
+      "accepts_credit_cards"
+     ]
+    }
+   }
+  ],
+  "expected": [
+   {
+    "restaurant_search": {
+     "location": [
+      "New York City",
+      "New York City, NY",
+      "NYC"
+     ],
+     "cuisine": [
+      "Italian"
+     ],
+     "rating": [
+      4
+     ],
+     "accepts_credit_cards": [
+      true
+     ]
+    }
+   }
+  ],
+  "expected_kind": "ast"
+ },
+ {
+  "id": "multiple_0",
+  "version": "v2",
+  "category": "multiple",
+  "file": "BFCL_v2_multiple.json",
+  "index": 0,
+  "question": [
+   {
+    "role": "user",
+    "content": "Can I find the dimensions and properties of a triangle, if I know its three sides are 5 units, 4 units and 3 units long?"
+   }
+  ],
+  "functions": [
+   {
+    "name": "triangle_properties.get",
+    "description": "Retrieve the dimensions, such as area and perimeter, of a triangle if lengths of three sides are given.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "side1": {
+       "type": "integer",
+       "description": "The length of first side of the triangle."
+      },
+      "side2": {
+       "type": "integer",
+       "description": "The length of second side of the triangle."
+      },
+      "side3": {
+       "type": "integer",
+       "description": "The length of third side of the triangle."
+      },
+      "get_area": {
+       "type": "boolean",
+       "description": "A flag to determine whether to calculate the area of triangle. Default is true.",
+       "default": true,
+       "optional": true
+      },
+      "get_perimeter": {
+       "type": "boolean",
+       "description": "A flag to determine whether to calculate the perimeter of triangle. Default is true.",
+       "default": true,
+       "optional": true
+      },
+      "get_angles": {
+       "type": "boolean",
+       "description": "A flag to determine whether to calculate the internal angles of triangle. Default is true.",
+       "default": true,
+       "optional": true
+      }
+     },
+     "required": [
+      "side1",
+      "side2",
+      "side3"
+     ]
+    }
+   },
+   {
+    "name": "circle_properties.get",
+    "description": "Retrieve the dimensions, such as area and circumference, of a circle if radius is given.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "radius": {
+       "type": "float",
+       "description": "The length of radius of the circle."
+      },
+      "get_area": {
+       "type": "boolean",
+       "description": "A flag to determine whether to calculate the area of circle. Default is true.",
+       "default": true,
+       "optional": true
+      },
+      "get_circumference": {
+       "type": "boolean",
+       "description": "A flag to determine whether to calculate the circumference of circle. Default is true.",
+       "default": true,
+       "optional": true
+      }
+     },
+     "required": [
+      "radius"
+     ]
+    }
+   }
+  ],
+  "expected": [
+   {
+    "triangle_properties.get": {
+     "side1": [
+      5
+     ],
+     "side2": [
+      4
+     ],
+     "side3": [
+      3
+     ],
+     "get_area": [
+      "",
+      true
+     ],
+     "get_perimeter": [
+      "",
+      true
+     ],
+     "get_angles": [
+      "",
+      true
+     ]
+    }
+   }
+  ],
+  "expected_kind": "ast"
+ },
+ {
+  "id": "multiple_40",
+  "version": "v2",
+  "category": "multiple",
+  "file": "BFCL_v2_multiple.json",
+  "index": 40,
+  "question": [
+   {
+    "role": "user",
+    "content": "Calculate the strength of magnetic field given distance is 8 meters and current is 12 Amperes?"
+   }
+  ],
+  "functions": [
+   {
+    "name": "electromagnetism.ampere_law",
+    "description": "Calculate magnetic field strength using Ampere's Circuital Law. Input the current enclosed by a circular path and the distance from the center of the circle. Can be applied to a cylindrical or spherical symmetry of consistent magnetic field. ",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "enclosed_current": {
+       "type": "float",
+       "description": "The total current enclosed by the loop. In Amperes."
+      },
+      "radius": {
+       "type": "float",
+       "description": "The radius of the circle or the distance from the center of the circular path. In meters."
+      },
+      "mu0": {
+       "type": "float",
+       "description": "Permeability of free space. Its value is default approximated to be 0.000001256 H/m. Optional"
+      }
+     },
+     "required": [
+      "enclosed_current",
+      "radius"
+     ]
+    }
+   },
+   {
+    "name": "electromagnetism.biot_savart_law",
+    "description": "Calculate magnetic field strength using Biot-Savart law. Input the current in Ampere and the distance in meters.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "current": {
+       "type": "integer",
+       "description": "The current in the conductor, in Amperes."
+      },
+      "distance": {
+       "type": "integer",
+       "description": "Distance from the current carrying conductor, in meters."
+      },
+      "mu0": {
+       "type": "float",
+       "description": "Permeability of free space. Its value is default approximated to be 0.000001256 H/m. Optional"
+      }
+     },
+     "required": [
+      "current",
+      "distance"
+     ]
+    }
+   }
+  ],
+  "expected": [
+   {
+    "electromagnetism.biot_savart_law": {
+     "current": [
+      12
+     ],
+     "distance": [
+      8
+     ],
+     "mu0": [
+      1.256e-06,
+      1.256e-06,
+      ""
+     ]
+    }
+   }
+  ],
+  "expected_kind": "ast"
+ },
+ {
+  "id": "multiple_80",
+  "version": "v2",
+  "category": "multiple",
+  "file": "BFCL_v2_multiple.json",
+  "index": 80,
+  "question": [
+   {
+    "role": "user",
+    "content": "Find a local guitar shop that also offers violin lessons in Nashville."
+   }
+  ],
+  "functions": [
+   {
+    "name": "music_shop.find_nearby",
+    "description": "Locate nearby music shops based on specific criteria like instrument lessons availability.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "location": {
+       "type": "string",
+       "description": "The city and state, e.g. Nashville, TN"
+      },
+      "services": {
+       "type": "array",
+       "items": {
+        "type": "string",
+        "enum": [
+         "Guitar Lessons",
+         "Violin Lessons",
+         "Piano Lessons",
+         "Ukulele Lessons"
+        ]
+       },
+       "description": "Types of instrument lessons offered in the shop. Default empty array"
+      },
+      "instruments": {
+       "type": "array",
+       "items": {
+        "type": "string",
+        "enum": [
+         "Guitars",
+         "Violins",
+         "Pianos",
+         "Drums"
+        ]
+       },
+       "description": "Types of instruments sold in the shop. Default empty array"
+      }
+     },
+     "required": [
+      "location"
+     ]
+    }
+   },
+   {
+    "name": "gym.find_nearby",
+    "description": "Locate nearby gyms based on specific criteria like types of fitness classes availability.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "location": {
+       "type": "string",
+       "description": "The city and state, e.g. Nashville, TN"
+      },
+      "classes": {
+       "type": "array",
+       "items": {
+        "type": "string",
+        "enum": [
+         "Yoga",
+         "Spin",
+         "Zumba",
+         "CrossFit"
+        ]
+       },
+       "description": "Types of fitness classes offered in the gym. Default empty array"
+      },
+      "equipment": {
+       "type": "array",
+       "items": {
+        "type": "string",
+        "enum": [
+         "Treadmills",
+         "Ellipticals",
+         "Weight Machines",
+         "Free Weights"
+        ]
+       },
+       "description": "Types of gym equipment available. Default empty array"
+      }
+     },
+     "required": [
+      "location"
+     ]
+    }
+   }
+  ],
+  "expected": [
+   {
+    "music_shop.find_nearby": {
+     "location": [
+      "Nashville, TN",
+      "Nashville"
+     ],
+     "services": [
+      [
+       "Violin Lessons"
+      ]
+     ],
+     "instruments": [
+      [
+       "Guitars"
+      ]
+     ]
+    }
+   }
+  ],
+  "expected_kind": "ast"
+ },
+ {
+  "id": "multiple_119",
+  "version": "v2",
+  "category": "multiple",
+  "file": "BFCL_v2_multiple.json",
+  "index": 119,
+  "question": [
+   {
+    "role": "user",
+    "content": "Find records in database in user table where age is greater than 25 and job is 'engineer'."
+   }
+  ],
+  "functions": [
+   {
+    "name": "average_batting_score",
+    "description": "Get the average batting score of a cricketer for specified past matches.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "player_name": {
+       "type": "string",
+       "description": "Name of the cricket player."
+      },
+      "matches": {
+       "type": "integer",
+       "description": "Number of past matches to consider for average calculation."
+      },
+      "match_format": {
+       "type": "string",
+       "description": "Format of the cricket matches considered (e.g., 'T20', 'ODI', 'Test'). Default is 'T20'."
+      }
+     },
+     "required": [
+      "player_name",
+      "matches"
+     ]
+    }
+   },
+   {
+    "name": "calculate_return_on_investment",
+    "description": "Calculate the return on investment for a given stock based on its purchase price, sale price, and any dividends received.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "purchase_price": {
+       "type": "float",
+       "description": "The price the stock was bought at."
+      },
+      "sale_price": {
+       "type": "float",
+       "description": "The price the stock was sold at."
+      },
+      "dividend": {
+       "type": "float",
+       "description": "Any dividends received from the stock.",
+       "default": 0
+      }
+     },
+     "required": [
+      "purchase_price",
+      "sale_price"
+     ]
+    }
+   },
+   {
+    "name": "database.query",
+    "description": "Query the database based on certain conditions.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "table": {
+       "type": "string",
+       "description": "Name of the table to query."
+      },
+      "conditions": {
+       "type": "array",
+       "items": {
+        "type": "dict",
+        "properties": {
+         "field": {
+          "type": "string",
+          "description": "The field to apply the condition."
+         },
+         "operation": {
+          "type": "string",
+          "description": "The operation to be performed."
+         },
+         "value": {
+          "type": "string",
+          "description": "The value to be compared."
+         }
+        },
+        "required": [
+         "field",
+         "operation",
+         "value"
+        ]
+       },
+       "description": "Conditions for the query."
+      }
+     },
+     "required": [
+      "table",
+      "conditions"
+     ]
+    }
+   },
+   {
+    "name": "probability_of_event",
+    "description": "Calculates the probability of an event.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "success_outcomes": {
+       "type": "integer",
+       "description": "The number of successful outcomes."
+      },
+      "total_outcomes": {
+       "type": "integer",
+       "description": "The total number of possible outcomes."
+      },
+      "format_as_ratio": {
+       "type": "boolean",
+       "description": "When true, formats the output as a ratio instead of a decimal. Default is false."
+      }
+     },
+     "required": [
+      "success_outcomes",
+      "total_outcomes"
+     ]
+    }
+   }
+  ],
+  "expected": [
+   {
+    "database.query": {
+     "table": [
+      "user"
+     ],
+     "conditions": [
+      [
+       {
+        "field": [
+         "age"
+        ],
+        "operation": [
+         ">"
+        ],
+        "value": [
+         "25"
+        ]
+       },
+       {
+        "field": [
+         "job"
+        ],
+        "operation": [
+         "="
+        ],
+        "value": [
+         "engineer"
+        ]
+       }
+      ]
+     ]
+    }
+   }
+  ],
+  "expected_kind": "ast"
+ },
+ {
+  "id": "multiple_159",
+  "version": "v2",
+  "category": "multiple",
+  "file": "BFCL_v2_multiple.json",
+  "index": 159,
+  "question": [
+   {
+    "role": "user",
+    "content": "Calculate the total quantity of paint needed to cover a wall of 30 feet by 12 feet using a specific brand that covers 400 square feet per gallon."
+   }
+  ],
+  "functions": [
+   {
+    "name": "prob_dist.binomial",
+    "description": "Compute the probability of having 'success' outcome from binomial distribution.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "trials": {
+       "type": "integer",
+       "description": "The number of independent experiments."
+      },
+      "successes": {
+       "type": "integer",
+       "description": "The number of success events."
+      },
+      "p": {
+       "type": "float",
+       "description": "The probability of success on any given trial, defaults to 0.5"
+      }
+     },
+     "required": [
+      "trials",
+      "successes"
+     ]
+    }
+   },
+   {
+    "name": "musical_scale",
+    "description": "Get the musical scale of a specific key in music theory.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "key": {
+       "type": "string",
+       "description": "The musical key for which the scale will be found."
+      },
+      "scale_type": {
+       "type": "string",
+       "default": "major",
+       "description": "The type of musical scale."
+      }
+     },
+     "required": [
+      "key"
+     ]
+    }
+   },
+   {
+    "name": "calculate_paint_needed",
+    "description": "Calculate the amount of paint needed to cover a surface area based on the coverage rate of a specific paint brand.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "coverage_rate": {
+       "type": "integer",
+       "description": "The area in square feet that one gallon of paint can cover."
+      },
+      "length": {
+       "type": "integer",
+       "description": "Length of the wall to be painted in feet."
+      },
+      "height": {
+       "type": "integer",
+       "description": "Height of the wall to be painted in feet."
+      }
+     },
+     "required": [
+      "coverage_rate",
+      "length",
+      "height"
+     ]
+    }
+   }
+  ],
+  "expected": [
+   {
+    "calculate_paint_needed": {
+     "coverage_rate": [
+      400
+     ],
+     "length": [
+      30
+     ],
+     "height": [
+      12
+     ]
+    }
+   }
+  ],
+  "expected_kind": "ast"
+ },
+ {
+  "id": "multiple_199",
+  "version": "v2",
+  "category": "multiple",
+  "file": "BFCL_v2_multiple.json",
+  "index": 199,
+  "question": [
+   {
+    "role": "user",
+    "content": "Predict the growth of forest in Yellowstone for the next 5 years including human impact."
+   }
+  ],
+  "functions": [
+   {
+    "name": "forest_growth_forecast",
+    "description": "Predicts the forest growth over the next N years based on current trends.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "location": {
+       "type": "string",
+       "description": "The location where you want to predict forest growth."
+      },
+      "years": {
+       "type": "integer",
+       "description": "The number of years for the forecast."
+      },
+      "include_human_impact": {
+       "type": "boolean",
+       "description": "Whether or not to include the impact of human activities in the forecast. If not provided, defaults to false."
+      }
+     },
+     "required": [
+      "location",
+      "years"
+     ]
+    }
+   },
+   {
+    "name": "db_fetch_records",
+    "description": "Fetch records from a specified database table based on certain conditions.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "database_name": {
+       "type": "string",
+       "description": "The name of the database."
+      },
+      "table_name": {
+       "type": "string",
+       "description": "The name of the table from which records need to be fetched."
+      },
+      "conditions": {
+       "type": "dict",
+       "properties": {
+        "department": {
+         "type": "string",
+         "description": "The name of the department of students."
+        },
+        "school": {
+         "type": "string",
+         "description": "The name of the school students are enrolled in."
+        }
+       },
+       "description": "The conditions based on which records are to be fetched."
+      },
+      "fetch_limit": {
+       "type": "integer",
+       "description": "Limits the number of records to be fetched. If left empty, it fetches all records. (Optional) Default is 0."
+      }
+     },
+     "required": [
+      "database_name",
+      "table_name",
+      "conditions"
+     ]
+    }
+   }
+  ],
+  "expected": [
+   {
+    "forest_growth_forecast": {
+     "location": [
+      "Yellowstone",
+      "yellowstone"
+     ],
+     "years": [
+      5
+     ],
+     "include_human_impact": [
+      true
+     ]
+    }
+   }
+  ],
+  "expected_kind": "ast"
+ },
+ {
+  "id": "irrelevance_0",
+  "version": "v2",
+  "category": "irrelevance",
+  "file": "BFCL_v2_irrelevance.json",
+  "index": 0,
+  "question": [
+   {
+    "role": "user",
+    "content": "Calculate the area of a triangle given the base is 10 meters and height is 5 meters."
+   }
+  ],
+  "functions": [
+   {
+    "name": "determine_body_mass_index",
+    "description": "Calculate body mass index given weight and height.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "weight": {
+       "type": "float",
+       "description": "Weight of the individual in kilograms."
+      },
+      "height": {
+       "type": "float",
+       "description": "Height of the individual in meters."
+      }
+     },
+     "required": [
+      "weight",
+      "height"
+     ]
+    }
+   }
+  ],
+  "expected": null,
+  "expected_kind": "none"
+ },
+ {
+  "id": "irrelevance_60",
+  "version": "v2",
+  "category": "irrelevance",
+  "file": "BFCL_v2_irrelevance.json",
+  "index": 60,
+  "question": [
+   {
+    "role": "user",
+    "content": "What is the final price of a product after a 25% discount and 10% sales tax has been applied?"
+   }
+  ],
+  "functions": [
+   {
+    "name": "calculateFinalPrice",
+    "description": "Calculate the final price of a product after a certain discount has been applied and then sales tax added. Price should be positive and the rates can range from 0-1",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "price": {
+       "type": "float",
+       "description": "Original price of the product."
+      },
+      "discount_rate": {
+       "type": "float",
+       "description": "The discount rate in percentage, must be from 0 to 1."
+      },
+      "sales_tax": {
+       "type": "float",
+       "description": "The sales tax in percentage, must be from 0 to 1."
+      }
+     },
+     "required": [
+      "price",
+      "discount_rate",
+      "sales_tax"
+     ]
+    }
+   }
+  ],
+  "expected": null,
+  "expected_kind": "none"
+ },
+ {
+  "id": "irrelevance_120",
+  "version": "v2",
+  "category": "irrelevance",
+  "file": "BFCL_v2_irrelevance.json",
+  "index": 120,
+  "question": [
+   {
+    "role": "user",
+    "content": "What's the neurological impact of sports on human brain?"
+   }
+  ],
+  "functions": [
+   {
+    "name": "caffeine_effect",
+    "description": "Provide potential neurological impact of caffeine, mainly from coffee, on human brain.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "caffeine_content": {
+       "type": "float",
+       "description": "The amount of caffeine contained in coffee in milligrams."
+      },
+      "drinking_frequency": {
+       "type": "string",
+       "description": "How often the individual drinks coffee in a day."
+      },
+      "drinking_duration": {
+       "type": "integer",
+       "description": "For how long the individual has been drinking coffee. Default: 100"
+      }
+     },
+     "required": [
+      "caffeine_content",
+      "drinking_frequency"
+     ]
+    }
+   }
+  ],
+  "expected": null,
+  "expected_kind": "none"
+ },
+ {
+  "id": "irrelevance_179",
+  "version": "v2",
+  "category": "irrelevance",
+  "file": "BFCL_v2_irrelevance.json",
+  "index": 179,
+  "question": [
+   {
+    "role": "user",
+    "content": "Who played for Clippers in NBA"
+   }
+  ],
+  "functions": [
+   {
+    "name": "get_game_results",
+    "description": "Retrieve game results between two teams on a specific date.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "team_1": {
+       "type": "string",
+       "description": "The first team's name."
+      },
+      "team_2": {
+       "type": "string",
+       "description": "The second team's name."
+      },
+      "date": {
+       "type": "string",
+       "description": "The date of the game in the format YYYY-MM-DD."
+      },
+      "venue": {
+       "type": "string",
+       "description": "The venue of the match.",
+       "default": "basketball"
+      }
+     },
+     "required": [
+      "team_1",
+      "team_2",
+      "date"
+     ]
+    }
+   }
+  ],
+  "expected": null,
+  "expected_kind": "none"
+ },
+ {
+  "id": "irrelevance_239",
+  "version": "v2",
+  "category": "irrelevance",
+  "file": "BFCL_v2_irrelevance.json",
+  "index": 239,
+  "question": [
+   {
+    "role": "user",
+    "content": "Find the distance in kilometers from San Francisco to Los Angeles."
+   }
+  ],
+  "functions": [
+   {
+    "name": "get_date",
+    "description": "Get the time difference between two geographical locations.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "location_1": {
+       "type": "string",
+       "description": "location for first city."
+      },
+      "location_2": {
+       "type": "string",
+       "description": "location for first city."
+      },
+      "unit": {
+       "type": "string",
+       "enum": [
+        "miles",
+        "kilometers"
+       ],
+       "description": "The unit of measure for the distance. Default is miles."
+      }
+     },
+     "required": [
+      "location_1",
+      "location_2"
+     ]
+    }
+   }
+  ],
+  "expected": null,
+  "expected_kind": "none"
+ }
+]

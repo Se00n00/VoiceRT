@@ -40,8 +40,14 @@ benchmarks/results/*.json
 # generated roll-up (keep local only)
 COMPLETE.md
 
+# local operator notes (keep local only)
+AGENTS.md
+
 # test suites run locally, not versioned
 tests/
+
+# voice-agent JSON session memory (runtime state, per docs/architecture.md)
+sessions/
 
 # node app build outputs (rebuild with npm install && npm run build)
 tui-ink/node_modules/

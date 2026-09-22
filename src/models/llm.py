@@ -252,7 +252,7 @@ class LlmModel:
         src/tools/terminal.py). Keep bodies small so prompt+max_tokens
         fits the paged KV block pool.
         """
-        from src.tools.terminal import TERMINAL_PREAMBLE
+        from src.agent.prompts import TERMINAL_PREAMBLE
 
         system = self.config.system_prompt + " " + TERMINAL_PREAMBLE
         msgs = [{"role": "system", "content": system}]

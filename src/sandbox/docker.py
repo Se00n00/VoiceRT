@@ -17,8 +17,6 @@ Isolation model (honest version):
 - ``exec``/``exec_bg``/``poll`` run inside the container; ``read``/``write``/
   ``edit``/``grep``/``list`` operate host-side on the same mounted tree
   (identical bytes, no translation needed for results).
-- ``spawn_terminal`` intentionally stays on the host: it opens a host
-  window (kitty/hyprctl/tmux), which a container cannot do.
 
 Image requirements: ``bash``, ``python3`` (BaseSandbox helper scripts),
 GNU coreutils ``timeout``. The default ``python:3.12-slim`` has all three.

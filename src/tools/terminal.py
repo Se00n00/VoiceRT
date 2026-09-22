@@ -20,7 +20,6 @@ from dataclasses import dataclass
 
 __all__ = [
     "ALLOWED_OPS",
-    "TERMINAL_PREAMBLE",
     "TERMINAL_TOOLS",
     "TerminalAction",
     "parse_terminal_action",
@@ -35,33 +34,7 @@ __all__ = [
     "tools_for_request",
 ]
 
-ALLOWED_OPS = ("exec", "exec_bg", "poll", "read", "write", "edit", "grep", "list", "spawn_terminal", "done")
-
-TERMINAL_PREAMBLE = (
-    "You control a local terminal (bash, persistent CWD/env; use exec for "
-    "commands). Reply with EITHER one short chat sentence OR exactly one "
-    "JSON action. No other text when acting; never narrate your plan as "
-    "the reply — emit the call itself. "
-    "Ops: exec {action,command} | exec_bg {action,command} (long cmds) | "
-    "poll {action,command:job-id} | read {action,path} | "
-    "write {action,path,text} | edit {action,path,anchor,text} (anchored "
-    "patch: anchor must copy verbatim from the file; edit fails if missing) | "
-    "grep {action,pattern,path?} | list {action,path?} | "
-    "spawn_terminal {action,command?,cwd?,title?} (new OS window) | done {action,reply}. "
-    "Prefer read/grep before write/edit. Never emit destructive commands; they are blocked. "
-    "Trace — walkthrough for 'where does X happen?': "
-    "1 read/grep plausible dirs, 2 list to narrow, 3 read the file(s), "
-    'then edit or answer. Example "where is VAD threshold?" -> '
-    'grep {"action":"grep","pattern":"threshold"} -> read -> answer. '
-    'Example user "list the files" -> {"action": "list", "path": "."}. '
-    'Example user "hello" -> Hello! How can I help? '
-    'Example user "open a terminal running opencode" -> '
-    '{"action": "spawn_terminal", "command": "opencode"}. '
-    "XML form also accepted: "
-    '<function name="exec"><param name="command">ls -la</param></function> '
-    'and <function name="spawn_terminal"><param name="command">opencode</param>'
-    '<param name="cwd">.</param></function>.'
-)
+ALLOWED_OPS = ("exec", "exec_bg", "poll", "read", "write", "edit", "grep", "list", "python_exec", "fetch", "searxng", "done")
 
 
 # Native tool definitions for models with template-level tool support
@@ -112,13 +85,23 @@ TERMINAL_TOOLS = [
      "description": "List directory entries below the working directory.",
      "parameters": {"type": "object",
                     "properties": {"path": {"type": "string"}}}},
-    {"name": "spawn_terminal",
-     "description": "Spawn a new OS terminal window (kitty/hyprctl/tmux). Use for opencode/htop/interactive TUIs. Optional command runs inside the new window.",
+    {"name": "python_exec",
+     "description": "Run Python code inside an isolated container (no shell, no host files). Use for data work, plotting, quick scripts.",
      "parameters": {"type": "object",
-                    "properties": {"command": {"type": "string"},
-                                   "cwd": {"type": "string"},
-                                   "title": {"type": "string"}},
-                    "required": []}},
+                    "properties": {"code": {"type": "string"}},
+                    "required": ["code"]}},
+    {"name": "fetch",
+     "description": "Fetch a web page (http/https) and return its text, truncated. Offline-friendly: for local files use read instead.",
+     "parameters": {"type": "object",
+                    "properties": {"path": {"type": "string",
+                                            "description": "page URL"}},
+                    "required": ["path"]}},
+    {"name": "searxng",
+     "description": "Web search via the local SearXNG instance. Returns titles, URLs and snippets.",
+     "parameters": {"type": "object",
+                    "properties": {"pattern": {"type": "string",
+                                               "description": "search query"}},
+                    "required": ["pattern"]}},
 ]
 
 _JSON_RE = re.compile(r"\{.*?\}", re.DOTALL)
@@ -171,8 +154,7 @@ class TerminalAction:
     reply: str = ""
     anchor: str = ""
     pattern: str = ""
-    cwd: str = ""
-    title: str = ""
+    code: str = ""  # python_exec payload (own key: shell deny patterns must not see it)
 
     def as_dict(self) -> dict:
         out: dict = {"action": self.op}
@@ -188,10 +170,8 @@ class TerminalAction:
             out["anchor"] = self.anchor
         if self.pattern:
             out["pattern"] = self.pattern
-        if self.cwd:
-            out["cwd"] = self.cwd
-        if self.title:
-            out["title"] = self.title
+        if self.code:
+            out["code"] = self.code
         return out
 
 
@@ -206,15 +186,20 @@ def _norm_op(op: str) -> str:
     if not o:
         return ""
     for key, mapped in (
+        # python_exec first: "exec" is a substring of "pythonexec" and
+        # would shadow it anywhere later in this table.
+        ("pythonexec", "python_exec"), ("python", "python_exec"),
         ("runcommand", "exec"), ("execute", "exec"), ("shell", "exec"),
         ("bash", "exec"), ("command", "exec"), ("run", "exec"),
-        ("exec", "exec"), ("execbg", "exec_bg"), ("background", "exec_bg"),
+        # exec_bg before exec: "exec" is a substring of "execbg" and
+        # would shadow it (same bug class as above; caught by eval).
+        ("execbg", "exec_bg"), ("background", "exec_bg"),
+        ("exec", "exec"),
         ("poll", "poll"), ("wait", "poll"), ("check", "poll"),
-        ("spawnterminal", "spawn_terminal"), ("openterminal", "spawn_terminal"),
-        ("newterminal", "spawn_terminal"), ("opencode", "spawn_terminal"),
-        ("openopencode", "spawn_terminal"),
         ("listfiles", "list"), ("list", "list"), ("ls", "list"),
         ("dir", "list"),
+        ("fetch", "fetch"), ("webfetch", "fetch"),
+        ("searxng", "searxng"), ("websearch", "searxng"),
         ("read", "read"), ("cat", "read"), ("open", "read"),
         ("show", "read"),
         ("write", "write"), ("save", "write"), ("create", "write"),
@@ -255,21 +240,21 @@ def _from_obj(obj: dict, strict: bool) -> TerminalAction | None:
     # per-op payload extraction to avoid cross-contamination (e.g. edit text
     # becoming command)
     command = ""
-    if op in ("exec", "exec_bg", "poll", "spawn_terminal"):
+    if op in ("exec", "exec_bg", "poll"):
         command = _payload(obj, "command", "cmd", "script")
         if op == "poll" and not command:
             command = _payload(obj, "job", "job_id")
     path = ""
-    if op in ("read", "write", "edit", "grep", "list"):
-        path = _payload(obj, "path", "file", "dir", limit=1024)
+    if op in ("read", "write", "edit", "grep", "list", "fetch"):
+        path = _payload(obj, "path", "file", "dir", "url", "link", limit=1024)
     body = ""
     if op in ("write", "edit"):
         body = _payload(obj, "text", "content", "value", "body", limit=20000)
+    if op == "python_exec":
+        body = _payload(obj, "code", "text", "script", limit=20000)
     reply = _payload(obj, "reply", "message", "answer", limit=2000)
     anchor = _payload(obj, "anchor", "old", "before", "search", limit=10000) if op == "edit" else ""
-    pattern = _payload(obj, "pattern", "regex", "query", limit=500) if op == "grep" else ""
-    cwd_sp = _payload(obj, "cwd", "dir", "directory", limit=1024) if op == "spawn_terminal" else ""
-    title = _payload(obj, "title", "name", limit=100) if op == "spawn_terminal" else ""
+    pattern = _payload(obj, "pattern", "regex", "query", limit=500) if op in ("grep", "searxng") else ""
     if op == "list" and command and not path:
         # "list the files" via an explicit shell command: run it.
         op = "exec"
@@ -284,9 +269,16 @@ def _from_obj(obj: dict, strict: bool) -> TerminalAction | None:
         return None
     if op == "grep" and not pattern.strip():
         return None
+    if op == "fetch" and not path.strip():
+        return None
+    if op == "searxng" and not pattern.strip():
+        return None
+    if op == "python_exec" and not body.strip():
+        return None
     return TerminalAction(op=op, command=command, path=path,
-                          text=body, reply=reply, anchor=anchor, pattern=pattern,
-                          cwd=cwd_sp, title=title)
+                          text="" if op == "python_exec" else body,
+                          reply=reply, anchor=anchor, pattern=pattern,
+                          code=body if op == "python_exec" else "")
 
 
 def parse_terminal_action(text: str) -> TerminalAction | None:
@@ -337,9 +329,10 @@ _XML_OPS = {
     "write": "write", "save": "write", "create": "write",
     "edit": "edit", "patch": "edit",
     "grep": "grep", "search": "grep",
+    "fetch": "fetch", "webfetch": "fetch",
+    "searxng": "searxng", "websearch": "searxng",
     "list": "list", "ls": "list", "dir": "list",
-    "spawn_terminal": "spawn_terminal", "openterminal": "spawn_terminal",
-    "newterminal": "spawn_terminal", "opencode": "spawn_terminal",
+    "python_exec": "python_exec", "python": "python_exec",
     "done": "done", "reply": "done", "answer": "done", "chat": "done",
     "speak": "done", "say": "done", "respond": "done",
 }
@@ -398,12 +391,18 @@ def parse_xml_action(text: str) -> TerminalAction | None:
         elif op == "list":
             return TerminalAction(
                 op="list", path=(params.get("path") or ".")[:1024])
-        elif op == "spawn_terminal":
-            cmd = params.get("command") or params.get("cmd") or ""
-            cwd_sp = params.get("cwd") or params.get("dir") or ""
-            title = params.get("title") or params.get("name") or ""
-            return TerminalAction(op="spawn_terminal", command=cmd[:4000],
-                                  cwd=cwd_sp[:1024], title=title[:100])
+        elif op == "fetch":
+            url = params.get("path") or params.get("url") or params.get("link") or ""
+            if url.strip():
+                return TerminalAction(op="fetch", path=url[:1024])
+        elif op == "searxng":
+            query = params.get("pattern") or params.get("query") or ""
+            if query.strip():
+                return TerminalAction(op="searxng", pattern=query[:500])
+        elif op == "python_exec":
+            code = params.get("code") or params.get("text") or params.get("script") or ""
+            if code.strip():
+                return TerminalAction(op="python_exec", code=code[:20000])
         elif op == "done":
             reply = (params.get("reply") or params.get("text")
                      or params.get("message") or "")
@@ -423,9 +422,7 @@ def parse_bare_tail(text: str) -> TerminalAction | None:
     ``<function``/``<param`` openers missing, then EOS. The pairs are
     recovered into an obj and validated by :func:`_from_obj`, so only
     well-formed ops/params survive. Refuses text containing ``<`` or
-    ``{`` (well-formed XML/JSON belong to the other parsers) and
-    op-less tails unless the param set uniquely identifies
-    ``spawn_terminal`` (the only op with ``cwd``/``title``). Never raises.
+    ``{`` (well-formed XML/JSON belong to the other parsers). Never raises.
     """
     if not text or not text.strip():
         return None
@@ -436,16 +433,9 @@ def parse_bare_tail(text: str) -> TerminalAction | None:
         return None
     first = ms[0][0].strip().lower()
     op = _norm_op(first) or _XML_OPS.get(first)
-    if op:
-        rest = ms[1:]
-    else:
-        keys = {k.strip().lower() for k, _ in ms}
-        if keys <= {"command", "cmd", "cwd", "dir", "title", "name"} and (
-                "cwd" in keys or "title" in keys):
-            op = "spawn_terminal"
-            rest = ms
-        else:
-            return None
+    if not op:
+        return None
+    rest = ms[1:]
     obj: dict = {"action": op}
     for k, v in rest:
         obj.setdefault(k.strip().lower(), v.strip()[:4000])
@@ -472,7 +462,7 @@ def is_denied(action: TerminalAction) -> str:
     cmd = getattr(action, "command", "") or ""
     # catch bash -c wrappers / $(...) / eval: unwrap one layer for deny check
     inner = _unwrap(cmd)
-    if action.op in ("exec", "exec_bg", "spawn_terminal") and _DENY_RE.search(inner):
+    if action.op in ("exec", "exec_bg") and _DENY_RE.search(inner):
         return "destructive command blocked by policy"
     if action.op == "exec_bg" and _DENY_RE.search(cmd):
         return "destructive command blocked by policy"
@@ -487,7 +477,7 @@ def needs_confirm(action: TerminalAction) -> bool:
     """True when the TUI must ask before executing."""
     if action is None:
         return False
-    if action.op in ("write", "edit", "spawn_terminal"):
+    if action.op in ("write", "edit"):
         return True
     if action.op in ("exec", "exec_bg"):
         return bool(_CONFIRM_CMD_RE.search(_unwrap(getattr(action, "command", "") or "")))
@@ -518,7 +508,7 @@ def is_degenerate(raw: str) -> bool:
 def is_echo(thinking: str, answer: str) -> bool:
     """Detect the 1B dither: model repeats its thinking as the reply.
 
-    E.g. think ``I should use spawn_terminal…`` + answer identical —
+    E.g. think ``I should use exec…`` + answer identical —
     narration instead of a call (or instead of a real chat sentence).
     Whitespace-normalized; 40-char floor so short coincidences
     (``hi`` / ``hi``) don't trigger a wasted retry.
@@ -554,8 +544,11 @@ ROUTE_KEYWORDS: dict[str, tuple[str, ...]] = {
              "replace", "anchor"),
     "grep": ("grep", "search", "find", "look for", "where", "defined"),
     "list": ("list", "files", "directory", "folder", "ls", "contents"),
-    "spawn_terminal": ("spawn", "terminal", "opencode", "htop",
-                       "new window", "tui", "interactive"),
+    "python_exec": ("python", "code", "script", "pandas", "numpy", "plot"),
+    "fetch": ("fetch", "webfetch", "url", "link", "website", "webpage",
+              "http"),
+    "searxng": ("searxng", "web search", "websearch", "web", "internet",
+                "online", "google"),
 }
 """Intent keywords per op. Matched case-insensitively on word boundaries."""
 
@@ -586,7 +579,7 @@ def _route_hits(blob: str) -> set[str]:
 
 
 def route_tool_ops(text: str, observation: str = "") -> list[str] | None:
-    """Narrow the 9 ops to what this step plausibly needs.
+    """Narrow the ops to what this step plausibly needs.
 
     Returns sorted op names, or None (= show all tools) when nothing
     matches — recall over precision: a wrongly dropped tool fails the

@@ -1,0 +1,5959 @@
+[
+ {
+  "id": "simple_0",
+  "version": "v3",
+  "category": "simple",
+  "file": "BFCL_v3_simple.json",
+  "index": 0,
+  "question": [
+   [
+    {
+     "role": "user",
+     "content": "Find the area of a triangle with a base of 10 units and height of 5 units."
+    }
+   ]
+  ],
+  "functions": [
+   {
+    "name": "calculate_triangle_area",
+    "description": "Calculate the area of a triangle given its base and height.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "base": {
+       "type": "integer",
+       "description": "The base of the triangle."
+      },
+      "height": {
+       "type": "integer",
+       "description": "The height of the triangle."
+      },
+      "unit": {
+       "type": "string",
+       "description": "The unit of measure (defaults to 'units' if not specified)"
+      }
+     },
+     "required": [
+      "base",
+      "height"
+     ]
+    }
+   }
+  ],
+  "expected": [
+   {
+    "calculate_triangle_area": {
+     "base": [
+      10
+     ],
+     "height": [
+      5
+     ],
+     "unit": [
+      "units",
+      ""
+     ]
+    }
+   }
+  ],
+  "expected_kind": "ast"
+ },
+ {
+  "id": "simple_57",
+  "version": "v3",
+  "category": "simple",
+  "file": "BFCL_v3_simple.json",
+  "index": 57,
+  "question": [
+   [
+    {
+     "role": "user",
+     "content": "Calculate the cell density in a sample with an optical density of 0.6, where the experiment dilution is 5 times."
+    }
+   ]
+  ],
+  "functions": [
+   {
+    "name": "calculate_cell_density",
+    "description": "Calculate the cell density of a biological sample based on its optical density and the experiment dilution.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "optical_density": {
+       "type": "float",
+       "description": "The optical density of the sample, usually obtained from a spectrophotometer reading."
+      },
+      "dilution": {
+       "type": "integer",
+       "description": "The dilution factor applied during the experiment."
+      },
+      "calibration_factor": {
+       "type": "float",
+       "description": "The calibration factor to adjust the density, default value is 1e9 assuming cell density is in CFU/mL."
+      }
+     },
+     "required": [
+      "optical_density",
+      "dilution"
+     ]
+    }
+   }
+  ],
+  "expected": [
+   {
+    "calculate_cell_density": {
+     "optical_density": [
+      0.6
+     ],
+     "dilution": [
+      5
+     ],
+     "calibration_factor": [
+      1000000000.0,
+      ""
+     ]
+    }
+   }
+  ],
+  "expected_kind": "ast"
+ },
+ {
+  "id": "simple_114",
+  "version": "v3",
+  "category": "simple",
+  "file": "BFCL_v3_simple.json",
+  "index": 114,
+  "question": [
+   [
+    {
+     "role": "user",
+     "content": "Find the probability of getting exactly 5 heads in 10 fair coin tosses."
+    }
+   ]
+  ],
+  "functions": [
+   {
+    "name": "prob_dist.binomial",
+    "description": "Compute the probability of having 'success' outcome from binomial distribution.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "trials": {
+       "type": "integer",
+       "description": "The number of independent experiments."
+      },
+      "successes": {
+       "type": "integer",
+       "description": "The number of success events."
+      },
+      "p": {
+       "type": "float",
+       "description": "The probability of success on any given trial, defaults to 0.5"
+      }
+     },
+     "required": [
+      "trials",
+      "successes"
+     ]
+    }
+   }
+  ],
+  "expected": [
+   {
+    "prob_dist.binomial": {
+     "trials": [
+      10
+     ],
+     "successes": [
+      5
+     ],
+     "p": [
+      0.5,
+      ""
+     ]
+    }
+   }
+  ],
+  "expected_kind": "ast"
+ },
+ {
+  "id": "simple_171",
+  "version": "v3",
+  "category": "simple",
+  "file": "BFCL_v3_simple.json",
+  "index": 171,
+  "question": [
+   [
+    {
+     "role": "user",
+     "content": "Fetch details of a law case with number 43403 in New York court for year 2018."
+    }
+   ]
+  ],
+  "functions": [
+   {
+    "name": "fetch_law_case_details",
+    "description": "Fetch details of a specific law case based on case number, year and court.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "case_number": {
+       "type": "integer",
+       "description": "The specific number of the law case."
+      },
+      "court": {
+       "type": "string",
+       "description": "The city name where the court takes place"
+      },
+      "year": {
+       "type": "integer",
+       "description": "The year in which the law case took place."
+      }
+     },
+     "required": [
+      "case_number",
+      "court",
+      "year"
+     ]
+    }
+   }
+  ],
+  "expected": [
+   {
+    "fetch_law_case_details": {
+     "case_number": [
+      43403
+     ],
+     "court": [
+      "New York"
+     ],
+     "year": [
+      2018
+     ]
+    }
+   }
+  ],
+  "expected_kind": "ast"
+ },
+ {
+  "id": "simple_228",
+  "version": "v3",
+  "category": "simple",
+  "file": "BFCL_v3_simple.json",
+  "index": 228,
+  "question": [
+   [
+    {
+     "role": "user",
+     "content": "Find three personality traits of people who like jogging."
+    }
+   ]
+  ],
+  "functions": [
+   {
+    "name": "get_personality_traits",
+    "description": "Retrieve the common personality traits of people based on their hobbies or activities.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "hobby": {
+       "type": "string",
+       "description": "The hobby or activity of interest."
+      },
+      "trait_count": {
+       "type": "integer",
+       "description": "The number of top traits to return, default is 5"
+      }
+     },
+     "required": [
+      "hobby"
+     ]
+    }
+   }
+  ],
+  "expected": [
+   {
+    "get_personality_traits": {
+     "hobby": [
+      "jogging"
+     ],
+     "trait_count": [
+      3
+     ]
+    }
+   }
+  ],
+  "expected_kind": "ast"
+ },
+ {
+  "id": "simple_285",
+  "version": "v3",
+  "category": "simple",
+  "file": "BFCL_v3_simple.json",
+  "index": 285,
+  "question": [
+   [
+    {
+     "role": "user",
+     "content": "Find me a Rock concert in Chicago with ticket availability under $100."
+    }
+   ]
+  ],
+  "functions": [
+   {
+    "name": "find_concert",
+    "description": "Locate a concert in a specified location within a certain budget.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "location": {
+       "type": "string",
+       "description": "The city where you are looking for a concert. In the format City, State."
+      },
+      "price": {
+       "type": "integer",
+       "description": "Maximum ticket price."
+      },
+      "genre": {
+       "type": "string",
+       "description": "Music genre of the concert. Default to 'Jazz'. ",
+       "enum": [
+        "Rock",
+        "Pop",
+        "Country",
+        "Jazz",
+        "Classical"
+       ]
+      }
+     },
+     "required": [
+      "location",
+      "price"
+     ]
+    }
+   }
+  ],
+  "expected": [
+   {
+    "find_concert": {
+     "location": [
+      "Chicago, Illinois",
+      "Chicago, IL"
+     ],
+     "price": [
+      100
+     ],
+     "genre": [
+      "Rock"
+     ]
+    }
+   }
+  ],
+  "expected_kind": "ast"
+ },
+ {
+  "id": "simple_342",
+  "version": "v3",
+  "category": "simple",
+  "file": "BFCL_v3_simple.json",
+  "index": 342,
+  "question": [
+   [
+    {
+     "role": "user",
+     "content": "Find all multi-player games released in 2019 with an ESRB rating of 'Everyone'"
+    }
+   ]
+  ],
+  "functions": [
+   {
+    "name": "game_list.get_games",
+    "description": "Get a list of video games based on release year, multiplayer functionality and ESRB rating",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "release_year": {
+       "type": "integer",
+       "description": "The year the game was released."
+      },
+      "multiplayer": {
+       "type": "boolean",
+       "description": "Whether the game has multiplayer functionality."
+      },
+      "ESRB_rating": {
+       "type": "string",
+       "description": "The ESRB rating of the game."
+      }
+     },
+     "required": [
+      "release_year",
+      "multiplayer",
+      "ESRB_rating"
+     ]
+    }
+   }
+  ],
+  "expected": [
+   {
+    "game_list.get_games": {
+     "release_year": [
+      2019
+     ],
+     "multiplayer": [
+      true
+     ],
+     "ESRB_rating": [
+      "Everyone"
+     ]
+    }
+   }
+  ],
+  "expected_kind": "ast"
+ },
+ {
+  "id": "simple_399",
+  "version": "v3",
+  "category": "simple",
+  "file": "BFCL_v3_simple.json",
+  "index": 399,
+  "question": [
+   [
+    {
+     "role": "user",
+     "content": "Find me the best Italian restaurants in New York City with average customer ratings of more than 4 and accepts credit cards."
+    }
+   ]
+  ],
+  "functions": [
+   {
+    "name": "restaurant_search",
+    "description": "Locates top rated restaurants based on specific criteria such as type of cuisine, ratings, and facilities.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "location": {
+       "type": "string",
+       "description": "The city and state, e.g. New York City, NY"
+      },
+      "cuisine": {
+       "type": "string",
+       "description": "Preferred type of cuisine e.g., Italian, Indian, American, etc."
+      },
+      "rating": {
+       "type": "integer",
+       "description": "Minimum average customer rating out of 5"
+      },
+      "accepts_credit_cards": {
+       "type": "boolean",
+       "description": "If the restaurant should accept credit cards."
+      }
+     },
+     "required": [
+      "location",
+      "cuisine",
+      "rating",
+      "accepts_credit_cards"
+     ]
+    }
+   }
+  ],
+  "expected": [
+   {
+    "restaurant_search": {
+     "location": [
+      "New York City",
+      "New York City, NY",
+      "NYC"
+     ],
+     "cuisine": [
+      "Italian"
+     ],
+     "rating": [
+      4
+     ],
+     "accepts_credit_cards": [
+      true
+     ]
+    }
+   }
+  ],
+  "expected_kind": "ast"
+ },
+ {
+  "id": "multiple_0",
+  "version": "v3",
+  "category": "multiple",
+  "file": "BFCL_v3_multiple.json",
+  "index": 0,
+  "question": [
+   [
+    {
+     "role": "user",
+     "content": "Can I find the dimensions and properties of a triangle, if I know its three sides are 5 units, 4 units and 3 units long?"
+    }
+   ]
+  ],
+  "functions": [
+   {
+    "name": "triangle_properties.get",
+    "description": "Retrieve the dimensions, such as area and perimeter, of a triangle if lengths of three sides are given.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "side1": {
+       "type": "integer",
+       "description": "The length of first side of the triangle."
+      },
+      "side2": {
+       "type": "integer",
+       "description": "The length of second side of the triangle."
+      },
+      "side3": {
+       "type": "integer",
+       "description": "The length of third side of the triangle."
+      },
+      "get_area": {
+       "type": "boolean",
+       "description": "A flag to determine whether to calculate the area of triangle. Default is true.",
+       "default": true,
+       "optional": true
+      },
+      "get_perimeter": {
+       "type": "boolean",
+       "description": "A flag to determine whether to calculate the perimeter of triangle. Default is true.",
+       "default": true,
+       "optional": true
+      },
+      "get_angles": {
+       "type": "boolean",
+       "description": "A flag to determine whether to calculate the internal angles of triangle. Default is true.",
+       "default": true,
+       "optional": true
+      }
+     },
+     "required": [
+      "side1",
+      "side2",
+      "side3"
+     ]
+    }
+   },
+   {
+    "name": "circle_properties.get",
+    "description": "Retrieve the dimensions, such as area and circumference, of a circle if radius is given.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "radius": {
+       "type": "float",
+       "description": "The length of radius of the circle."
+      },
+      "get_area": {
+       "type": "boolean",
+       "description": "A flag to determine whether to calculate the area of circle. Default is true.",
+       "default": true,
+       "optional": true
+      },
+      "get_circumference": {
+       "type": "boolean",
+       "description": "A flag to determine whether to calculate the circumference of circle. Default is true.",
+       "default": true,
+       "optional": true
+      }
+     },
+     "required": [
+      "radius"
+     ]
+    }
+   }
+  ],
+  "expected": [
+   {
+    "triangle_properties.get": {
+     "side1": [
+      5
+     ],
+     "side2": [
+      4
+     ],
+     "side3": [
+      3
+     ],
+     "get_area": [
+      "",
+      true
+     ],
+     "get_perimeter": [
+      "",
+      true
+     ],
+     "get_angles": [
+      "",
+      true
+     ]
+    }
+   }
+  ],
+  "expected_kind": "ast"
+ },
+ {
+  "id": "multiple_40",
+  "version": "v3",
+  "category": "multiple",
+  "file": "BFCL_v3_multiple.json",
+  "index": 40,
+  "question": [
+   [
+    {
+     "role": "user",
+     "content": "Calculate the strength of magnetic field given distance is 8 meters and current is 12 Amperes?"
+    }
+   ]
+  ],
+  "functions": [
+   {
+    "name": "electromagnetism.ampere_law",
+    "description": "Calculate magnetic field strength using Ampere's Circuital Law. Input the current enclosed by a circular path and the distance from the center of the circle. Can be applied to a cylindrical or spherical symmetry of consistent magnetic field. ",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "enclosed_current": {
+       "type": "float",
+       "description": "The total current enclosed by the loop. In Amperes."
+      },
+      "radius": {
+       "type": "float",
+       "description": "The radius of the circle or the distance from the center of the circular path. In meters."
+      },
+      "mu0": {
+       "type": "float",
+       "description": "Permeability of free space. Its value is default approximated to be 0.000001256 H/m. Optional"
+      }
+     },
+     "required": [
+      "enclosed_current",
+      "radius"
+     ]
+    }
+   },
+   {
+    "name": "electromagnetism.biot_savart_law",
+    "description": "Calculate magnetic field strength using Biot-Savart law. Input the current in Ampere and the distance in meters.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "current": {
+       "type": "integer",
+       "description": "The current in the conductor, in Amperes."
+      },
+      "distance": {
+       "type": "integer",
+       "description": "Distance from the current carrying conductor, in meters."
+      },
+      "mu0": {
+       "type": "float",
+       "description": "Permeability of free space. Its value is default approximated to be 0.000001256 H/m. Optional"
+      }
+     },
+     "required": [
+      "current",
+      "distance"
+     ]
+    }
+   }
+  ],
+  "expected": [
+   {
+    "electromagnetism.biot_savart_law": {
+     "current": [
+      12
+     ],
+     "distance": [
+      8
+     ],
+     "mu0": [
+      1.256e-06,
+      1.256e-06,
+      ""
+     ]
+    }
+   }
+  ],
+  "expected_kind": "ast"
+ },
+ {
+  "id": "multiple_80",
+  "version": "v3",
+  "category": "multiple",
+  "file": "BFCL_v3_multiple.json",
+  "index": 80,
+  "question": [
+   [
+    {
+     "role": "user",
+     "content": "Find a local guitar shop that also offers violin lessons in Nashville."
+    }
+   ]
+  ],
+  "functions": [
+   {
+    "name": "music_shop.find_nearby",
+    "description": "Locate nearby music shops based on specific criteria like instrument lessons availability.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "location": {
+       "type": "string",
+       "description": "The city and state, e.g. Nashville, TN"
+      },
+      "services": {
+       "type": "array",
+       "items": {
+        "type": "string",
+        "enum": [
+         "Guitar Lessons",
+         "Violin Lessons",
+         "Piano Lessons",
+         "Ukulele Lessons"
+        ]
+       },
+       "description": "Types of instrument lessons offered in the shop. Default empty array"
+      },
+      "instruments": {
+       "type": "array",
+       "items": {
+        "type": "string",
+        "enum": [
+         "Guitars",
+         "Violins",
+         "Pianos",
+         "Drums"
+        ]
+       },
+       "description": "Types of instruments sold in the shop. Default empty array"
+      }
+     },
+     "required": [
+      "location"
+     ]
+    }
+   },
+   {
+    "name": "gym.find_nearby",
+    "description": "Locate nearby gyms based on specific criteria like types of fitness classes availability.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "location": {
+       "type": "string",
+       "description": "The city and state, e.g. Nashville, TN"
+      },
+      "classes": {
+       "type": "array",
+       "items": {
+        "type": "string",
+        "enum": [
+         "Yoga",
+         "Spin",
+         "Zumba",
+         "CrossFit"
+        ]
+       },
+       "description": "Types of fitness classes offered in the gym. Default empty array"
+      },
+      "equipment": {
+       "type": "array",
+       "items": {
+        "type": "string",
+        "enum": [
+         "Treadmills",
+         "Ellipticals",
+         "Weight Machines",
+         "Free Weights"
+        ]
+       },
+       "description": "Types of gym equipment available. Default empty array"
+      }
+     },
+     "required": [
+      "location"
+     ]
+    }
+   }
+  ],
+  "expected": [
+   {
+    "music_shop.find_nearby": {
+     "location": [
+      "Nashville, TN",
+      "Nashville"
+     ],
+     "services": [
+      [
+       "Violin Lessons"
+      ]
+     ],
+     "instruments": [
+      [
+       "Guitars"
+      ]
+     ]
+    }
+   }
+  ],
+  "expected_kind": "ast"
+ },
+ {
+  "id": "multiple_119",
+  "version": "v3",
+  "category": "multiple",
+  "file": "BFCL_v3_multiple.json",
+  "index": 119,
+  "question": [
+   [
+    {
+     "role": "user",
+     "content": "Find records in database in user table where age is greater than 25 and job is 'engineer'."
+    }
+   ]
+  ],
+  "functions": [
+   {
+    "name": "average_batting_score",
+    "description": "Get the average batting score of a cricketer for specified past matches.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "player_name": {
+       "type": "string",
+       "description": "Name of the cricket player."
+      },
+      "matches": {
+       "type": "integer",
+       "description": "Number of past matches to consider for average calculation."
+      },
+      "match_format": {
+       "type": "string",
+       "description": "Format of the cricket matches considered (e.g., 'T20', 'ODI', 'Test'). Default is 'T20'."
+      }
+     },
+     "required": [
+      "player_name",
+      "matches"
+     ]
+    }
+   },
+   {
+    "name": "calculate_return_on_investment",
+    "description": "Calculate the return on investment for a given stock based on its purchase price, sale price, and any dividends received.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "purchase_price": {
+       "type": "float",
+       "description": "The price the stock was bought at."
+      },
+      "sale_price": {
+       "type": "float",
+       "description": "The price the stock was sold at."
+      },
+      "dividend": {
+       "type": "float",
+       "description": "Any dividends received from the stock.",
+       "default": 0
+      }
+     },
+     "required": [
+      "purchase_price",
+      "sale_price"
+     ]
+    }
+   },
+   {
+    "name": "database.query",
+    "description": "Query the database based on certain conditions.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "table": {
+       "type": "string",
+       "description": "Name of the table to query."
+      },
+      "conditions": {
+       "type": "array",
+       "items": {
+        "type": "dict",
+        "properties": {
+         "field": {
+          "type": "string",
+          "description": "The field to apply the condition."
+         },
+         "operation": {
+          "type": "string",
+          "description": "The operation to be performed.",
+          "enum": [
+           "<",
+           ">",
+           "=",
+           ">=",
+           "<="
+          ]
+         },
+         "value": {
+          "type": "string",
+          "description": "The value to be compared."
+         }
+        },
+        "required": [
+         "field",
+         "operation",
+         "value"
+        ]
+       },
+       "description": "Conditions for the query."
+      }
+     },
+     "required": [
+      "table",
+      "conditions"
+     ]
+    }
+   },
+   {
+    "name": "probability_of_event",
+    "description": "Calculates the probability of an event.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "success_outcomes": {
+       "type": "integer",
+       "description": "The number of successful outcomes."
+      },
+      "total_outcomes": {
+       "type": "integer",
+       "description": "The total number of possible outcomes."
+      },
+      "format_as_ratio": {
+       "type": "boolean",
+       "description": "When true, formats the output as a ratio instead of a decimal. Default is false."
+      }
+     },
+     "required": [
+      "success_outcomes",
+      "total_outcomes"
+     ]
+    }
+   }
+  ],
+  "expected": [
+   {
+    "database.query": {
+     "table": [
+      "user"
+     ],
+     "conditions": [
+      [
+       {
+        "field": [
+         "age"
+        ],
+        "operation": [
+         ">"
+        ],
+        "value": [
+         "25"
+        ]
+       },
+       {
+        "field": [
+         "job"
+        ],
+        "operation": [
+         "="
+        ],
+        "value": [
+         "engineer"
+        ]
+       }
+      ]
+     ]
+    }
+   }
+  ],
+  "expected_kind": "ast"
+ },
+ {
+  "id": "multiple_159",
+  "version": "v3",
+  "category": "multiple",
+  "file": "BFCL_v3_multiple.json",
+  "index": 159,
+  "question": [
+   [
+    {
+     "role": "user",
+     "content": "Calculate the total quantity of paint needed to cover a wall of 30 feet by 12 feet using a specific brand that covers 400 square feet per gallon."
+    }
+   ]
+  ],
+  "functions": [
+   {
+    "name": "prob_dist.binomial",
+    "description": "Compute the probability of having 'success' outcome from binomial distribution.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "trials": {
+       "type": "integer",
+       "description": "The number of independent experiments."
+      },
+      "successes": {
+       "type": "integer",
+       "description": "The number of success events."
+      },
+      "p": {
+       "type": "float",
+       "description": "The probability of success on any given trial, defaults to 0.5"
+      }
+     },
+     "required": [
+      "trials",
+      "successes"
+     ]
+    }
+   },
+   {
+    "name": "musical_scale",
+    "description": "Get the musical scale of a specific key in music theory.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "key": {
+       "type": "string",
+       "description": "The musical key for which the scale will be found."
+      },
+      "scale_type": {
+       "type": "string",
+       "default": "major",
+       "description": "The type of musical scale."
+      }
+     },
+     "required": [
+      "key"
+     ]
+    }
+   },
+   {
+    "name": "calculate_paint_needed",
+    "description": "Calculate the amount of paint needed to cover a surface area based on the coverage rate of a specific paint brand.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "coverage_rate": {
+       "type": "integer",
+       "description": "The area in square feet that one gallon of paint can cover."
+      },
+      "length": {
+       "type": "integer",
+       "description": "Length of the wall to be painted in feet."
+      },
+      "height": {
+       "type": "integer",
+       "description": "Height of the wall to be painted in feet."
+      }
+     },
+     "required": [
+      "coverage_rate",
+      "length",
+      "height"
+     ]
+    }
+   }
+  ],
+  "expected": [
+   {
+    "calculate_paint_needed": {
+     "coverage_rate": [
+      400
+     ],
+     "length": [
+      30
+     ],
+     "height": [
+      12
+     ]
+    }
+   }
+  ],
+  "expected_kind": "ast"
+ },
+ {
+  "id": "multiple_199",
+  "version": "v3",
+  "category": "multiple",
+  "file": "BFCL_v3_multiple.json",
+  "index": 199,
+  "question": [
+   [
+    {
+     "role": "user",
+     "content": "Predict the growth of forest in Yellowstone for the next 5 years including human impact."
+    }
+   ]
+  ],
+  "functions": [
+   {
+    "name": "forest_growth_forecast",
+    "description": "Predicts the forest growth over the next N years based on current trends.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "location": {
+       "type": "string",
+       "description": "The location where you want to predict forest growth."
+      },
+      "years": {
+       "type": "integer",
+       "description": "The number of years for the forecast."
+      },
+      "include_human_impact": {
+       "type": "boolean",
+       "description": "Whether or not to include the impact of human activities in the forecast. If not provided, defaults to false."
+      }
+     },
+     "required": [
+      "location",
+      "years"
+     ]
+    }
+   },
+   {
+    "name": "db_fetch_records",
+    "description": "Fetch records from a specified database table based on certain conditions.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "database_name": {
+       "type": "string",
+       "description": "The name of the database."
+      },
+      "table_name": {
+       "type": "string",
+       "description": "The name of the table from which records need to be fetched."
+      },
+      "conditions": {
+       "type": "dict",
+       "properties": {
+        "department": {
+         "type": "string",
+         "description": "The name of the department of students."
+        },
+        "school": {
+         "type": "string",
+         "description": "The name of the school students are enrolled in."
+        }
+       },
+       "description": "The conditions based on which records are to be fetched."
+      },
+      "fetch_limit": {
+       "type": "integer",
+       "description": "Limits the number of records to be fetched. If left empty, it fetches all records. (Optional) Default is 0."
+      }
+     },
+     "required": [
+      "database_name",
+      "table_name",
+      "conditions"
+     ]
+    }
+   }
+  ],
+  "expected": [
+   {
+    "forest_growth_forecast": {
+     "location": [
+      "Yellowstone",
+      "yellowstone"
+     ],
+     "years": [
+      5
+     ],
+     "include_human_impact": [
+      true
+     ]
+    }
+   }
+  ],
+  "expected_kind": "ast"
+ },
+ {
+  "id": "irrelevance_0",
+  "version": "v3",
+  "category": "irrelevance",
+  "file": "v3_irrelevance.json",
+  "index": 0,
+  "question": [
+   [
+    {
+     "role": "user",
+     "content": "Calculate the area of a triangle given the base is 10 meters and height is 5 meters."
+    }
+   ]
+  ],
+  "functions": [
+   {
+    "name": "determine_body_mass_index",
+    "description": "Calculate body mass index given weight and height.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "weight": {
+       "type": "float",
+       "description": "Weight of the individual in kilograms."
+      },
+      "height": {
+       "type": "float",
+       "description": "Height of the individual in meters."
+      }
+     },
+     "required": [
+      "weight",
+      "height"
+     ]
+    }
+   }
+  ],
+  "expected": null,
+  "expected_kind": "none"
+ },
+ {
+  "id": "irrelevance_60",
+  "version": "v3",
+  "category": "irrelevance",
+  "file": "v3_irrelevance.json",
+  "index": 60,
+  "question": [
+   [
+    {
+     "role": "user",
+     "content": "What is the final price of a product after a 25% discount and 10% sales tax has been applied?"
+    }
+   ]
+  ],
+  "functions": [
+   {
+    "name": "calculateFinalPrice",
+    "description": "Calculate the final price of a product after a certain discount has been applied and then sales tax added. Price should be positive and the rates can range from 0-1",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "price": {
+       "type": "float",
+       "description": "Original price of the product."
+      },
+      "discount_rate": {
+       "type": "float",
+       "description": "The discount rate in percentage, must be from 0 to 1."
+      },
+      "sales_tax": {
+       "type": "float",
+       "description": "The sales tax in percentage, must be from 0 to 1."
+      }
+     },
+     "required": [
+      "price",
+      "discount_rate",
+      "sales_tax"
+     ]
+    }
+   }
+  ],
+  "expected": null,
+  "expected_kind": "none"
+ },
+ {
+  "id": "irrelevance_120",
+  "version": "v3",
+  "category": "irrelevance",
+  "file": "v3_irrelevance.json",
+  "index": 120,
+  "question": [
+   [
+    {
+     "role": "user",
+     "content": "What's the neurological impact of sports on human brain?"
+    }
+   ]
+  ],
+  "functions": [
+   {
+    "name": "caffeine_effect",
+    "description": "Provide potential neurological impact of caffeine, mainly from coffee, on human brain.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "caffeine_content": {
+       "type": "float",
+       "description": "The amount of caffeine contained in coffee in milligrams."
+      },
+      "drinking_frequency": {
+       "type": "string",
+       "description": "How often the individual drinks coffee in a day."
+      },
+      "drinking_duration": {
+       "type": "integer",
+       "description": "For how long the individual has been drinking coffee. Default: 100"
+      }
+     },
+     "required": [
+      "caffeine_content",
+      "drinking_frequency"
+     ]
+    }
+   }
+  ],
+  "expected": null,
+  "expected_kind": "none"
+ },
+ {
+  "id": "irrelevance_179",
+  "version": "v3",
+  "category": "irrelevance",
+  "file": "v3_irrelevance.json",
+  "index": 179,
+  "question": [
+   [
+    {
+     "role": "user",
+     "content": "Who played for Clippers in NBA"
+    }
+   ]
+  ],
+  "functions": [
+   {
+    "name": "get_game_results",
+    "description": "Retrieve game results between two teams on a specific date.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "team_1": {
+       "type": "string",
+       "description": "The first team's name."
+      },
+      "team_2": {
+       "type": "string",
+       "description": "The second team's name."
+      },
+      "date": {
+       "type": "string",
+       "description": "The date of the game in the format YYYY-MM-DD."
+      },
+      "venue": {
+       "type": "string",
+       "description": "The venue of the match.",
+       "default": "basketball"
+      }
+     },
+     "required": [
+      "team_1",
+      "team_2",
+      "date"
+     ]
+    }
+   }
+  ],
+  "expected": null,
+  "expected_kind": "none"
+ },
+ {
+  "id": "irrelevance_239",
+  "version": "v3",
+  "category": "irrelevance",
+  "file": "v3_irrelevance.json",
+  "index": 239,
+  "question": [
+   [
+    {
+     "role": "user",
+     "content": "Find the distance in kilometers from San Francisco to Los Angeles."
+    }
+   ]
+  ],
+  "functions": [
+   {
+    "name": "get_date",
+    "description": "Get the time difference between two geographical locations.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "location_1": {
+       "type": "string",
+       "description": "location for first city."
+      },
+      "location_2": {
+       "type": "string",
+       "description": "location for first city."
+      },
+      "unit": {
+       "type": "string",
+       "enum": [
+        "miles",
+        "kilometers"
+       ],
+       "description": "The unit of measure for the distance. Default is miles."
+      }
+     },
+     "required": [
+      "location_1",
+      "location_2"
+     ]
+    }
+   }
+  ],
+  "expected": null,
+  "expected_kind": "none"
+ },
+ {
+  "id": "multi_turn_base_0",
+  "version": "v3",
+  "category": "multi_turn",
+  "file": "BFCL_v3_multi_turn_base.json",
+  "index": 0,
+  "question": [
+   [
+    {
+     "role": "user",
+     "content": "Move 'final_report.pdf' within document directory to 'temp' directory in document. Make sure to create the directory"
+    }
+   ],
+   [
+    {
+     "role": "user",
+     "content": "Perform a detailed search using grep to identify sections in the file pertaining to 'budget analysis'."
+    }
+   ],
+   [
+    {
+     "role": "user",
+     "content": "Upon identifying the requisite 'budget analysis' content, sort the 'final_report.pdf' by line for improved clarity and comprehension."
+    }
+   ],
+   [
+    {
+     "role": "user",
+     "content": "Move 'previous_report.pdf' in document directory to temp as well and having final report also there, proceed to juxtapose it with 'previous_report.pdf' to detect any critical alterations."
+    }
+   ]
+  ],
+  "involved_classes": [
+   "TwitterAPI",
+   "GorillaFileSystem"
+  ],
+  "functions": [
+   {
+    "name": "authenticate_twitter",
+    "description": "This tool belongs to the TwitterAPI, which provides core functionality for posting tweets, retweeting, commenting, and following users on Twitter. Tool description: Authenticate a user with username and password.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "username": {
+       "type": "string",
+       "description": "Username of the user."
+      },
+      "password": {
+       "type": "string",
+       "description": "Password of the user."
+      }
+     },
+     "required": [
+      "username",
+      "password"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "authentication_status": {
+       "type": "boolean",
+       "description": "True if authenticated, False otherwise."
+      }
+     }
+    }
+   },
+   {
+    "name": "comment",
+    "description": "This tool belongs to the TwitterAPI, which provides core functionality for posting tweets, retweeting, commenting, and following users on Twitter. Tool description: Comment on a tweet for the authenticated user.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "tweet_id": {
+       "type": "integer",
+       "description": "ID of the tweet to comment on."
+      },
+      "comment_content": {
+       "type": "string",
+       "description": "Content of the comment."
+      }
+     },
+     "required": [
+      "tweet_id",
+      "comment_content"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "comment_status": {
+       "type": "string",
+       "description": "Status of the comment action."
+      }
+     }
+    }
+   },
+   {
+    "name": "follow_user",
+    "description": "This tool belongs to the TwitterAPI, which provides core functionality for posting tweets, retweeting, commenting, and following users on Twitter. Tool description: Follow a user for the authenticated user.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "username_to_follow": {
+       "type": "string",
+       "description": "Username of the user to follow."
+      }
+     },
+     "required": [
+      "username_to_follow"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "follow_status": {
+       "type": "boolean",
+       "description": "True if followed, False if already following."
+      }
+     }
+    }
+   },
+   {
+    "name": "get_tweet",
+    "description": "This tool belongs to the TwitterAPI, which provides core functionality for posting tweets, retweeting, commenting, and following users on Twitter. Tool description: Retrieve a specific tweet.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "tweet_id": {
+       "type": "integer",
+       "description": "ID of the tweet to retrieve."
+      }
+     },
+     "required": [
+      "tweet_id"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "id": {
+       "type": "integer",
+       "description": "ID of the retrieved tweet."
+      },
+      "username": {
+       "type": "string",
+       "description": "Username of the tweet's author."
+      },
+      "content": {
+       "type": "string",
+       "description": "Content of the tweet."
+      },
+      "tags": {
+       "type": "array",
+       "description": "List of tags associated with the tweet.",
+       "items": {
+        "type": "string"
+       }
+      },
+      "mentions": {
+       "type": "array",
+       "description": "List of users mentioned in the tweet.",
+       "items": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "get_tweet_comments",
+    "description": "This tool belongs to the TwitterAPI, which provides core functionality for posting tweets, retweeting, commenting, and following users on Twitter. Tool description: Retrieve all comments for a specific tweet.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "tweet_id": {
+       "type": "integer",
+       "description": "ID of the tweet to retrieve comments for."
+      }
+     },
+     "required": [
+      "tweet_id"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "comments": {
+       "type": "array",
+       "description": "List of dictionaries, each containing comment information.",
+       "items": {
+        "type": "dict",
+        "properties": {
+         "username": {
+          "type": "string",
+          "description": "Username of the commenter."
+         },
+         "content": {
+          "type": "string",
+          "description": "Content of the comment."
+         }
+        }
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "get_user_stats",
+    "description": "This tool belongs to the TwitterAPI, which provides core functionality for posting tweets, retweeting, commenting, and following users on Twitter. Tool description: Get statistics for a specific user.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "username": {
+       "type": "string",
+       "description": "Username of the user to get statistics for."
+      }
+     },
+     "required": [
+      "username"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "tweet_count": {
+       "type": "integer",
+       "description": "Number of tweets posted by the user."
+      },
+      "following_count": {
+       "type": "integer",
+       "description": "Number of users the specified user is following."
+      },
+      "retweet_count": {
+       "type": "integer",
+       "description": "Number of retweets made by the user."
+      }
+     }
+    }
+   },
+   {
+    "name": "get_user_tweets",
+    "description": "This tool belongs to the TwitterAPI, which provides core functionality for posting tweets, retweeting, commenting, and following users on Twitter. Tool description: Retrieve all tweets from a specific user.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "username": {
+       "type": "string",
+       "description": "Username of the user whose tweets to retrieve."
+      }
+     },
+     "required": [
+      "username"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "user_tweets": {
+       "type": "array",
+       "description": "List of dictionaries, each containing tweet information.",
+       "items": {
+        "type": "dict",
+        "properties": {
+         "id": {
+          "type": "integer",
+          "description": "ID of the retrieved tweet."
+         },
+         "username": {
+          "type": "string",
+          "description": "Username of the tweet's author."
+         },
+         "content": {
+          "type": "string",
+          "description": "Content of the tweet."
+         },
+         "tags": {
+          "type": "array",
+          "description": "List of tags associated with the tweet.",
+          "items": {
+           "type": "string"
+          }
+         },
+         "mentions": {
+          "type": "array",
+          "description": "List of users mentioned in the tweet.",
+          "items": {
+           "type": "string"
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "list_all_following",
+    "description": "This tool belongs to the TwitterAPI, which provides core functionality for posting tweets, retweeting, commenting, and following users on Twitter. Tool description: List all users that the authenticated user is following.",
+    "parameters": {
+     "type": "dict",
+     "properties": {},
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "following_list": {
+       "type": "array",
+       "description": "List of all users that the authenticated user is following.",
+       "items": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "mention",
+    "description": "This tool belongs to the TwitterAPI, which provides core functionality for posting tweets, retweeting, commenting, and following users on Twitter. Tool description: Mention specified users in a tweet.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "tweet_id": {
+       "type": "integer",
+       "description": "ID of the tweet where users are mentioned."
+      },
+      "mentioned_usernames": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       },
+       "description": "List of usernames to be mentioned."
+      }
+     },
+     "required": [
+      "tweet_id",
+      "mentioned_usernames"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "mention_status": {
+       "type": "string",
+       "description": "Status of the mention action."
+      }
+     }
+    }
+   },
+   {
+    "name": "post_tweet",
+    "description": "This tool belongs to the TwitterAPI, which provides core functionality for posting tweets, retweeting, commenting, and following users on Twitter. Tool description: Post a tweet for the authenticated user.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "content": {
+       "type": "string",
+       "description": "Content of the tweet."
+      },
+      "tags": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       },
+       "description": "List of tags for the tweet. Tag name should start with #. This is only relevant if the user wants to add tags to the tweet.",
+       "default": []
+      },
+      "mentions": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       },
+       "description": "List of users mentioned in the tweet. Mention name should start with @. This is only relevant if the user wants to add mentions to the tweet.",
+       "default": []
+      }
+     },
+     "required": [
+      "content"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "id": {
+       "type": "integer",
+       "description": "ID of the posted tweet."
+      },
+      "username": {
+       "type": "string",
+       "description": "Username of the poster."
+      },
+      "content": {
+       "type": "string",
+       "description": "Content of the tweet."
+      },
+      "tags": {
+       "type": "array",
+       "description": "List of tags associated with the tweet.",
+       "items": {
+        "type": "string"
+       }
+      },
+      "mentions": {
+       "type": "array",
+       "description": "List of users mentioned in the tweet.",
+       "items": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "posting_get_login_status",
+    "description": "This tool belongs to the TwitterAPI, which provides core functionality for posting tweets, retweeting, commenting, and following users on Twitter. Tool description: Get the login status of the current user.",
+    "parameters": {
+     "type": "dict",
+     "properties": {},
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "login_status": {
+       "type": "boolean",
+       "description": "True if the current user is logged in, False otherwise."
+      }
+     }
+    }
+   },
+   {
+    "name": "retweet",
+    "description": "This tool belongs to the TwitterAPI, which provides core functionality for posting tweets, retweeting, commenting, and following users on Twitter. Tool description: Retweet a tweet for the authenticated user.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "tweet_id": {
+       "type": "integer",
+       "description": "ID of the tweet to retweet."
+      }
+     },
+     "required": [
+      "tweet_id"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "retweet_status": {
+       "type": "string",
+       "description": "Status of the retweet action."
+      }
+     }
+    }
+   },
+   {
+    "name": "search_tweets",
+    "description": "This tool belongs to the TwitterAPI, which provides core functionality for posting tweets, retweeting, commenting, and following users on Twitter. Tool description: Search for tweets containing a specific keyword.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "keyword": {
+       "type": "string",
+       "description": "Keyword to search for in the content of the tweets."
+      }
+     },
+     "required": [
+      "keyword"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "matching_tweets": {
+       "type": "array",
+       "description": "List of dictionaries, each containing tweet information.",
+       "items": {
+        "type": "dict",
+        "properties": {
+         "id": {
+          "type": "integer",
+          "description": "ID of the retrieved tweet."
+         },
+         "username": {
+          "type": "string",
+          "description": "Username of the tweet's author."
+         },
+         "content": {
+          "type": "string",
+          "description": "Content of the tweet."
+         },
+         "tags": {
+          "type": "array",
+          "description": "List of tags associated with the tweet.",
+          "items": {
+           "type": "string"
+          }
+         },
+         "mentions": {
+          "type": "array",
+          "description": "List of users mentioned in the tweet.",
+          "items": {
+           "type": "string"
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "unfollow_user",
+    "description": "This tool belongs to the TwitterAPI, which provides core functionality for posting tweets, retweeting, commenting, and following users on Twitter. Tool description: Unfollow a user for the authenticated user.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "username_to_unfollow": {
+       "type": "string",
+       "description": "Username of the user to unfollow."
+      }
+     },
+     "required": [
+      "username_to_unfollow"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "unfollow_status": {
+       "type": "boolean",
+       "description": "True if unfollowed, False if not following."
+      }
+     }
+    }
+   },
+   {
+    "name": "cat",
+    "description": "This tool belongs to the Gorilla file system. It is a simple file system that allows users to perform basic file operations such as navigating directories, creating files and directories, reading and writing to files, etc. Tool description: Display the contents of a file of any extension from currrent directory.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "file_name": {
+       "type": "string",
+       "description": "The name of the file from current directory to display. No path is allowed. "
+      }
+     },
+     "required": [
+      "file_name"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "file_content": {
+       "type": "string",
+       "description": "The content of the file."
+      }
+     }
+    }
+   },
+   {
+    "name": "cd",
+    "description": "This tool belongs to the Gorilla file system. It is a simple file system that allows users to perform basic file operations such as navigating directories, creating files and directories, reading and writing to files, etc. Tool description: Change the current working directory to the specified folder.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "folder": {
+       "type": "string",
+       "description": "The folder of the directory to change to. You can only change one folder at a time. "
+      }
+     },
+     "required": [
+      "folder"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "current_working_directory": {
+       "type": "string",
+       "description": "The new current working directory path."
+      }
+     }
+    }
+   },
+   {
+    "name": "cp",
+    "description": "This tool belongs to the Gorilla file system. It is a simple file system that allows users to perform basic file operations such as navigating directories, creating files and directories, reading and writing to files, etc. Tool description: Copy a file or directory from one location to another.  If the destination is a directory, the source file or directory will be copied into the destination directory.  Both source and destination must be local to the current directory.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "source": {
+       "type": "string",
+       "description": "The name of the file or directory to copy."
+      },
+      "destination": {
+       "type": "string",
+       "description": "The destination name to copy the file or directory to. If the destination is a directory, the source will be copied into this directory. No file paths allowed. "
+      }
+     },
+     "required": [
+      "source",
+      "destination"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "result": {
+       "type": "string",
+       "description": "The result of the copy operation or an error message if the operation fails."
+      }
+     }
+    }
+   },
+   {
+    "name": "diff",
+    "description": "This tool belongs to the Gorilla file system. It is a simple file system that allows users to perform basic file operations such as navigating directories, creating files and directories, reading and writing to files, etc. Tool description: Compare two files of any extension line by line at the current directory.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "file_name1": {
+       "type": "string",
+       "description": "The name of the first file in current directory."
+      },
+      "file_name2": {
+       "type": "string",
+       "description": "The name of the second file in current directorry. "
+      }
+     },
+     "required": [
+      "file_name1",
+      "file_name2"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "diff_lines": {
+       "type": "string",
+       "description": "The differences between the two files."
+      }
+     }
+    }
+   },
+   {
+    "name": "du",
+    "description": "This tool belongs to the Gorilla file system. It is a simple file system that allows users to perform basic file operations such as navigating directories, creating files and directories, reading and writing to files, etc. Tool description: Estimate the disk usage of a directory and its contents.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "human_readable": {
+       "type": "boolean",
+       "description": "If True, returns the size in human-readable format (e.g., KB, MB). ",
+       "default": false
+      }
+     },
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "disk_usage": {
+       "type": "string",
+       "description": "The estimated disk usage."
+      }
+     }
+    }
+   },
+   {
+    "name": "echo",
+    "description": "This tool belongs to the Gorilla file system. It is a simple file system that allows users to perform basic file operations such as navigating directories, creating files and directories, reading and writing to files, etc. Tool description: Write content to a file at current directory or display it in the terminal.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "content": {
+       "type": "string",
+       "description": "The content to write or display."
+      },
+      "file_name": {
+       "type": "string",
+       "description": "The name of the file at current directory to write the content to. Defaults to None. ",
+       "default": "None"
+      }
+     },
+     "required": [
+      "content"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "terminal_output": {
+       "type": "string",
+       "description": "The content if no file name is provided, or None if written to file."
+      }
+     }
+    }
+   },
+   {
+    "name": "find",
+    "description": "This tool belongs to the Gorilla file system. It is a simple file system that allows users to perform basic file operations such as navigating directories, creating files and directories, reading and writing to files, etc. Tool description: Find any file or directories under specific path that contain name in its file name.  This method searches for files of any extension and directories within a specified path that match the given name. If no name is provided, it returns all files and directories in the specified path and its subdirectories. Note: This method performs a recursive search through all subdirectories of the given path.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "path": {
+       "type": "string",
+       "description": "The directory path to start the search. Defaults to the current directory (\".\").",
+       "default": "."
+      },
+      "name": {
+       "type": "string",
+       "description": "The name of the file or directory to search for. If None, all items are returned. ",
+       "default": "None"
+      }
+     },
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "matches": {
+       "type": "array",
+       "description": "A list of matching file and directory paths relative to the given path.",
+       "items": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "grep",
+    "description": "This tool belongs to the Gorilla file system. It is a simple file system that allows users to perform basic file operations such as navigating directories, creating files and directories, reading and writing to files, etc. Tool description: Search for lines in a file of any extension at current directory that contain the specified pattern.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "file_name": {
+       "type": "string",
+       "description": "The name of the file to search. No path is allowed and you can only perform on file at local directory."
+      },
+      "pattern": {
+       "type": "string",
+       "description": "The pattern to search for. "
+      }
+     },
+     "required": [
+      "file_name",
+      "pattern"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "matching_lines": {
+       "type": "array",
+       "description": "Lines that match the pattern.",
+       "items": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "ls",
+    "description": "This tool belongs to the Gorilla file system. It is a simple file system that allows users to perform basic file operations such as navigating directories, creating files and directories, reading and writing to files, etc. Tool description: List the contents of the current directory.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "a": {
+       "type": "boolean",
+       "description": "Show hidden files and directories. Defaults to False. ",
+       "default": false
+      }
+     },
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "current_directory_content": {
+       "type": "array",
+       "description": "A list of the contents of the specified directory.",
+       "items": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "mkdir",
+    "description": "This tool belongs to the Gorilla file system. It is a simple file system that allows users to perform basic file operations such as navigating directories, creating files and directories, reading and writing to files, etc. Tool description: Create a new directory in the current directory.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "dir_name": {
+       "type": "string",
+       "description": "The name of the new directory at current directory. You can only create directory at current directory."
+      }
+     },
+     "required": [
+      "dir_name"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {}
+    }
+   },
+   {
+    "name": "mv",
+    "description": "This tool belongs to the Gorilla file system. It is a simple file system that allows users to perform basic file operations such as navigating directories, creating files and directories, reading and writing to files, etc. Tool description: Move a file or directory from one location to another. so",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "source": {
+       "type": "string",
+       "description": "Source name of the file or directory to move. Source must be local to the current directory."
+      },
+      "destination": {
+       "type": "string",
+       "description": "The destination name to move the file or directory to. Destination must be local to the current directory and cannot be a path. If destination is not an existing directory like when renaming something, destination is the new file name. "
+      }
+     },
+     "required": [
+      "source",
+      "destination"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "result": {
+       "type": "string",
+       "description": "The result of the move operation."
+      }
+     }
+    }
+   },
+   {
+    "name": "pwd",
+    "description": "This tool belongs to the Gorilla file system. It is a simple file system that allows users to perform basic file operations such as navigating directories, creating files and directories, reading and writing to files, etc. Tool description: Return the current working directory path.",
+    "parameters": {
+     "type": "dict",
+     "properties": {},
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "current_working_directory": {
+       "type": "string",
+       "description": "The current working directory path."
+      }
+     }
+    }
+   },
+   {
+    "name": "rm",
+    "description": "This tool belongs to the Gorilla file system. It is a simple file system that allows users to perform basic file operations such as navigating directories, creating files and directories, reading and writing to files, etc. Tool description: Remove a file or directory.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "file_name": {
+       "type": "string",
+       "description": "The name of the file or directory to remove. "
+      }
+     },
+     "required": [
+      "file_name"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "result": {
+       "type": "string",
+       "description": "The result of the remove operation."
+      }
+     }
+    }
+   },
+   {
+    "name": "rmdir",
+    "description": "This tool belongs to the Gorilla file system. It is a simple file system that allows users to perform basic file operations such as navigating directories, creating files and directories, reading and writing to files, etc. Tool description: Remove a directory at current directory.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "dir_name": {
+       "type": "string",
+       "description": "The name of the directory to remove. Directory must be local to the current directory. "
+      }
+     },
+     "required": [
+      "dir_name"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "result": {
+       "type": "string",
+       "description": "The result of the remove operation."
+      }
+     }
+    }
+   },
+   {
+    "name": "sort",
+    "description": "This tool belongs to the Gorilla file system. It is a simple file system that allows users to perform basic file operations such as navigating directories, creating files and directories, reading and writing to files, etc. Tool description: Sort the contents of a file line by line.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "file_name": {
+       "type": "string",
+       "description": "The name of the file appeared at current directory to sort. "
+      }
+     },
+     "required": [
+      "file_name"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "sorted_content": {
+       "type": "string",
+       "description": "The sorted content of the file."
+      }
+     }
+    }
+   },
+   {
+    "name": "tail",
+    "description": "This tool belongs to the Gorilla file system. It is a simple file system that allows users to perform basic file operations such as navigating directories, creating files and directories, reading and writing to files, etc. Tool description: Display the last part of a file of any extension.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "file_name": {
+       "type": "string",
+       "description": "The name of the file to display. No path is allowed and you can only perform on file at local directory."
+      },
+      "lines": {
+       "type": "integer",
+       "description": "The number of lines to display from the end of the file. Defaults to 10. ",
+       "default": 10
+      }
+     },
+     "required": [
+      "file_name"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "last_lines": {
+       "type": "string",
+       "description": "The last part of the file."
+      }
+     }
+    }
+   },
+   {
+    "name": "touch",
+    "description": "This tool belongs to the Gorilla file system. It is a simple file system that allows users to perform basic file operations such as navigating directories, creating files and directories, reading and writing to files, etc. Tool description: Create a new file of any extension in the current directory.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "file_name": {
+       "type": "string",
+       "description": "The name of the new file in the current directory. file_name is local to the current directory and does not allow path."
+      }
+     },
+     "required": [
+      "file_name"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {}
+    }
+   },
+   {
+    "name": "wc",
+    "description": "This tool belongs to the Gorilla file system. It is a simple file system that allows users to perform basic file operations such as navigating directories, creating files and directories, reading and writing to files, etc. Tool description: Count the number of lines, words, and characters in a file of any extension from current directory.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "file_name": {
+       "type": "string",
+       "description": "Name of the file of current directory to perform wc operation on."
+      },
+      "mode": {
+       "type": "string",
+       "description": "Mode of operation ('l' for lines, 'w' for words, 'c' for characters). ",
+       "default": "l"
+      }
+     },
+     "required": [
+      "file_name"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "count": {
+       "type": "integer",
+       "description": "The count of the number of lines, words, or characters in the file."
+      },
+      "type": {
+       "type": "string",
+       "description": "The type of unit we are counting. [Enum]: [\"lines\", \"words\", \"characters\"]"
+      }
+     }
+    }
+   }
+  ],
+  "expected": [
+   [
+    "cd(folder='document')",
+    "mkdir(dir_name='temp')",
+    "mv(source='final_report.pdf', destination='temp')"
+   ],
+   [
+    "cd(folder='temp')",
+    "grep(file_name='final_report.pdf',pattern='budget analysis')"
+   ],
+   [
+    "sort('final_report.pdf')"
+   ],
+   [
+    "cd(folder='..')",
+    "mv(source='previous_report.pdf',destination='temp')",
+    "cd(folder='temp')",
+    "diff(file_name1='final_report.pdf',file_name2='previous_report.pdf')"
+   ]
+  ],
+  "expected_kind": "multiturn"
+ },
+ {
+  "id": "multi_turn_base_50",
+  "version": "v3",
+  "category": "multi_turn",
+  "file": "BFCL_v3_multi_turn_base.json",
+  "index": 50,
+  "question": [
+   [
+    {
+     "role": "user",
+     "content": "Hey there, I noticed that all of my car doors seem to have locked themselves up, and with my schedule being pretty tight today, I'm in quite a pinch. I could really use your help to get those doors unlocked. It'd be fantastic if you could also switch on the headlights. It's getting a bit darker out here than expected, and visibility's not great!"
+    }
+   ]
+  ],
+  "involved_classes": [
+   "VehicleControlAPI"
+  ],
+  "functions": [
+   {
+    "name": "activateParkingBrake",
+    "description": "This tool belongs to the vehicle control system, which allows users to control various aspects of the car such as engine, doors, climate control, lights, and more. Tool description: Activates the parking brake of the vehicle.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "mode": {
+       "type": "string",
+       "description": "The mode to set. [Enum]: [\"engage\", \"release\"]"
+      }
+     },
+     "required": [
+      "mode"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "parkingBrakeStatus": {
+       "type": "string",
+       "description": "The status of the brake. [Enum]: [\"engaged\", \"released\"]"
+      },
+      "_parkingBrakeForce": {
+       "type": "float",
+       "description": "The force applied to the brake in Newtons."
+      },
+      "_slopeAngle": {
+       "type": "float",
+       "description": "The slope angle in degrees."
+      }
+     }
+    }
+   },
+   {
+    "name": "adjustClimateControl",
+    "description": "This tool belongs to the vehicle control system, which allows users to control various aspects of the car such as engine, doors, climate control, lights, and more. Tool description: Adjusts the climate control of the vehicle.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "temperature": {
+       "type": "float",
+       "description": "The temperature to set in degree. Default to be celsius."
+      },
+      "unit": {
+       "type": "string",
+       "description": "The unit of temperature. [Enum]: [\"celsius\", \"fahrenheit\"]",
+       "default": "celsius"
+      },
+      "fanSpeed": {
+       "type": "integer",
+       "description": "The fan speed to set from 0 to 100. Default is 50.",
+       "default": 50
+      },
+      "mode": {
+       "type": "string",
+       "description": "The climate mode to set. [Enum]: [\"auto\", \"cool\", \"heat\", \"defrost\"]",
+       "default": "auto"
+      }
+     },
+     "required": [
+      "temperature"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "currentTemperature": {
+       "type": "float",
+       "description": "The current temperature set in degree Celsius."
+      },
+      "climateMode": {
+       "type": "string",
+       "description": "The current climate mode set."
+      },
+      "humidityLevel": {
+       "type": "float",
+       "description": "The humidity level in percentage."
+      }
+     }
+    }
+   },
+   {
+    "name": "check_tire_pressure",
+    "description": "This tool belongs to the vehicle control system, which allows users to control various aspects of the car such as engine, doors, climate control, lights, and more. Tool description: Checks the tire pressure of the vehicle.",
+    "parameters": {
+     "type": "dict",
+     "properties": {},
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "tirePressure": {
+       "type": "dict",
+       "description": "The tire pressure of the vehicle.",
+       "properties": {
+        "frontLeftTirePressure": {
+         "type": "float",
+         "description": "The pressure of the front left tire in psi."
+        },
+        "frontRightTirePressure": {
+         "type": "float",
+         "description": "The pressure of the front right tire in psi."
+        },
+        "rearLeftTirePressure": {
+         "type": "float",
+         "description": "The pressure of the rear left tire in psi."
+        },
+        "rearRightTirePressure": {
+         "type": "float",
+         "description": "The pressure of the rear right tire in psi."
+        },
+        "healthy_tire_pressure": {
+         "type": "boolean",
+         "description": "True if the tire pressure is healthy, False otherwise."
+        },
+        "car_info": {
+         "type": "dict",
+         "description": "The metadata of the car."
+        }
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "displayCarStatus",
+    "description": "This tool belongs to the vehicle control system, which allows users to control various aspects of the car such as engine, doors, climate control, lights, and more. Tool description: Displays the status of the vehicle based on the provided display option.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "option": {
+       "type": "string",
+       "description": "The option to display. [Enum]: [\"fuel\", \"battery\", \"doors\", \"climate\", \"headlights\", \"parkingBrake\", \"brakePadle\", \"engine\"]"
+      }
+     },
+     "required": [
+      "option"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "status": {
+       "type": "dict",
+       "description": "The status of the vehicle based on the option.",
+       "properties": {
+        "fuelLevel": {
+         "type": "float",
+         "description": "[Optional] The fuel level of the vehicle in gallons."
+        },
+        "batteryVoltage": {
+         "type": "float",
+         "description": "[Optional] The battery voltage of the vehicle in volts."
+        },
+        "doorStatus": {
+         "type": "dict",
+         "description": "[Optional] The status of the doors.",
+         "properties": {
+          "driver": {
+           "type": "string",
+           "description": "The status of the driver door. [Enum]: [\"locked\", \"unlocked\"]"
+          },
+          "passenger": {
+           "type": "string",
+           "description": "The status of the passenger door. [Enum]: [\"locked\", \"unlocked\"]"
+          },
+          "rear_left": {
+           "type": "string",
+           "description": "The status of the rear left door. [Enum]: [\"locked\", \"unlocked\"]"
+          },
+          "rear_right": {
+           "type": "string",
+           "description": "The status of the rear right door. [Enum]: [\"locked\", \"unlocked\"]"
+          }
+         }
+        },
+        "currentACTemperature": {
+         "type": "float",
+         "description": "[Optional] The current temperature set in degree Celsius."
+        },
+        "fanSpeed": {
+         "type": "integer",
+         "description": "[Optional] The fan speed set from 0 to 100."
+        },
+        "climateMode": {
+         "type": "string",
+         "description": "[Optional] The climate mode set. [Enum]: [\"auto\", \"cool\", \"heat\", \"defrost\"]"
+        },
+        "humidityLevel": {
+         "type": "float",
+         "description": "[Optional] The humidity level in percentage."
+        },
+        "headlightStatus": {
+         "type": "string",
+         "description": "[Optional] The status of the headlights. [Enum]: [\"on\", \"off\"]"
+        },
+        "parkingBrakeStatus": {
+         "type": "string",
+         "description": "[Optional] The status of the brake. [Enum]: [\"engaged\", \"released\"]"
+        },
+        "parkingBrakeForce": {
+         "type": "float",
+         "description": "[Optional] The force applied to the brake in Newtons."
+        },
+        "slopeAngle": {
+         "type": "float",
+         "description": "[Optional] The slope angle in degrees."
+        },
+        "brakePedalStatus": {
+         "type": "string",
+         "description": "[Optional] The status of the brake pedal. [Enum]: [\"pressed\", \"released\"]"
+        },
+        "brakePedalForce": {
+         "type": "float",
+         "description": "[Optional] The force applied to the brake pedal in Newtons."
+        },
+        "engineState": {
+         "type": "string",
+         "description": "[Optional] The state of the engine. [Enum]: [\"running\", \"stopped\"]"
+        },
+        "metadata": {
+         "type": "string",
+         "description": "[Optional] The metadata of the car."
+        }
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "display_log",
+    "description": "This tool belongs to the vehicle control system, which allows users to control various aspects of the car such as engine, doors, climate control, lights, and more. Tool description: Displays the log messages.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "messages": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       },
+       "description": "The list of messages to display."
+      }
+     },
+     "required": [
+      "messages"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "log": {
+       "type": "array",
+       "description": "The list of messages displayed.",
+       "items": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "estimate_distance",
+    "description": "This tool belongs to the vehicle control system, which allows users to control various aspects of the car such as engine, doors, climate control, lights, and more. Tool description: Estimates the distance between two cities.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "cityA": {
+       "type": "string",
+       "description": "The zipcode of the first city."
+      },
+      "cityB": {
+       "type": "string",
+       "description": "The zipcode of the second city."
+      }
+     },
+     "required": [
+      "cityA",
+      "cityB"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "distance": {
+       "type": "float",
+       "description": "The distance between the two cities in km."
+      },
+      "intermediaryCities": {
+       "type": "array",
+       "description": "[Optional] The list of intermediary cities between the two cities.",
+       "items": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "estimate_drive_feasibility_by_mileage",
+    "description": "This tool belongs to the vehicle control system, which allows users to control various aspects of the car such as engine, doors, climate control, lights, and more. Tool description: Estimates the milage of the vehicle given the distance needed to drive.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "distance": {
+       "type": "float",
+       "description": "The distance to travel in miles."
+      }
+     },
+     "required": [
+      "distance"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "canDrive": {
+       "type": "boolean",
+       "description": "True if the vehicle can drive the distance, False otherwise."
+      }
+     }
+    }
+   },
+   {
+    "name": "fillFuelTank",
+    "description": "This tool belongs to the vehicle control system, which allows users to control various aspects of the car such as engine, doors, climate control, lights, and more. Tool description: Fills the fuel tank of the vehicle. The fuel tank can hold up to 50 gallons.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "fuelAmount": {
+       "type": "float",
+       "description": "The amount of fuel to fill in gallons; this is the additional fuel to add to the tank."
+      }
+     },
+     "required": [
+      "fuelAmount"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "fuelLevel": {
+       "type": "float",
+       "description": "The fuel level of the vehicle in gallons."
+      }
+     }
+    }
+   },
+   {
+    "name": "find_nearest_tire_shop",
+    "description": "This tool belongs to the vehicle control system, which allows users to control various aspects of the car such as engine, doors, climate control, lights, and more. Tool description: Finds the nearest tire shop.",
+    "parameters": {
+     "type": "dict",
+     "properties": {},
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "shopLocation": {
+       "type": "string",
+       "description": "The location of the nearest tire shop."
+      }
+     }
+    }
+   },
+   {
+    "name": "gallon_to_liter",
+    "description": "This tool belongs to the vehicle control system, which allows users to control various aspects of the car such as engine, doors, climate control, lights, and more. Tool description: Converts the gallon to liter.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "gallon": {
+       "type": "float",
+       "description": "The amount of gallon to convert."
+      }
+     },
+     "required": [
+      "gallon"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "liter": {
+       "type": "float",
+       "description": "The amount of liter converted."
+      }
+     }
+    }
+   },
+   {
+    "name": "get_current_speed",
+    "description": "This tool belongs to the vehicle control system, which allows users to control various aspects of the car such as engine, doors, climate control, lights, and more. Tool description: Gets the current speed of the vehicle.",
+    "parameters": {
+     "type": "dict",
+     "properties": {},
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "currentSpeed": {
+       "type": "float",
+       "description": "The current speed of the vehicle in km/h."
+      }
+     }
+    }
+   },
+   {
+    "name": "get_outside_temperature_from_google",
+    "description": "This tool belongs to the vehicle control system, which allows users to control various aspects of the car such as engine, doors, climate control, lights, and more. Tool description: Gets the outside temperature.",
+    "parameters": {
+     "type": "dict",
+     "properties": {},
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "outsideTemperature": {
+       "type": "float",
+       "description": "The outside temperature in degree Celsius."
+      }
+     }
+    }
+   },
+   {
+    "name": "get_outside_temperature_from_weather_com",
+    "description": "This tool belongs to the vehicle control system, which allows users to control various aspects of the car such as engine, doors, climate control, lights, and more. Tool description: Gets the outside temperature.",
+    "parameters": {
+     "type": "dict",
+     "properties": {},
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "outsideTemperature": {
+       "type": "float",
+       "description": "The outside temperature in degree Celsius."
+      }
+     }
+    }
+   },
+   {
+    "name": "get_zipcode_based_on_city",
+    "description": "This tool belongs to the vehicle control system, which allows users to control various aspects of the car such as engine, doors, climate control, lights, and more. Tool description: Gets the zipcode based on the city.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "city": {
+       "type": "string",
+       "description": "The name of the city."
+      }
+     },
+     "required": [
+      "city"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "zipcode": {
+       "type": "string",
+       "description": "The zipcode of the city."
+      }
+     }
+    }
+   },
+   {
+    "name": "liter_to_gallon",
+    "description": "This tool belongs to the vehicle control system, which allows users to control various aspects of the car such as engine, doors, climate control, lights, and more. Tool description: Converts the liter to gallon.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "liter": {
+       "type": "float",
+       "description": "The amount of liter to convert."
+      }
+     },
+     "required": [
+      "liter"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "gallon": {
+       "type": "float",
+       "description": "The amount of gallon converted."
+      }
+     }
+    }
+   },
+   {
+    "name": "lockDoors",
+    "description": "This tool belongs to the vehicle control system, which allows users to control various aspects of the car such as engine, doors, climate control, lights, and more. Tool description: Locks the doors of the vehicle.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "unlock": {
+       "type": "boolean",
+       "description": "True if the doors are to be unlocked, False otherwise."
+      },
+      "door": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       },
+       "description": "The list of doors to lock or unlock. [Enum]: [\"driver\", \"passenger\", \"rear_left\", \"rear_right\"]"
+      }
+     },
+     "required": [
+      "unlock",
+      "door"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "lockStatus": {
+       "type": "string",
+       "description": "The status of the lock. [Enum]: [\"locked\", \"unlocked\"]"
+      },
+      "remainingUnlockedDoors": {
+       "type": "integer",
+       "description": "The number of remaining unlocked doors."
+      }
+     }
+    }
+   },
+   {
+    "name": "pressBrakePedal",
+    "description": "This tool belongs to the vehicle control system, which allows users to control various aspects of the car such as engine, doors, climate control, lights, and more. Tool description: Presses the brake pedal based on pedal position. The brake pedal will be kept pressed until released.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "pedalPosition": {
+       "type": "float",
+       "description": "Position of the brake pedal, between 0 (not pressed) and 1 (fully pressed)."
+      }
+     },
+     "required": [
+      "pedalPosition"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "brakePedalStatus": {
+       "type": "string",
+       "description": "The status of the brake pedal. [Enum]: [\"pressed\", \"released\"]"
+      },
+      "brakePedalForce": {
+       "type": "float",
+       "description": "The force applied to the brake pedal in Newtons."
+      }
+     }
+    }
+   },
+   {
+    "name": "releaseBrakePedal",
+    "description": "This tool belongs to the vehicle control system, which allows users to control various aspects of the car such as engine, doors, climate control, lights, and more. Tool description: Releases the brake pedal of the vehicle.",
+    "parameters": {
+     "type": "dict",
+     "properties": {},
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "brakePedalStatus": {
+       "type": "string",
+       "description": "The status of the brake pedal. [Enum]: [\"pressed\", \"released\"]"
+      },
+      "brakePedalForce": {
+       "type": "float",
+       "description": "The force applied to the brake pedal in Newtons."
+      }
+     }
+    }
+   },
+   {
+    "name": "setCruiseControl",
+    "description": "This tool belongs to the vehicle control system, which allows users to control various aspects of the car such as engine, doors, climate control, lights, and more. Tool description: Sets the cruise control of the vehicle.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "speed": {
+       "type": "float",
+       "description": "The speed to set in m/h. The speed should be between 0 and 120 and a multiple of 5."
+      },
+      "activate": {
+       "type": "boolean",
+       "description": "True to activate the cruise control, False to deactivate."
+      },
+      "distanceToNextVehicle": {
+       "type": "float",
+       "description": "The distance to the next vehicle in meters."
+      }
+     },
+     "required": [
+      "speed",
+      "activate",
+      "distanceToNextVehicle"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "cruiseStatus": {
+       "type": "string",
+       "description": "The status of the cruise control. [Enum]: [\"active\", \"inactive\"]"
+      },
+      "currentSpeed": {
+       "type": "float",
+       "description": "The current speed of the vehicle in km/h."
+      },
+      "distanceToNextVehicle": {
+       "type": "float",
+       "description": "The distance to the next vehicle in meters."
+      }
+     }
+    }
+   },
+   {
+    "name": "setHeadlights",
+    "description": "This tool belongs to the vehicle control system, which allows users to control various aspects of the car such as engine, doors, climate control, lights, and more. Tool description: Sets the headlights of the vehicle.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "mode": {
+       "type": "string",
+       "description": "The mode of the headlights. [Enum]: [\"on\", \"off\", \"auto\"]"
+      }
+     },
+     "required": [
+      "mode"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "headlightStatus": {
+       "type": "string",
+       "description": "The status of the headlights. [Enum]: [\"on\", \"off\"]"
+      }
+     }
+    }
+   },
+   {
+    "name": "set_navigation",
+    "description": "This tool belongs to the vehicle control system, which allows users to control various aspects of the car such as engine, doors, climate control, lights, and more. Tool description: Navigates to the destination.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "destination": {
+       "type": "string",
+       "description": "The destination to navigate in the format of street, city, state."
+      }
+     },
+     "required": [
+      "destination"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "status": {
+       "type": "string",
+       "description": "The status of the navigation."
+      }
+     }
+    }
+   },
+   {
+    "name": "startEngine",
+    "description": "This tool belongs to the vehicle control system, which allows users to control various aspects of the car such as engine, doors, climate control, lights, and more. Tool description: Starts the engine of the vehicle.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "ignitionMode": {
+       "type": "string",
+       "description": "The ignition mode of the vehicle. [Enum]: [\"START\", \"STOP\"]"
+      }
+     },
+     "required": [
+      "ignitionMode"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "engineState": {
+       "type": "string",
+       "description": "The state of the engine. [Enum]: [\"running\", \"stopped\"]"
+      },
+      "fuelLevel": {
+       "type": "float",
+       "description": "The fuel level of the vehicle in gallons."
+      },
+      "batteryVoltage": {
+       "type": "float",
+       "description": "The battery voltage of the vehicle in volts."
+      }
+     }
+    }
+   }
+  ],
+  "expected": [
+   [
+    "lockDoors(unlock=True, door=['driver', 'passenger', 'rear_left', 'rear_right'])",
+    "setHeadlights(mode='on')"
+   ]
+  ],
+  "expected_kind": "multiturn"
+ },
+ {
+  "id": "multi_turn_base_100",
+  "version": "v3",
+  "category": "multi_turn",
+  "file": "BFCL_v3_multi_turn_base.json",
+  "index": 100,
+  "question": [
+   [
+    {
+     "role": "user",
+     "content": "I'm contemplating enhancing my investment portfolio with some tech industry assets, and I've got my eye on Nvidia. I'm keen to know its current stock price, and would appreciate if you could source this information for me."
+    }
+   ],
+   [
+    {
+     "role": "user",
+     "content": "Additionally, as I'm strategizing to expand my investments further, I need some help replenishing my trading account. Let's login and fund my account with 10 share of Nvidia worth of money to it to ensure there's ample capital for any trading opportunities that might arise. My usermame is 'Ramkumar' and password is 'hello123'"
+    }
+   ]
+  ],
+  "involved_classes": [
+   "TradingBot"
+  ],
+  "functions": [
+   {
+    "name": "add_to_watchlist",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Add a stock to the watchlist.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "stock": {
+       "type": "string",
+       "description": "the stock symbol to add to the watchlist. "
+      }
+     },
+     "required": [
+      "stock"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "symbol": {
+       "type": "string",
+       "description": "the symbol that were successfully added to the watchlist."
+      }
+     }
+    }
+   },
+   {
+    "name": "cancel_order",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Cancel an order.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "order_id": {
+       "type": "integer",
+       "description": "ID of the order to cancel. "
+      }
+     },
+     "required": [
+      "order_id"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "order_id": {
+       "type": "integer",
+       "description": "ID of the cancelled order."
+      },
+      "status": {
+       "type": "string",
+       "description": "New status of the order after cancellation attempt."
+      }
+     }
+    }
+   },
+   {
+    "name": "filter_stocks_by_price",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Filter stocks based on a price range.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "stocks": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       },
+       "description": "List of stock symbols to filter."
+      },
+      "min_price": {
+       "type": "float",
+       "description": "Minimum stock price."
+      },
+      "max_price": {
+       "type": "float",
+       "description": "Maximum stock price. "
+      }
+     },
+     "required": [
+      "stocks",
+      "min_price",
+      "max_price"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "filtered_stocks": {
+       "type": "array",
+       "description": "Filtered list of stock symbols within the price range.",
+       "items": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "fund_account",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Fund the account with the specified amount.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "amount": {
+       "type": "float",
+       "description": "Amount to fund the account with. "
+      }
+     },
+     "required": [
+      "amount"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "status": {
+       "type": "string",
+       "description": "Status of the funding operation."
+      },
+      "new_balance": {
+       "type": "float",
+       "description": "Updated account balance after funding."
+      }
+     }
+    }
+   },
+   {
+    "name": "get_account_info",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Get account information.",
+    "parameters": {
+     "type": "dict",
+     "properties": {},
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "account_id": {
+       "type": "integer",
+       "description": "ID of the account."
+      },
+      "balance": {
+       "type": "float",
+       "description": "Current balance of the account."
+      },
+      "binding_card": {
+       "type": "integer",
+       "description": "Card number associated with the account."
+      }
+     }
+    }
+   },
+   {
+    "name": "get_available_stocks",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Get a list of stock symbols in the given sector.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "sector": {
+       "type": "string",
+       "description": "The sector to retrieve stocks from (e.g., 'Technology'). "
+      }
+     },
+     "required": [
+      "sector"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "stock_list": {
+       "type": "array",
+       "description": "List of stock symbols in the specified sector.",
+       "items": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "get_current_time",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Get the current time.",
+    "parameters": {
+     "type": "dict",
+     "properties": {},
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "current_time": {
+       "type": "string",
+       "description": "Current time in HH:MM AM/PM format."
+      }
+     }
+    }
+   },
+   {
+    "name": "get_order_details",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Get the details of an order.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "order_id": {
+       "type": "integer",
+       "description": "ID of the order. "
+      }
+     },
+     "required": [
+      "order_id"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "id": {
+       "type": "integer",
+       "description": "ID of the order."
+      },
+      "order_type": {
+       "type": "string",
+       "description": "Type of the order."
+      },
+      "symbol": {
+       "type": "string",
+       "description": "Symbol of the stock in the order."
+      },
+      "price": {
+       "type": "float",
+       "description": "Price at which the order was placed."
+      },
+      "amount": {
+       "type": "integer",
+       "description": "Number of shares in the order."
+      },
+      "status": {
+       "type": "string",
+       "description": "Current status of the order. [Enum]: [\"Open\", \"Pending\", \"Completed\", \"Cancelled\"]"
+      }
+     }
+    }
+   },
+   {
+    "name": "get_order_history",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Get the stock order ID history.",
+    "parameters": {
+     "type": "dict",
+     "properties": {},
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "order_history": {
+       "type": "array",
+       "description": "List of orders ID in the order history.",
+       "items": {
+        "type": "integer"
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "get_stock_info",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Get the details of a stock.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "symbol": {
+       "type": "string",
+       "description": "Symbol that uniquely identifies the stock. "
+      }
+     },
+     "required": [
+      "symbol"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "price": {
+       "type": "float",
+       "description": "Current price of the stock."
+      },
+      "percent_change": {
+       "type": "float",
+       "description": "Percentage change in stock price."
+      },
+      "volume": {
+       "type": "float",
+       "description": "Trading volume of the stock. MA(5) (float): 5-day Moving Average of the stock. MA(20) (float): 20-day Moving Average of the stock."
+      }
+     }
+    }
+   },
+   {
+    "name": "get_symbol_by_name",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Get the symbol of a stock by company name.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "name": {
+       "type": "string",
+       "description": "Name of the company. "
+      }
+     },
+     "required": [
+      "name"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "symbol": {
+       "type": "string",
+       "description": "Symbol of the stock or \"Stock not found\" if not available."
+      }
+     }
+    }
+   },
+   {
+    "name": "get_transaction_history",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Get the transaction history within a specified date range.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "start_date": {
+       "type": "string",
+       "description": "Start date for the history (format: 'YYYY-MM-DD').",
+       "default": "None"
+      },
+      "end_date": {
+       "type": "string",
+       "description": "End date for the history (format: 'YYYY-MM-DD'). ",
+       "default": "None"
+      }
+     },
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "transaction_history": {
+       "type": "array",
+       "description": "List of transactions within the specified date range.",
+       "items": {
+        "type": "dict",
+        "properties": {
+         "type": {
+          "type": "string",
+          "description": "Type of transaction. [Enum]: [\"deposit\", \"withdrawal\"]"
+         },
+         "amount": {
+          "type": "float",
+          "description": "Amount involved in the transaction."
+         },
+         "timestamp": {
+          "type": "string",
+          "description": "Timestamp of the transaction, formatted as 'YYYY-MM-DD HH:MM:SS'."
+         }
+        }
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "get_watchlist",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Get the watchlist.",
+    "parameters": {
+     "type": "dict",
+     "properties": {},
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "watchlist": {
+       "type": "array",
+       "description": "List of stock symbols in the watchlist.",
+       "items": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "make_transaction",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Make a deposit or withdrawal based on specified amount.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "account_id": {
+       "type": "integer",
+       "description": "ID of the account."
+      },
+      "xact_type": {
+       "type": "string",
+       "description": "Transaction type (deposit or withdrawal)."
+      },
+      "amount": {
+       "type": "float",
+       "description": "Amount to deposit or withdraw. "
+      }
+     },
+     "required": [
+      "account_id",
+      "xact_type",
+      "amount"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "status": {
+       "type": "string",
+       "description": "Status of the transaction."
+      },
+      "new_balance": {
+       "type": "float",
+       "description": "Updated account balance after the transaction."
+      }
+     }
+    }
+   },
+   {
+    "name": "notify_price_change",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Notify if there is a significant price change in the stocks.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "stocks": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       },
+       "description": "List of stock symbols to check."
+      },
+      "threshold": {
+       "type": "float",
+       "description": "Percentage change threshold to trigger a notification. "
+      }
+     },
+     "required": [
+      "stocks",
+      "threshold"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "notification": {
+       "type": "string",
+       "description": "Notification message about the price changes."
+      }
+     }
+    }
+   },
+   {
+    "name": "place_order",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Place an order.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "order_type": {
+       "type": "string",
+       "description": "Type of the order (Buy/Sell)."
+      },
+      "symbol": {
+       "type": "string",
+       "description": "Symbol of the stock to trade."
+      },
+      "price": {
+       "type": "float",
+       "description": "Price at which to place the order."
+      },
+      "amount": {
+       "type": "integer",
+       "description": "Number of shares to trade. "
+      }
+     },
+     "required": [
+      "order_type",
+      "symbol",
+      "price",
+      "amount"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "order_id": {
+       "type": "integer",
+       "description": "ID of the newly placed order."
+      },
+      "order_type": {
+       "type": "string",
+       "description": "Type of the order (Buy/Sell)."
+      },
+      "status": {
+       "type": "string",
+       "description": "Initial status of the order."
+      },
+      "price": {
+       "type": "float",
+       "description": "Price at which the order was placed."
+      },
+      "amount": {
+       "type": "integer",
+       "description": "Number of shares in the order."
+      }
+     }
+    }
+   },
+   {
+    "name": "remove_stock_from_watchlist",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Remove a stock from the watchlist.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "symbol": {
+       "type": "string",
+       "description": "Symbol of the stock to remove. "
+      }
+     },
+     "required": [
+      "symbol"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "status": {
+       "type": "string",
+       "description": "Status of the removal operation."
+      }
+     }
+    }
+   },
+   {
+    "name": "trading_get_login_status",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Get the login status.",
+    "parameters": {
+     "type": "dict",
+     "properties": {},
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "status": {
+       "type": "boolean",
+       "description": "Login status."
+      }
+     }
+    }
+   },
+   {
+    "name": "trading_login",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Handle user login.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "username": {
+       "type": "string",
+       "description": "Username for authentication."
+      },
+      "password": {
+       "type": "string",
+       "description": "Password for authentication. "
+      }
+     },
+     "required": [
+      "username",
+      "password"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "status": {
+       "type": "string",
+       "description": "Login status message."
+      }
+     }
+    }
+   },
+   {
+    "name": "trading_logout",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Handle user logout for trading system.",
+    "parameters": {
+     "type": "dict",
+     "properties": {},
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "status": {
+       "type": "string",
+       "description": "Logout status message."
+      }
+     }
+    }
+   },
+   {
+    "name": "update_market_status",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Update the market status based on the current time.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "current_time_str": {
+       "type": "string",
+       "description": "Current time in HH:MM AM/PM format. "
+      }
+     },
+     "required": [
+      "current_time_str"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "status": {
+       "type": "string",
+       "description": "Status of the market. [Enum]: [\"Open\", \"Closed\"]"
+      }
+     }
+    }
+   },
+   {
+    "name": "update_stock_price",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Update the price of a stock.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "symbol": {
+       "type": "string",
+       "description": "Symbol of the stock to update."
+      },
+      "new_price": {
+       "type": "float",
+       "description": "New price of the stock. "
+      }
+     },
+     "required": [
+      "symbol",
+      "new_price"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "symbol": {
+       "type": "string",
+       "description": "Symbol of the updated stock."
+      },
+      "old_price": {
+       "type": "float",
+       "description": "Previous price of the stock."
+      },
+      "new_price": {
+       "type": "float",
+       "description": "Updated price of the stock."
+      }
+     }
+    }
+   }
+  ],
+  "expected": [
+   [
+    "get_stock_info(symbol='NVDA')"
+   ],
+   [
+    "fund_account(amount=2203.4)"
+   ]
+  ],
+  "expected_kind": "multiturn"
+ },
+ {
+  "id": "multi_turn_base_149",
+  "version": "v3",
+  "category": "multi_turn",
+  "file": "BFCL_v3_multi_turn_base.json",
+  "index": 149,
+  "question": [
+   [
+    {
+     "role": "user",
+     "content": "Hi there! I've noticed Zeta Corp's stocks have been slipping more than I'd like. Would you be able to pull up their stock information for a quick review and also make sure it's no longer on my watchlist?"
+    }
+   ],
+   [
+    {
+     "role": "user",
+     "content": "Could you compile a list of all the stocks currently on my watchlist? I'm aiming to get a better grip on my portfolio management."
+    }
+   ],
+   [
+    {
+     "role": "user",
+     "content": "I think it would be wise to let my friend know about the changes I'm making, specifically regarding Zeta Corp. Please send a note to my friend's user ID USR003 stating, 'I've decided to drop those dipping stocks from my line-up.' My user id is 'USR002'."
+    }
+   ],
+   [
+    {
+     "role": "user",
+     "content": "Would you mind showing me any recent messages I've sent?"
+    }
+   ],
+   [
+    {
+     "role": "user",
+     "content": "My friend mentioned something quite irrelevant and outdated in one of the messages. Can you help me by delete message id: 67410?"
+    }
+   ]
+  ],
+  "involved_classes": [
+   "MessageAPI",
+   "TradingBot"
+  ],
+  "functions": [
+   {
+    "name": "add_contact",
+    "description": "This tool belongs to the Message API, which is used to manage user interactions in a workspace. Tool description: Add a contact to the workspace.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "user_name": {
+       "type": "string",
+       "description": "User name of contact to be added."
+      }
+     },
+     "required": [
+      "user_name"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "added_status": {
+       "type": "boolean",
+       "description": "True if the contact was added successfully, False otherwise."
+      },
+      "user_id": {
+       "type": "string",
+       "description": "User ID of the added contact."
+      },
+      "message": {
+       "type": "string",
+       "description": "A message describing the result of the addition attempt."
+      }
+     }
+    }
+   },
+   {
+    "name": "delete_message",
+    "description": "This tool belongs to the Message API, which is used to manage user interactions in a workspace. Tool description: Delete the latest message sent to a receiver.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "receiver_id": {
+       "type": "string",
+       "description": "User ID of the user to send the message to."
+      },
+      "message_id": {
+       "type": "integer",
+       "description": "ID of the message to be deleted."
+      }
+     },
+     "required": [
+      "receiver_id"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "deleted_status": {
+       "type": "boolean",
+       "description": "True if the message was deleted successfully, False otherwise."
+      },
+      "message_id": {
+       "type": "integer",
+       "description": "ID of the deleted message."
+      },
+      "message": {
+       "type": "string",
+       "description": "A message describing the result of the deletion attempt."
+      }
+     }
+    }
+   },
+   {
+    "name": "get_message_stats",
+    "description": "This tool belongs to the Message API, which is used to manage user interactions in a workspace. Tool description: Get statistics about messages for the current user.",
+    "parameters": {
+     "type": "dict",
+     "properties": {},
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "stats": {
+       "type": "dict",
+       "description": "Dictionary containing message statistics.",
+       "properties": {
+        "received_count": {
+         "type": "integer",
+         "description": "Number of messages received by the current user."
+        },
+        "total_contacts": {
+         "type": "integer",
+         "description": "Total number of contacts the user has interacted with."
+        }
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "get_user_id",
+    "description": "This tool belongs to the Message API, which is used to manage user interactions in a workspace. Tool description: Get user ID from user name.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "user": {
+       "type": "string",
+       "description": "User name of the user. "
+      }
+     },
+     "required": [
+      "user"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "user_id": {
+       "type": "string",
+       "description": "User ID of the user"
+      }
+     }
+    }
+   },
+   {
+    "name": "list_users",
+    "description": "This tool belongs to the Message API, which is used to manage user interactions in a workspace. Tool description: List all users in the workspace.",
+    "parameters": {
+     "type": "dict",
+     "properties": {},
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "user_list": {
+       "type": "array",
+       "description": "List of all users in the workspace.",
+       "items": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "message_get_login_status",
+    "description": "This tool belongs to the Message API, which is used to manage user interactions in a workspace. Tool description: Get the login status of the current user.",
+    "parameters": {
+     "type": "dict",
+     "properties": {},
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "login_status": {
+       "type": "boolean",
+       "description": "True if the current user is logged in, False otherwise."
+      }
+     }
+    }
+   },
+   {
+    "name": "message_login",
+    "description": "This tool belongs to the Message API, which is used to manage user interactions in a workspace. Tool description: Log in a user with the given user ID to messeage application.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "user_id": {
+       "type": "string",
+       "description": "User ID of the user to log in. "
+      }
+     },
+     "required": [
+      "user_id"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "login_status": {
+       "type": "boolean",
+       "description": "True if login was successful, False otherwise."
+      },
+      "message": {
+       "type": "string",
+       "description": "A message describing the result of the login attempt."
+      }
+     }
+    }
+   },
+   {
+    "name": "search_messages",
+    "description": "This tool belongs to the Message API, which is used to manage user interactions in a workspace. Tool description: Search for messages containing a specific keyword.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "keyword": {
+       "type": "string",
+       "description": "The keyword to search for in messages."
+      }
+     },
+     "required": [
+      "keyword"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "results": {
+       "type": "array",
+       "description": "List of dictionaries containing matching messages.",
+       "items": {
+        "type": "dict",
+        "properties": {
+         "receiver_id": {
+          "type": "string",
+          "description": "User ID of the receiver of the message."
+         },
+         "message": {
+          "type": "string",
+          "description": "The message containing the keyword."
+         }
+        }
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "send_message",
+    "description": "This tool belongs to the Message API, which is used to manage user interactions in a workspace. Tool description: Send a message to a user.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "receiver_id": {
+       "type": "string",
+       "description": "User ID of the user to send the message to."
+      },
+      "message": {
+       "type": "string",
+       "description": "Message to be sent."
+      }
+     },
+     "required": [
+      "receiver_id",
+      "message"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "sent_status": {
+       "type": "boolean",
+       "description": "True if the message was sent successfully, False otherwise."
+      },
+      "message_id": {
+       "type": "integer",
+       "description": "ID of the sent message."
+      },
+      "message": {
+       "type": "string",
+       "description": "A message describing the result of the send attempt."
+      }
+     }
+    }
+   },
+   {
+    "name": "view_messages_sent",
+    "description": "This tool belongs to the Message API, which is used to manage user interactions in a workspace. Tool description: View all historical messages sent by the current user.",
+    "parameters": {
+     "type": "dict",
+     "properties": {},
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "messages": {
+       "type": "dict",
+       "description": "Dictionary of messages grouped by receiver An example of the messages dictionary is {\"USR001\":[\"Hello\"],\"USR002\":[\"World\"]}."
+      }
+     }
+    }
+   },
+   {
+    "name": "add_to_watchlist",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Add a stock to the watchlist.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "stock": {
+       "type": "string",
+       "description": "the stock symbol to add to the watchlist. "
+      }
+     },
+     "required": [
+      "stock"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "symbol": {
+       "type": "string",
+       "description": "the symbol that were successfully added to the watchlist."
+      }
+     }
+    }
+   },
+   {
+    "name": "cancel_order",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Cancel an order.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "order_id": {
+       "type": "integer",
+       "description": "ID of the order to cancel. "
+      }
+     },
+     "required": [
+      "order_id"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "order_id": {
+       "type": "integer",
+       "description": "ID of the cancelled order."
+      },
+      "status": {
+       "type": "string",
+       "description": "New status of the order after cancellation attempt."
+      }
+     }
+    }
+   },
+   {
+    "name": "filter_stocks_by_price",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Filter stocks based on a price range.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "stocks": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       },
+       "description": "List of stock symbols to filter."
+      },
+      "min_price": {
+       "type": "float",
+       "description": "Minimum stock price."
+      },
+      "max_price": {
+       "type": "float",
+       "description": "Maximum stock price. "
+      }
+     },
+     "required": [
+      "stocks",
+      "min_price",
+      "max_price"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "filtered_stocks": {
+       "type": "array",
+       "description": "Filtered list of stock symbols within the price range.",
+       "items": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "fund_account",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Fund the account with the specified amount.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "amount": {
+       "type": "float",
+       "description": "Amount to fund the account with. "
+      }
+     },
+     "required": [
+      "amount"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "status": {
+       "type": "string",
+       "description": "Status of the funding operation."
+      },
+      "new_balance": {
+       "type": "float",
+       "description": "Updated account balance after funding."
+      }
+     }
+    }
+   },
+   {
+    "name": "get_account_info",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Get account information.",
+    "parameters": {
+     "type": "dict",
+     "properties": {},
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "account_id": {
+       "type": "integer",
+       "description": "ID of the account."
+      },
+      "balance": {
+       "type": "float",
+       "description": "Current balance of the account."
+      },
+      "binding_card": {
+       "type": "integer",
+       "description": "Card number associated with the account."
+      }
+     }
+    }
+   },
+   {
+    "name": "get_available_stocks",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Get a list of stock symbols in the given sector.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "sector": {
+       "type": "string",
+       "description": "The sector to retrieve stocks from (e.g., 'Technology'). "
+      }
+     },
+     "required": [
+      "sector"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "stock_list": {
+       "type": "array",
+       "description": "List of stock symbols in the specified sector.",
+       "items": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "get_current_time",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Get the current time.",
+    "parameters": {
+     "type": "dict",
+     "properties": {},
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "current_time": {
+       "type": "string",
+       "description": "Current time in HH:MM AM/PM format."
+      }
+     }
+    }
+   },
+   {
+    "name": "get_order_details",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Get the details of an order.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "order_id": {
+       "type": "integer",
+       "description": "ID of the order. "
+      }
+     },
+     "required": [
+      "order_id"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "id": {
+       "type": "integer",
+       "description": "ID of the order."
+      },
+      "order_type": {
+       "type": "string",
+       "description": "Type of the order."
+      },
+      "symbol": {
+       "type": "string",
+       "description": "Symbol of the stock in the order."
+      },
+      "price": {
+       "type": "float",
+       "description": "Price at which the order was placed."
+      },
+      "amount": {
+       "type": "integer",
+       "description": "Number of shares in the order."
+      },
+      "status": {
+       "type": "string",
+       "description": "Current status of the order. [Enum]: [\"Open\", \"Pending\", \"Completed\", \"Cancelled\"]"
+      }
+     }
+    }
+   },
+   {
+    "name": "get_order_history",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Get the stock order ID history.",
+    "parameters": {
+     "type": "dict",
+     "properties": {},
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "order_history": {
+       "type": "array",
+       "description": "List of orders ID in the order history.",
+       "items": {
+        "type": "integer"
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "get_stock_info",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Get the details of a stock.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "symbol": {
+       "type": "string",
+       "description": "Symbol that uniquely identifies the stock. "
+      }
+     },
+     "required": [
+      "symbol"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "price": {
+       "type": "float",
+       "description": "Current price of the stock."
+      },
+      "percent_change": {
+       "type": "float",
+       "description": "Percentage change in stock price."
+      },
+      "volume": {
+       "type": "float",
+       "description": "Trading volume of the stock. MA(5) (float): 5-day Moving Average of the stock. MA(20) (float): 20-day Moving Average of the stock."
+      }
+     }
+    }
+   },
+   {
+    "name": "get_symbol_by_name",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Get the symbol of a stock by company name.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "name": {
+       "type": "string",
+       "description": "Name of the company. "
+      }
+     },
+     "required": [
+      "name"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "symbol": {
+       "type": "string",
+       "description": "Symbol of the stock or \"Stock not found\" if not available."
+      }
+     }
+    }
+   },
+   {
+    "name": "get_transaction_history",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Get the transaction history within a specified date range.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "start_date": {
+       "type": "string",
+       "description": "Start date for the history (format: 'YYYY-MM-DD').",
+       "default": "None"
+      },
+      "end_date": {
+       "type": "string",
+       "description": "End date for the history (format: 'YYYY-MM-DD'). ",
+       "default": "None"
+      }
+     },
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "transaction_history": {
+       "type": "array",
+       "description": "List of transactions within the specified date range.",
+       "items": {
+        "type": "dict",
+        "properties": {
+         "type": {
+          "type": "string",
+          "description": "Type of transaction. [Enum]: [\"deposit\", \"withdrawal\"]"
+         },
+         "amount": {
+          "type": "float",
+          "description": "Amount involved in the transaction."
+         },
+         "timestamp": {
+          "type": "string",
+          "description": "Timestamp of the transaction, formatted as 'YYYY-MM-DD HH:MM:SS'."
+         }
+        }
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "get_watchlist",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Get the watchlist.",
+    "parameters": {
+     "type": "dict",
+     "properties": {},
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "watchlist": {
+       "type": "array",
+       "description": "List of stock symbols in the watchlist.",
+       "items": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "make_transaction",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Make a deposit or withdrawal based on specified amount.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "account_id": {
+       "type": "integer",
+       "description": "ID of the account."
+      },
+      "xact_type": {
+       "type": "string",
+       "description": "Transaction type (deposit or withdrawal)."
+      },
+      "amount": {
+       "type": "float",
+       "description": "Amount to deposit or withdraw. "
+      }
+     },
+     "required": [
+      "account_id",
+      "xact_type",
+      "amount"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "status": {
+       "type": "string",
+       "description": "Status of the transaction."
+      },
+      "new_balance": {
+       "type": "float",
+       "description": "Updated account balance after the transaction."
+      }
+     }
+    }
+   },
+   {
+    "name": "notify_price_change",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Notify if there is a significant price change in the stocks.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "stocks": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       },
+       "description": "List of stock symbols to check."
+      },
+      "threshold": {
+       "type": "float",
+       "description": "Percentage change threshold to trigger a notification. "
+      }
+     },
+     "required": [
+      "stocks",
+      "threshold"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "notification": {
+       "type": "string",
+       "description": "Notification message about the price changes."
+      }
+     }
+    }
+   },
+   {
+    "name": "place_order",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Place an order.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "order_type": {
+       "type": "string",
+       "description": "Type of the order (Buy/Sell)."
+      },
+      "symbol": {
+       "type": "string",
+       "description": "Symbol of the stock to trade."
+      },
+      "price": {
+       "type": "float",
+       "description": "Price at which to place the order."
+      },
+      "amount": {
+       "type": "integer",
+       "description": "Number of shares to trade. "
+      }
+     },
+     "required": [
+      "order_type",
+      "symbol",
+      "price",
+      "amount"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "order_id": {
+       "type": "integer",
+       "description": "ID of the newly placed order."
+      },
+      "order_type": {
+       "type": "string",
+       "description": "Type of the order (Buy/Sell)."
+      },
+      "status": {
+       "type": "string",
+       "description": "Initial status of the order."
+      },
+      "price": {
+       "type": "float",
+       "description": "Price at which the order was placed."
+      },
+      "amount": {
+       "type": "integer",
+       "description": "Number of shares in the order."
+      }
+     }
+    }
+   },
+   {
+    "name": "remove_stock_from_watchlist",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Remove a stock from the watchlist.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "symbol": {
+       "type": "string",
+       "description": "Symbol of the stock to remove. "
+      }
+     },
+     "required": [
+      "symbol"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "status": {
+       "type": "string",
+       "description": "Status of the removal operation."
+      }
+     }
+    }
+   },
+   {
+    "name": "trading_get_login_status",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Get the login status.",
+    "parameters": {
+     "type": "dict",
+     "properties": {},
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "status": {
+       "type": "boolean",
+       "description": "Login status."
+      }
+     }
+    }
+   },
+   {
+    "name": "trading_login",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Handle user login.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "username": {
+       "type": "string",
+       "description": "Username for authentication."
+      },
+      "password": {
+       "type": "string",
+       "description": "Password for authentication. "
+      }
+     },
+     "required": [
+      "username",
+      "password"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "status": {
+       "type": "string",
+       "description": "Login status message."
+      }
+     }
+    }
+   },
+   {
+    "name": "trading_logout",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Handle user logout for trading system.",
+    "parameters": {
+     "type": "dict",
+     "properties": {},
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "status": {
+       "type": "string",
+       "description": "Logout status message."
+      }
+     }
+    }
+   },
+   {
+    "name": "update_market_status",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Update the market status based on the current time.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "current_time_str": {
+       "type": "string",
+       "description": "Current time in HH:MM AM/PM format. "
+      }
+     },
+     "required": [
+      "current_time_str"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "status": {
+       "type": "string",
+       "description": "Status of the market. [Enum]: [\"Open\", \"Closed\"]"
+      }
+     }
+    }
+   },
+   {
+    "name": "update_stock_price",
+    "description": "This tool belongs to the trading system, which allows users to trade stocks, manage their account, and view stock information. Tool description: Update the price of a stock.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "symbol": {
+       "type": "string",
+       "description": "Symbol of the stock to update."
+      },
+      "new_price": {
+       "type": "float",
+       "description": "New price of the stock. "
+      }
+     },
+     "required": [
+      "symbol",
+      "new_price"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "symbol": {
+       "type": "string",
+       "description": "Symbol of the updated stock."
+      },
+      "old_price": {
+       "type": "float",
+       "description": "Previous price of the stock."
+      },
+      "new_price": {
+       "type": "float",
+       "description": "Updated price of the stock."
+      }
+     }
+    }
+   }
+  ],
+  "expected": [
+   [
+    "remove_stock_from_watchlist(symbol='ZETA')"
+   ],
+   [
+    "get_watchlist()"
+   ],
+   [
+    "send_message(receiver_id='USR003', message='I\\'ve decided to drop those dipping stocks from my line-up.')"
+   ],
+   [
+    "view_messages_sent()"
+   ],
+   [
+    "delete_message(receiver_id='USR003')"
+   ]
+  ],
+  "expected_kind": "multiturn"
+ },
+ {
+  "id": "multi_turn_base_199",
+  "version": "v3",
+  "category": "multi_turn",
+  "file": "BFCL_v3_multi_turn_base.json",
+  "index": 199,
+  "question": [
+   [
+    {
+     "role": "user",
+     "content": "I'm planning a journey from Los Angeles to New York on the morning of April 15th 2024, preferring to fly business class. Arrange this flight using my pre-linked credit card with id 'card_123456789' and access token 'abc123xyz'."
+    }
+   ],
+   [
+    {
+     "role": "user",
+     "content": "With my flight now secured, I need to review the invoice outlining the costs involved. Retrieve that invoice for me, please."
+    }
+   ],
+   [
+    {
+     "role": "user",
+     "content": "There were hiccups during the booking process. Reach out to customer support and detail the challenges I faced."
+    }
+   ],
+   [
+    {
+     "role": "user",
+     "content": "Loggin in as USR001 for messaging. Once you've reached out to them, please brief my colleague Catherine (id='USR003') on the situation using my sender id 'MichaelTpss', message to send be 'Update on flight issue and customer support contact.'."
+    }
+   ],
+   [
+    {
+     "role": "user",
+     "content": "Finally, compile and present all the responses sent following the communications regarding the flight issue."
+    }
+   ]
+  ],
+  "involved_classes": [
+   "MessageAPI",
+   "TravelAPI"
+  ],
+  "functions": [
+   {
+    "name": "add_contact",
+    "description": "This tool belongs to the Message API, which is used to manage user interactions in a workspace. Tool description: Add a contact to the workspace.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "user_name": {
+       "type": "string",
+       "description": "User name of contact to be added."
+      }
+     },
+     "required": [
+      "user_name"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "added_status": {
+       "type": "boolean",
+       "description": "True if the contact was added successfully, False otherwise."
+      },
+      "user_id": {
+       "type": "string",
+       "description": "User ID of the added contact."
+      },
+      "message": {
+       "type": "string",
+       "description": "A message describing the result of the addition attempt."
+      }
+     }
+    }
+   },
+   {
+    "name": "delete_message",
+    "description": "This tool belongs to the Message API, which is used to manage user interactions in a workspace. Tool description: Delete the latest message sent to a receiver.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "receiver_id": {
+       "type": "string",
+       "description": "User ID of the user to send the message to."
+      },
+      "message_id": {
+       "type": "integer",
+       "description": "ID of the message to be deleted."
+      }
+     },
+     "required": [
+      "receiver_id"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "deleted_status": {
+       "type": "boolean",
+       "description": "True if the message was deleted successfully, False otherwise."
+      },
+      "message_id": {
+       "type": "integer",
+       "description": "ID of the deleted message."
+      },
+      "message": {
+       "type": "string",
+       "description": "A message describing the result of the deletion attempt."
+      }
+     }
+    }
+   },
+   {
+    "name": "get_message_stats",
+    "description": "This tool belongs to the Message API, which is used to manage user interactions in a workspace. Tool description: Get statistics about messages for the current user.",
+    "parameters": {
+     "type": "dict",
+     "properties": {},
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "stats": {
+       "type": "dict",
+       "description": "Dictionary containing message statistics.",
+       "properties": {
+        "received_count": {
+         "type": "integer",
+         "description": "Number of messages received by the current user."
+        },
+        "total_contacts": {
+         "type": "integer",
+         "description": "Total number of contacts the user has interacted with."
+        }
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "get_user_id",
+    "description": "This tool belongs to the Message API, which is used to manage user interactions in a workspace. Tool description: Get user ID from user name.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "user": {
+       "type": "string",
+       "description": "User name of the user. "
+      }
+     },
+     "required": [
+      "user"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "user_id": {
+       "type": "string",
+       "description": "User ID of the user"
+      }
+     }
+    }
+   },
+   {
+    "name": "list_users",
+    "description": "This tool belongs to the Message API, which is used to manage user interactions in a workspace. Tool description: List all users in the workspace.",
+    "parameters": {
+     "type": "dict",
+     "properties": {},
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "user_list": {
+       "type": "array",
+       "description": "List of all users in the workspace.",
+       "items": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "message_get_login_status",
+    "description": "This tool belongs to the Message API, which is used to manage user interactions in a workspace. Tool description: Get the login status of the current user.",
+    "parameters": {
+     "type": "dict",
+     "properties": {},
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "login_status": {
+       "type": "boolean",
+       "description": "True if the current user is logged in, False otherwise."
+      }
+     }
+    }
+   },
+   {
+    "name": "message_login",
+    "description": "This tool belongs to the Message API, which is used to manage user interactions in a workspace. Tool description: Log in a user with the given user ID to messeage application.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "user_id": {
+       "type": "string",
+       "description": "User ID of the user to log in. "
+      }
+     },
+     "required": [
+      "user_id"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "login_status": {
+       "type": "boolean",
+       "description": "True if login was successful, False otherwise."
+      },
+      "message": {
+       "type": "string",
+       "description": "A message describing the result of the login attempt."
+      }
+     }
+    }
+   },
+   {
+    "name": "search_messages",
+    "description": "This tool belongs to the Message API, which is used to manage user interactions in a workspace. Tool description: Search for messages containing a specific keyword.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "keyword": {
+       "type": "string",
+       "description": "The keyword to search for in messages."
+      }
+     },
+     "required": [
+      "keyword"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "results": {
+       "type": "array",
+       "description": "List of dictionaries containing matching messages.",
+       "items": {
+        "type": "dict",
+        "properties": {
+         "receiver_id": {
+          "type": "string",
+          "description": "User ID of the receiver of the message."
+         },
+         "message": {
+          "type": "string",
+          "description": "The message containing the keyword."
+         }
+        }
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "send_message",
+    "description": "This tool belongs to the Message API, which is used to manage user interactions in a workspace. Tool description: Send a message to a user.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "receiver_id": {
+       "type": "string",
+       "description": "User ID of the user to send the message to."
+      },
+      "message": {
+       "type": "string",
+       "description": "Message to be sent."
+      }
+     },
+     "required": [
+      "receiver_id",
+      "message"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "sent_status": {
+       "type": "boolean",
+       "description": "True if the message was sent successfully, False otherwise."
+      },
+      "message_id": {
+       "type": "integer",
+       "description": "ID of the sent message."
+      },
+      "message": {
+       "type": "string",
+       "description": "A message describing the result of the send attempt."
+      }
+     }
+    }
+   },
+   {
+    "name": "view_messages_sent",
+    "description": "This tool belongs to the Message API, which is used to manage user interactions in a workspace. Tool description: View all historical messages sent by the current user.",
+    "parameters": {
+     "type": "dict",
+     "properties": {},
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "messages": {
+       "type": "dict",
+       "description": "Dictionary of messages grouped by receiver An example of the messages dictionary is {\"USR001\":[\"Hello\"],\"USR002\":[\"World\"]}."
+      }
+     }
+    }
+   },
+   {
+    "name": "authenticate_travel",
+    "description": "This tool belongs to the travel system, which allows users to book flights, manage credit cards, and view budget information. Tool description: Authenticate the user with the travel API",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "client_id": {
+       "type": "string",
+       "description": "The client applications client_id supplied by App Management"
+      },
+      "client_secret": {
+       "type": "string",
+       "description": "The client applications client_secret supplied by App Management"
+      },
+      "refresh_token": {
+       "type": "string",
+       "description": "The refresh token obtained from the initial authentication"
+      },
+      "grant_type": {
+       "type": "string",
+       "description": "The grant type of the authentication request. Here are the options: read_write, read, write"
+      },
+      "user_first_name": {
+       "type": "string",
+       "description": "The first name of the user"
+      },
+      "user_last_name": {
+       "type": "string",
+       "description": "The last name of the user"
+      }
+     },
+     "required": [
+      "client_id",
+      "client_secret",
+      "refresh_token",
+      "grant_type",
+      "user_first_name",
+      "user_last_name"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "expires_in": {
+       "type": "integer",
+       "description": "The number of time it can use until the access token expires"
+      },
+      "access_token": {
+       "type": "string",
+       "description": "The access token to be used in the Authorization header of future requests"
+      },
+      "token_type": {
+       "type": "string",
+       "description": "The type of token"
+      },
+      "scope": {
+       "type": "string",
+       "description": "The scope of the token"
+      }
+     }
+    }
+   },
+   {
+    "name": "book_flight",
+    "description": "This tool belongs to the travel system, which allows users to book flights, manage credit cards, and view budget information. Tool description: Book a flight given the travel information. From and To should be the airport codes in the IATA format.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "access_token": {
+       "type": "string",
+       "description": "The access token obtained from the authenticate"
+      },
+      "card_id": {
+       "type": "string",
+       "description": "The ID of the credit card to use for the booking"
+      },
+      "travel_date": {
+       "type": "string",
+       "description": "The date of the travel in the format YYYY-MM-DD"
+      },
+      "travel_from": {
+       "type": "string",
+       "description": "The location the travel is from"
+      },
+      "travel_to": {
+       "type": "string",
+       "description": "The location the travel is to"
+      },
+      "travel_class": {
+       "type": "string",
+       "description": "The class of the travel"
+      },
+      "travel_cost": {
+       "type": "float",
+       "description": "The cost of the travel"
+      }
+     },
+     "required": [
+      "access_token",
+      "card_id",
+      "travel_date",
+      "travel_from",
+      "travel_to",
+      "travel_class",
+      "travel_cost"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "booking_id": {
+       "type": "string",
+       "description": "The ID of the booking"
+      },
+      "transaction_id": {
+       "type": "string",
+       "description": "The ID of the transaction"
+      },
+      "booking_status": {
+       "type": "boolean",
+       "description": "The status of the booking, True if successful, False if failed"
+      },
+      "booking_history": {
+       "type": "dict",
+       "description": "The booking history if long context is enabled",
+       "properties": {
+        "booking_id": {
+         "type": "string",
+         "description": "The ID of the booking"
+        },
+        "transaction_id": {
+         "type": "string",
+         "description": "The ID of the transaction"
+        },
+        "travel_date": {
+         "type": "string",
+         "description": "The date of the travel"
+        },
+        "travel_from": {
+         "type": "string",
+         "description": "The location the travel is from"
+        },
+        "travel_to": {
+         "type": "string",
+         "description": "The location the travel is to"
+        },
+        "travel_class": {
+         "type": "string",
+         "description": "The class of the travel"
+        },
+        "travel_cost": {
+         "type": "float",
+         "description": "The cost of the travel"
+        }
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "cancel_booking",
+    "description": "This tool belongs to the travel system, which allows users to book flights, manage credit cards, and view budget information. Tool description: Cancel a booking",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "access_token": {
+       "type": "string",
+       "description": "The access token obtained from the authenticate"
+      },
+      "booking_id": {
+       "type": "string",
+       "description": "The ID of the booking"
+      }
+     },
+     "required": [
+      "access_token",
+      "booking_id"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "cancel_status": {
+       "type": "boolean",
+       "description": "The status of the cancellation, True if successful, False if failed"
+      }
+     }
+    }
+   },
+   {
+    "name": "compute_exchange_rate",
+    "description": "This tool belongs to the travel system, which allows users to book flights, manage credit cards, and view budget information. Tool description: Compute the exchange rate between two currencies",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "base_currency": {
+       "type": "string",
+       "description": "The base currency. [Enum]: USD, RMB, EUR, JPY, GBP, CAD, AUD, INR, RUB, BRL, MXN"
+      },
+      "target_currency": {
+       "type": "string",
+       "description": "The target currency. [Enum]: USD, RMB, EUR, JPY, GBP, CAD, AUD, INR, RUB, BRL, MXN"
+      },
+      "value": {
+       "type": "float",
+       "description": "The value to convert"
+      }
+     },
+     "required": [
+      "base_currency",
+      "target_currency",
+      "value"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "exchanged_value": {
+       "type": "float",
+       "description": "The value after the exchange"
+      }
+     }
+    }
+   },
+   {
+    "name": "contact_customer_support",
+    "description": "This tool belongs to the travel system, which allows users to book flights, manage credit cards, and view budget information. Tool description: Contact travel booking customer support, get immediate support on an issue with an online call.",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "booking_id": {
+       "type": "string",
+       "description": "The ID of the booking"
+      },
+      "message": {
+       "type": "string",
+       "description": "The message to send to customer support"
+      }
+     },
+     "required": [
+      "booking_id",
+      "message"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "customer_support_message": {
+       "type": "string",
+       "description": "The message from customer support"
+      }
+     }
+    }
+   },
+   {
+    "name": "get_all_credit_cards",
+    "description": "This tool belongs to the travel system, which allows users to book flights, manage credit cards, and view budget information. Tool description: Get all registered credit cards",
+    "parameters": {
+     "type": "dict",
+     "properties": {},
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "credit_card_list": {
+       "type": "dict",
+       "description": "A dictionary containing all registered credit cards",
+       "properties": {
+        "card_number": {
+         "type": "string",
+         "description": "The number of the credit card"
+        },
+        "expiration_date": {
+         "type": "string",
+         "description": "The expiration date of the credit card in the format YYYY-MM-DD"
+        },
+        "cardholder_name": {
+         "type": "string",
+         "description": "The name of the cardholder"
+        },
+        "card_verification_value": {
+         "type": "integer",
+         "description": "The verification value of the credit card"
+        },
+        "balance": {
+         "type": "float",
+         "description": "The balance of the credit card"
+        }
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "get_budget_fiscal_year",
+    "description": "This tool belongs to the travel system, which allows users to book flights, manage credit cards, and view budget information. Tool description: Get the budget fiscal year",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "lastModifiedAfter": {
+       "type": "string",
+       "description": "Use this field if you only want Fiscal Years that were changed after the supplied date. The supplied date will be interpreted in the UTC time zone. If lastModifiedAfter is not supplied, the service will return all Fiscal Years, regardless of modified date. Example: 2016-03-29T16:12:20. Return in the format of YYYY-MM-DDTHH:MM:SS.",
+       "default": "None"
+      },
+      "includeRemoved": {
+       "type": "string",
+       "description": "If true, the service will return all Fiscal Years, including those that were previously removed. If not supplied, this field defaults to false.",
+       "default": "None"
+      }
+     },
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "budget_fiscal_year": {
+       "type": "string",
+       "description": "The budget fiscal year"
+      }
+     }
+    }
+   },
+   {
+    "name": "get_credit_card_balance",
+    "description": "This tool belongs to the travel system, which allows users to book flights, manage credit cards, and view budget information. Tool description: Get the balance of a credit card",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "access_token": {
+       "type": "string",
+       "description": "The access token obtained from the authenticate"
+      },
+      "card_id": {
+       "type": "string",
+       "description": "The ID of the credit card"
+      }
+     },
+     "required": [
+      "access_token",
+      "card_id"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "card_balance": {
+       "type": "float",
+       "description": "The balance of the credit card"
+      }
+     }
+    }
+   },
+   {
+    "name": "get_flight_cost",
+    "description": "This tool belongs to the travel system, which allows users to book flights, manage credit cards, and view budget information. Tool description: Get the list of cost of a flight in USD based on location, date, and class",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "travel_from": {
+       "type": "string",
+       "description": "The 3 letter code of the departing airport"
+      },
+      "travel_to": {
+       "type": "string",
+       "description": "The 3 letter code of the arriving airport"
+      },
+      "travel_date": {
+       "type": "string",
+       "description": "The date of the travel in the format 'YYYY-MM-DD'"
+      },
+      "travel_class": {
+       "type": "string",
+       "description": "The class of the travel. Options are: economy, business, first."
+      }
+     },
+     "required": [
+      "travel_from",
+      "travel_to",
+      "travel_date",
+      "travel_class"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "travel_cost_list": {
+       "type": "array",
+       "description": "The list of cost of the travel",
+       "items": {
+        "type": "float"
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "get_nearest_airport_by_city",
+    "description": "This tool belongs to the travel system, which allows users to book flights, manage credit cards, and view budget information. Tool description: Get the nearest airport to the given location",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "location": {
+       "type": "string",
+       "description": "The name of the location. [Enum]: Rivermist, Stonebrook, Maplecrest, Silverpine, Shadowridge, London, Paris, Sunset Valley, Oakendale, Willowbend, Crescent Hollow, Autumnville, Pinehaven, Greenfield, San Francisco, Los Angeles, New York, Chicago, Boston, Beijing, Hong Kong, Rome, Tokyo"
+      }
+     },
+     "required": [
+      "location"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "nearest_airport": {
+       "type": "string",
+       "description": "The nearest airport to the given location"
+      }
+     }
+    }
+   },
+   {
+    "name": "list_all_airports",
+    "description": "This tool belongs to the travel system, which allows users to book flights, manage credit cards, and view budget information. Tool description: List all available airports",
+    "parameters": {
+     "type": "dict",
+     "properties": {},
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "airports": {
+       "type": "array",
+       "description": "A list of all available airports",
+       "items": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "purchase_insurance",
+    "description": "This tool belongs to the travel system, which allows users to book flights, manage credit cards, and view budget information. Tool description: Purchase insurance",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "access_token": {
+       "type": "string",
+       "description": "The access token obtained from the authenticate"
+      },
+      "insurance_type": {
+       "type": "string",
+       "description": "The type of insurance to purchase"
+      },
+      "insurance_cost": {
+       "type": "float",
+       "description": "The cost of the insurance"
+      },
+      "booking_id": {
+       "type": "string",
+       "description": "The ID of the booking"
+      },
+      "card_id": {
+       "type": "string",
+       "description": "The ID of the credit card to use for the"
+      }
+     },
+     "required": [
+      "access_token",
+      "insurance_type",
+      "booking_id",
+      "insurance_cost",
+      "card_id"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "insurance_id": {
+       "type": "string",
+       "description": "The ID of the insurance"
+      },
+      "insurance_status": {
+       "type": "boolean",
+       "description": "The status of the insurance purchase, True if successful, False if failed"
+      }
+     }
+    }
+   },
+   {
+    "name": "register_credit_card",
+    "description": "This tool belongs to the travel system, which allows users to book flights, manage credit cards, and view budget information. Tool description: Register a credit card",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "access_token": {
+       "type": "string",
+       "description": "The access token obtained from the authenticate method"
+      },
+      "card_number": {
+       "type": "string",
+       "description": "The credit card number"
+      },
+      "expiration_date": {
+       "type": "string",
+       "description": "The expiration date of the credit card in the format MM/YYYY"
+      },
+      "cardholder_name": {
+       "type": "string",
+       "description": "The name of the cardholder"
+      },
+      "card_verification_number": {
+       "type": "integer",
+       "description": "The card verification number"
+      }
+     },
+     "required": [
+      "access_token",
+      "card_number",
+      "expiration_date",
+      "cardholder_name",
+      "card_verification_number"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "card_id": {
+       "type": "string",
+       "description": "The ID of the registered credit card"
+      }
+     }
+    }
+   },
+   {
+    "name": "retrieve_invoice",
+    "description": "This tool belongs to the travel system, which allows users to book flights, manage credit cards, and view budget information. Tool description: Retrieve the invoice for a booking",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "access_token": {
+       "type": "string",
+       "description": "The access token obtained from the authenticate"
+      },
+      "booking_id": {
+       "type": "string",
+       "description": "The ID of the booking",
+       "default": "None"
+      },
+      "insurance_id": {
+       "type": "string",
+       "description": "The ID of the insurance",
+       "default": "None"
+      }
+     },
+     "required": [
+      "access_token"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "invoice": {
+       "type": "dict",
+       "description": "The invoice for the booking",
+       "properties": {
+        "booking_id": {
+         "type": "string",
+         "description": "The ID of the booking"
+        },
+        "travel_date": {
+         "type": "string",
+         "description": "The date of the travel"
+        },
+        "travel_from": {
+         "type": "string",
+         "description": "The location the travel is from"
+        },
+        "travel_to": {
+         "type": "string",
+         "description": "The location the travel is to"
+        },
+        "travel_class": {
+         "type": "string",
+         "description": "The class of the travel"
+        },
+        "travel_cost": {
+         "type": "float",
+         "description": "The cost of the travel"
+        },
+        "transaction_id": {
+         "type": "string",
+         "description": "The ID of the transaction"
+        }
+       }
+      }
+     }
+    }
+   },
+   {
+    "name": "set_budget_limit",
+    "description": "This tool belongs to the travel system, which allows users to book flights, manage credit cards, and view budget information. Tool description: Set the budget limit for the user",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "access_token": {
+       "type": "string",
+       "description": "The access token obtained from the authentication process or initial configuration."
+      },
+      "budget_limit": {
+       "type": "float",
+       "description": "The budget limit to set in USD"
+      }
+     },
+     "required": [
+      "access_token",
+      "budget_limit"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "budget_limit": {
+       "type": "float",
+       "description": "The budget limit set in USD"
+      }
+     }
+    }
+   },
+   {
+    "name": "travel_get_login_status",
+    "description": "This tool belongs to the travel system, which allows users to book flights, manage credit cards, and view budget information. Tool description: Get the status of the login",
+    "parameters": {
+     "type": "dict",
+     "properties": {},
+     "required": []
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "status": {
+       "type": "boolean",
+       "description": "The status of the login"
+      }
+     }
+    }
+   },
+   {
+    "name": "verify_traveler_information",
+    "description": "This tool belongs to the travel system, which allows users to book flights, manage credit cards, and view budget information. Tool description: Verify the traveler information",
+    "parameters": {
+     "type": "dict",
+     "properties": {
+      "first_name": {
+       "type": "string",
+       "description": "The first name of the traveler"
+      },
+      "last_name": {
+       "type": "string",
+       "description": "The last name of the traveler"
+      },
+      "date_of_birth": {
+       "type": "string",
+       "description": "The date of birth of the traveler in the format YYYY-MM-DD"
+      },
+      "passport_number": {
+       "type": "string",
+       "description": "The passport number of the traveler"
+      }
+     },
+     "required": [
+      "first_name",
+      "last_name",
+      "date_of_birth",
+      "passport_number"
+     ]
+    },
+    "response": {
+     "type": "dict",
+     "properties": {
+      "verification_status": {
+       "type": "boolean",
+       "description": "The status of the verification, True if successful, False if failed"
+      },
+      "verification_failure": {
+       "type": "string",
+       "description": "The reason for the verification failure"
+      }
+     }
+    }
+   }
+  ],
+  "expected": [
+   [
+    "get_flight_cost(travel_from='LAX', travel_to='JFK', travel_date='2024-04-15', travel_class='business')",
+    "book_flight(access_token='abc123xyz', card_id='card_123456789', travel_date='2024-04-15', travel_from='LAX', travel_to='JFK', travel_class='business', travel_cost=2400.0)"
+   ],
+   [
+    "retrieve_invoice(access_token='abc123xyz', booking_id='3426812')"
+   ],
+   [
+    "contact_customer_support(booking_id='3426812', message='There were hiccups during the booking process. Please assist.')"
+   ],
+   [
+    "message_login(user_id='USR001')",
+    "send_message(receiver_id='USR003', message='Update on flight issue and customer support contact.')"
+   ],
+   [
+    "view_messages_sent()"
+   ]
+  ],
+  "expected_kind": "multiturn"
+ }
+]

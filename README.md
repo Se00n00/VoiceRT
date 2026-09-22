@@ -219,9 +219,9 @@ Terminal tools run on the host by default. Pass a `SandboxConfig` to run
 the docker CLI — no new dependencies):
 
 ```python
+from src.main import VoiceAgent, VoiceAgentConfig
 from src.sandbox.docker import SandboxConfig
-from src.agent.terminal import TerminalConfig, TerminalHarness
-harness = TerminalHarness(llm=..., config=TerminalConfig(sandbox=SandboxConfig()))
+agent = VoiceAgent(VoiceAgentConfig(sandbox=SandboxConfig()))
 # or: PYTHONPATH=. .venv/bin/python llm_chat.py --sandbox
 ```
 
@@ -230,8 +230,8 @@ What it is (honest version): separate pid/network/mount namespaces,
 cwd is bind-mounted at `/work`, so file ops work on host files unchanged
 — containment covers processes, network, devices and resources, not
 filesystem secrecy. Policy deny-list + `y/n` confirm stay on top.
-`read`/`write`/`edit`/`grep`/`list` stay host-side on the same tree;
-`spawn_terminal` always stays on host (it opens a host window).
+`read`/`write`/`edit`/`grep`/`list` stay host-side on the same tree.
+`python_exec`/`docker_exec` always run containerized (MCP or local).
 
 Defaults: image `python:3.12-slim` (needs `bash`, `python3`, GNU
 `timeout`), `--network none`, `--memory 1g`, `--cpus 2`. Requirements:

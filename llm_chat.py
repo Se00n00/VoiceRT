@@ -1,7 +1,6 @@
-"""Plain LLM REPL - no TUI, no VAD/STT/TTS.
+"""Plain REPL over the unified VoiceAgent - no TUI, no VAD/STT/TTS weights.
 
-Tests LlmModel + TerminalHarness only:
-  text in -> think/tool loop -> text out
+Text in -> think/tool loop -> text out (same agent as voice + terminal).
 
 Run:
   PYTHONPATH=. python llm_chat.py
@@ -14,8 +13,8 @@ import argparse
 import asyncio
 import uuid
 
+from src.main import VoiceAgent, VoiceAgentConfig
 from src.models.llm import LlmConfig, LlmModel, split_thinking
-from src.agent.terminal import TerminalConfig, TerminalHarness
 
 
 async def confirm(action) -> bool | str:
@@ -70,18 +69,17 @@ async def raw_loop(llm: LlmModel, max_tokens: int) -> None:
         history = history[-20:]  # keep prompt small
 
 
-async def harness_loop(llm: LlmModel, cwd: str, max_tokens: int, logf=None,
+async def harness_loop(llm: LlmModel, cwd: str, logf=None,
                      sandbox=None) -> None:
     def log(*parts):
         if logf is not None:
             print(*parts, file=logf, flush=True)
-    harness = TerminalHarness(
-        llm=llm,
-        tts=None,  # text-only: skip Kokoro
-        config=TerminalConfig(cwd=cwd, max_tokens_per_step=max_tokens,
-                              sandbox=sandbox),
-        confirm_fn=confirm,
-    )
+    agent = VoiceAgent(VoiceAgentConfig(sandbox=sandbox))
+    agent.llm = llm  # warmed leg above; vad/stt/tts stay cold (unused)
+    agent.tts = None
+    from src.agent.chat_model import LocalChatModel
+
+    agent.chat_model = LocalChatModel(llm=llm)
     sid = uuid.uuid4().hex[:8]
     print(f"harness mode - session {sid}, cwd {cwd}. /quit to exit, /new for new session.")
     while True:
@@ -103,8 +101,6 @@ async def harness_loop(llm: LlmModel, cwd: str, max_tokens: int, logf=None,
             p = text[5:].strip()
             if p and os.path.isdir(p):
                 cwd = os.path.abspath(p)
-                harness.config = TerminalConfig(cwd=cwd, max_tokens_per_step=max_tokens,
-                                                sandbox=sandbox)
                 print(f"cwd {cwd}")
             else:
                 print(f"bad dir: {p}")
@@ -116,7 +112,8 @@ async def harness_loop(llm: LlmModel, cwd: str, max_tokens: int, logf=None,
         last_think = ""
         log(f"=== turn: {text!r} sid={sid} cwd={cwd}")
         try:
-            async for ev in harness.run_turn(text, session_id=sid, cwd=cwd):
+            async for ev in agent.run_text(text, session_id=sid, cwd=cwd,
+                                           confirm_fn=confirm):
                 d = ev.data or {}
                 if ev.kind == "token":
                     piece = str(d.get("piece", "") or "")
@@ -143,7 +140,7 @@ async def harness_loop(llm: LlmModel, cwd: str, max_tokens: int, logf=None,
                         print(f"  think: {think[:800]}")
                 elif ev.kind == "action":
                     a = d.get("action", {})
-                    print(f"  $ {a.get('action')}: {a.get('command') or a.get('path') or a.get('pattern') or ''}")
+                    print(f"  $ {a.get('action')}: {a.get('command') or a.get('path') or a.get('pattern') or (a.get('code') or '')[:60] or ''}")
                 elif ev.kind == "observation":
                     print(f"  -> {str(d.get('observation', ''))[:1200]}")
                 elif ev.kind in ("chat", "summary"):
@@ -158,6 +155,8 @@ async def harness_loop(llm: LlmModel, cwd: str, max_tokens: int, logf=None,
                         print(f"> agent: {reply}")
                 elif ev.kind in ("deny", "error", "stuck", "confirm"):
                     print(f"  [{ev.kind}] {d}")
+                elif ev.kind == "queued":
+                    print(f"  [queued #{d.get('position', '?')}] injected after active turn")
                 if ev.kind != "thinking":
                     # thinking arrives mid-step (tokens -> thinking -> action/chat);
                     # keep raw_buf/printed until the step-ending event so the
@@ -186,6 +185,11 @@ async def main() -> None:
     args = ap.parse_args()
 
     llm = LlmModel(LlmConfig(model=args.model, backend=args.backend))
+    if args.max_tokens != 48:
+        # harness budgets floor at 320/256 anyway; raw loop uses it directly
+        from dataclasses import replace
+
+        llm.config = replace(llm.config, max_tokens=args.max_tokens)
     print(f"warming {args.model} [{args.backend}] ...")
     await llm.warm()
     print("llm ready.")
@@ -200,8 +204,7 @@ async def main() -> None:
         if args.no_tools:
             await raw_loop(llm, args.max_tokens)
         else:
-            await harness_loop(llm, args.cwd, args.max_tokens, logf=logf,
-                               sandbox=sandbox)
+            await harness_loop(llm, args.cwd, logf=logf, sandbox=sandbox)
     finally:
         if logf is not None:
             logf.close()

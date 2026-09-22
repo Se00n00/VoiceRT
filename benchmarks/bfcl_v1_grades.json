@@ -1,0 +1,15 @@
+{
+  "_note": "Hand-graded ASTs for the V1 sample (V1 files ship no machine-readable answers). Format mirrors possible_answer/: [{func: {param: [acceptable values]}}].",
+  "simple_0": [{"calculate_triangle_area": {"base": [10, "10"], "height": [5, "5"]}}],
+  "simple_57": [{"calculate_cell_density": {"optical_density": [0.6, "0.6"], "dilution": [5, "5"]}}],
+  "simple_114": [{"prob_dist.binomial": {"trials": [10, "10"], "successes": [5, "5"]}}],
+  "simple_171": [{"fetch_law_case_details": {"case_number": [43403, "43403"], "court": ["New York", "new york"], "year": [2018, "2018"]}}],
+  "simple_228": [{"get_personality_traits": {"hobby": ["jogging", "like jogging"]}}],
+  "simple_285": [{"find_concert": {"location": ["Chicago", "Chicago, IL", "chicago"], "price": [100, "100", "under 100", "under $100"]}}],
+  "simple_342": [{"game_list.get_games": {"release_year": [2019, "2019"], "multiplayer": [true, "true", "True", "yes"], "ESRB_rating": ["Everyone", "everyone"]}}],
+  "simple_399": [{"restaurant_search": {"location": ["New York City", "New York City, NY", "NYC"], "cuisine": ["Italian", "italian"], "rating": [4, "4", 4.0], "accepts_credit_cards": [true, "true", "True", "yes"]}}],
+  "multiple_function_0": [{"triangle_properties.get": {"side1": [5, "5"], "side2": [4, "4"], "side3": [3, "3"]}}],
+  "multiple_function_66": [{"traffic_estimate": {"start_location": ["Las Vegas", "las vegas"], "end_location": ["Los Angeles", "los angeles"]}}],
+  "multiple_function_133": [{"calculate_mutual_fund_balance": {"investment_amount": [50000, "50000"], "annual_yield": [5, "5", "5%", "0.05"], "years": [3, "3"]}}],
+  "multiple_function_199": [{"forest_growth_forecast": {"location": ["Yellowstone", "yellowstone", "Yellowstone National Park"], "years": [5, "5"]}}]
+}

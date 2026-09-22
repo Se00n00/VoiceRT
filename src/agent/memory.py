@@ -12,7 +12,13 @@ over with no behavior change:
 - ``history(sid)`` still returns ``[{role, content}]`` dicts for the LLM
   chat-template path; ``lc_history(sid)`` exposes LangChain messages for
   LangChain chains (``RunnableWithMessageHistory``-style consumers).
+
+``JsonSessionMemory`` keeps the exact same semantics but persists every
+session to ``<sessions_dir>/<sid>.json`` (atomic tmp+rename writes), so
+conversation history survives restarts. This is the store ``VoiceAgent``
+uses by default.
 """
+import os
 import threading
 import time
 
@@ -35,7 +41,8 @@ except Exception:  # pragma: no cover - langchain absent (never in prod)
     class AIMessage(_Msg):  # type: ignore
         pass
 
-__all__ = ["LangChainSessionMemory", "LCSessionHistory", "new_session_id"]
+__all__ = ["LangChainSessionMemory", "LCSessionHistory", "JsonSessionMemory",
+           "new_session_id"]
 
 
 def new_session_id():
@@ -165,4 +172,154 @@ class LangChainSessionMemory:
                 "max_turns": self.max_turns,
                 "max_age_s": self.max_age_s,
                 "backend": "langchain",
+            }
+
+
+def _safe_sid(sid: str) -> str:
+    """Filesystem-safe session id (anything else becomes a hex digest)."""
+    import hashlib
+    import re
+
+    s = str(sid or "")
+    if s and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", s):
+        return s
+    return "sid-" + hashlib.sha256(s.encode()).hexdigest()[:32]
+
+
+class JsonSessionMemory(LangChainSessionMemory):
+    """Same window/TTL/LRU semantics, persisted per session as JSON.
+
+    Every mutation writes ``<sessions_dir>/<sid>.json`` atomically
+    (tmp file + ``os.replace``); a sid missing from RAM is reloaded from
+    disk on next access (TTL-checked). Stale files are unlinked
+    opportunistically on the write path; LRU eviction unlinks too.
+    """
+
+    def __init__(self, sessions_dir: str = "sessions", **kw):
+        super().__init__(**kw)
+        self.sessions_dir = str(sessions_dir or "sessions")
+
+    # -- persistence --------------------------------------------------
+    def _path_locked(self, sid: str) -> str:
+        return os.path.join(self.sessions_dir, _safe_sid(sid) + ".json")
+
+    def _save_locked(self, sid: str) -> None:
+        try:
+            os.makedirs(self.sessions_dir, exist_ok=True)
+            payload = {
+                "session_id": str(sid),
+                "at": time.time(),
+                "messages": [_to_dict(m) for m in self._data[sid].messages],
+            }
+            import json as _json
+
+            tmp = self._path_locked(sid) + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                _json.dump(payload, f)
+            os.replace(tmp, self._path_locked(sid))
+        except Exception:
+            pass
+        self._sweep_files_locked(time.time())
+
+    def _sweep_files_locked(self, now: float) -> None:
+        """Unlink session files older than TTL. Best-effort, never raises."""
+        try:
+            cutoff = now - self.max_age_s
+            for name in os.listdir(self.sessions_dir):
+                if not name.endswith(".json"):
+                    continue
+                path = os.path.join(self.sessions_dir, name)
+                try:
+                    if os.path.getmtime(path) < cutoff:
+                        os.unlink(path)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _load_locked(self, sid: str, now: float) -> "LCSessionHistory | None":
+        try:
+            import json as _json
+
+            with open(self._path_locked(sid), "r", encoding="utf-8") as f:
+                payload = _json.load(f)
+            at = float(payload.get("at", 0.0) or 0.0)
+            if now - at > self.max_age_s:
+                try:
+                    os.unlink(self._path_locked(sid))
+                except Exception:
+                    pass
+                return None
+            h = LCSessionHistory()
+            for m in payload.get("messages", []) or []:
+                if isinstance(m, dict) and m.get("content"):
+                    h.messages.append(_to_pair(str(m.get("role", "user")),
+                                              str(m.get("content"))))
+            h.at = now
+            self._prune_locked(h)
+            return h
+        except Exception:
+            return None
+
+    def _unlink_locked(self, sid: str) -> None:
+        try:
+            os.unlink(self._path_locked(sid))
+        except Exception:
+            pass
+
+    # -- overrides ----------------------------------------------------
+    def _get_locked(self, sid, now) -> LCSessionHistory:
+        h = self._data.get(sid)
+        if h is None:
+            h = self._load_locked(sid, now)
+            if h is None:
+                if len(self._data) >= self.max_sessions:
+                    oldest = min(self._data, key=lambda k: self._data[k].at)
+                    self._unlink_locked(oldest)
+                    del self._data[oldest]
+                h = LCSessionHistory()
+                self._seq += 1
+            else:
+                self._seq += 1
+            self._data[sid] = h
+        h.at = now
+        return h
+
+    def lc_add(self, sid, role, content) -> None:
+        now = time.time()
+        with self._lock:
+            self._sweep_locked(now)
+            h = self._get_locked(sid, now)
+            if not content:
+                return
+            h.messages.append(_to_pair(role, content))
+            self._prune_locked(h)
+            self._save_locked(sid)
+
+    def reset(self, sid) -> None:
+        now = time.time()
+        with self._lock:
+            h = self._data.get(sid)
+            if h is not None:
+                h.messages = []
+                h.at = now
+                self._save_locked(sid)
+            else:
+                self._unlink_locked(sid)
+
+    def drop(self, sid) -> bool:
+        with self._lock:
+            gone = self._data.pop(sid, None) is not None
+            self._unlink_locked(sid)
+            return gone
+
+    def stats(self) -> dict:
+        with self._lock:
+            return {
+                "sessions": len(self._data),
+                "turns": sum(len(h.messages) for h in self._data.values()),
+                "max_turns": self.max_turns,
+                "max_age_s": self.max_age_s,
+                "backend": "json",
+                "dir": self.sessions_dir,
             }

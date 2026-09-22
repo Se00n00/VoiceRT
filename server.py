@@ -378,25 +378,32 @@ async def talk(ws: WebSocket):
 @browser_router.get("/browser/tools")
 def browser_tools():
     """Tool schema the Chrome extension uses to snapshot + validate."""
-    from src.tools.schema import ALLOWED_OPS, BROWSER_PREAMBLE
+    from src.agent.prompts import TERMINAL_PREAMBLE
+    from src.tools.terminal import ALLOWED_OPS
 
+    agent = get_agent()
+    try:
+        model = getattr(getattr(agent, "llm", None), "config", None).model
+    except Exception:
+        model = "single-local-model"
     return {
         "ops": list(ALLOWED_OPS),
-        "preamble": BROWSER_PREAMBLE,
+        "preamble": TERMINAL_PREAMBLE,
         "snapshot": [{"ref": 1, "role": "button", "name": "Log in"}],
         "action_example": {"action": "click", "ref": 1},
-        "model": "single-qwen3-0.6B",
+        "model": str(model),
     }
 
 
 @browser_router.post("/browser/act")
 async def browser_act(payload: dict):
-    """One single-model step: chat text OR one BrowserAction.
+    """One agent turn with browser context: chat text back.
 
     Request: {text, url?, snapshot?:[{ref,role,name}], observation?,
               session_id?}
-    Response: {kind: action|chat, action?|reply, sensitive, raw}
-    The SAME LlmModel from VoiceAgent is used — no sidecar, no router.
+    Response: {kind: chat, reply, sensitive, raw}
+    Runs on the SAME unified VoiceAgent as voice + terminal (the old
+    browser sidecar modules no longer exist).
     """
     import time as _t
 
@@ -412,43 +419,25 @@ async def browser_act(payload: dict):
         return {"kind": "error", "message": "snapshot must be a list"}
     snapshot = snapshot[:80]
     agent = get_agent()
-    llm = getattr(agent, "llm", None)
-    if llm is None or not hasattr(llm, "messages_for_browser"):
-        return {"kind": "error",
-                "message": "browser llm unavailable (agent has no LlmModel)"}
-    history = []
-    if sid is not None:
-        try:
-            history = agent.sessions.history(sid)
-        except Exception:
-            history = []
+    refs = " ".join(
+        f"[{n.get('ref')}:{n.get('role')}:{str(n.get('name', ''))[:40]}]"
+        for n in snapshot if isinstance(n, dict))[:1500]
+    prompt = str(text)
+    if url:
+        prompt += f"\nURL: {url}"
+    if refs:
+        prompt += f"\nPage: {refs}"
+    if observation:
+        prompt += "\nLast result: " + observation
     try:
-        from src.agent.browser import propose_action
-        from src.tools.schema import is_sensitive, parse_action
-
-        out = await propose_action(
-            llm=llm, text=text, history=history,
-            snapshot_nodes=snapshot, url=url, observation=observation)
+        reply = ""
+        async for event in agent.run_text(prompt, session_id=sid):
+            if event.kind == "chat":
+                reply = str((event.data or {}).get("reply", "") or "")
         _record_event("browser")
         _record_turn(_t.perf_counter() - t0)
-        if out.get("kind") == "action":
-            act = parse_action(out.get("raw", ""))
-            out["sensitive"] = bool(
-                is_sensitive(act)) if act is not None else False
-            if sid is not None and act is not None:
-                try:
-                    agent.sessions.remember_turn(
-                        sid, f"{text} [{url}]", out.get("raw", "")[:500])
-                except Exception:
-                    pass
-        else:
-            out["sensitive"] = False
-            if sid is not None:
-                try:
-                    agent.sessions.remember_turn(sid, text, out.get("reply", ""))
-                except Exception:
-                    pass
-        return out
+        return {"kind": "chat", "reply": reply, "sensitive": False,
+                "raw": reply}
     except Exception as exc:  # never 500 — extension loops on error
         _record_turn(_t.perf_counter() - t0, err=True)
         return {"kind": "error", "message": str(exc)[:300]}
