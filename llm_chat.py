@@ -192,7 +192,9 @@ async def main() -> None:
         llm.config = replace(llm.config, max_tokens=args.max_tokens)
     print(f"warming {args.model} [{args.backend}] ...")
     await llm.warm()
-    print("llm ready.")
+    from src.models.llm import assert_cuda_leg
+
+    print(f"llm ready on {assert_cuda_leg(llm)}.")
 
     sandbox = None
     if args.sandbox:

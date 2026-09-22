@@ -18,14 +18,20 @@ async def warm_agent(model="openbmb/MiniCPM5-1B", backend="minicpm",
                      sessions_dir=None):
     """Build VoiceAgent with warmed LLM leg, TTS disabled."""
     from src.main import VoiceAgent, VoiceAgentConfig
+    from src.models.llm import LlmConfig, LlmModel, assert_cuda_leg
 
     cfg = VoiceAgentConfig(
         sessions_dir=sessions_dir or tempfile.mkdtemp(prefix="eval-sess-"))
     agent = VoiceAgent(cfg)
+    agent.llm = LlmModel(LlmConfig(model=model, backend=backend))
     print(f"warming LLM {model} [{backend}] ...", flush=True)
     await agent.llm.warm()
+    # the agent loop runs through chat_model: rewrap so it sees this leg
+    from src.agent.chat_model import LocalChatModel
+
+    agent.chat_model = LocalChatModel(llm=agent.llm)
     agent.tts = None
-    print("agent ready (llm-only).", flush=True)
+    print(f"agent ready (llm-only) on {assert_cuda_leg(agent.llm)}.", flush=True)
     return agent
 
 

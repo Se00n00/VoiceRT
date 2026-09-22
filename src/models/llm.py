@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass, field
 
 __all__ = ["LlmConfig", "LlmResult", "LlmToken", "LlmModel", "SYSTEM_PROMPT",
-           "split_thinking"]
+           "split_thinking", "leg_device", "assert_cuda_leg"]
 
 SYSTEM_PROMPT = "You are a voice assistant. Reply in one short spoken sentence."
 
@@ -42,6 +42,43 @@ def split_thinking(text: str) -> tuple:
         # Orphan close: treat before as thinking
         return raw[:c.start()].strip(), raw[c.end():].strip()
     return "", raw.strip()
+
+
+def leg_device(llm) -> str:
+    """Where the warmed leg actually lives: 'cuda:0', 'cpu', or 'unknown'.
+
+    Every backend sets ``.device`` (with CUDA fallback applied), so this
+    reports post-warm reality, not config intent. Pure inspection.
+    """
+    leg = getattr(llm, "_leg", None)
+    dev = getattr(leg, "device", None)
+    if dev is not None:
+        return str(dev)
+    try:
+        import torch
+
+        model = getattr(leg, "model", leg)
+        for param in model.parameters():
+            return str(param.device)
+    except Exception:
+        pass
+    return "unknown"
+
+
+def assert_cuda_leg(llm, what: str = "model") -> str:
+    """Abort loudly unless the warmed leg is on CUDA. Returns device.
+
+    A silent CPU fallback turns minutes into hours on this box — every
+    runner calls this right after warm so a sick driver fails fast with
+    a clear message instead of hanging.
+    """
+    dev = leg_device(llm)
+    if not dev.startswith("cuda"):
+        raise SystemExit(
+            f"ABORT: {what} is on '{dev}', not CUDA. "
+            f"Check nvidia-smi (driver/GPU state) and retry. "
+            f"Refusing CPU fallback on purpose.")
+    return dev
 
 
 @dataclass(frozen=True)

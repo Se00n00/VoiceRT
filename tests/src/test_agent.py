@@ -206,6 +206,33 @@ class TestThinking(unittest.TestCase):
         th, ans = split_thinking("<THINK>  spaced  </THINK>  ok")
         self.assertEqual((th, ans), ("spaced", "ok"))
 
+    def test_leg_device_reads_backend_attr(self):
+        from src.models.llm import leg_device
+
+        class FakeCuda:
+            _leg = type("Leg", (), {"device": "cuda:0"})()
+
+        class FakeCpu:
+            _leg = type("Leg", (), {"device": "cpu"})()
+
+        self.assertEqual(leg_device(FakeCuda()), "cuda:0")
+        self.assertEqual(leg_device(FakeCpu()), "cpu")
+        self.assertEqual(leg_device(object()), "unknown")
+
+    def test_assert_cuda_leg_aborts_off_cuda(self):
+        from src.models.llm import assert_cuda_leg
+
+        class FakeCuda:
+            _leg = type("Leg", (), {"device": "cuda:0"})()
+
+        class FakeCpu:
+            _leg = type("Leg", (), {"device": "cpu"})()
+
+        self.assertEqual(assert_cuda_leg(FakeCuda()), "cuda:0")
+        with self.assertRaises(SystemExit) as cm:
+            assert_cuda_leg(FakeCpu())
+        self.assertIn("CUDA", str(cm.exception))
+
     def test_voice_thinking_not_spoken(self):
         import asyncio
         import numpy as np

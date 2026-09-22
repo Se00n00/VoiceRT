@@ -56,6 +56,10 @@ def main() -> None:
     model.eval()
     dev = next(model.parameters()).device
     print(f"model on {dev}", flush=True)
+    if str(dev) == "cpu":
+        raise SystemExit(
+            "ABORT: model is on CPU, not CUDA. Check nvidia-smi "
+            "(driver/GPU state) and retry. Refusing CPU fallback on purpose.")
 
     msgs = [{"role": "system", "content": "You control a terminal."},
             {"role": "user", "content": args.prompt}]
