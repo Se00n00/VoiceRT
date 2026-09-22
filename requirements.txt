@@ -18,8 +18,13 @@ torch==2.5.1
 #   downgrade that combo crashes inside transformers' image_utils import
 #   chain (register_fake torchvision::nms) and kills every model warm.
 #   Pinning the matching version makes pip downgrade it deterministically.
-#   (torchaudio stays version-mismatched on Kaggle but is unused by us.)
 torchvision==0.20.1
+# - torchaudio: same story, one layer deeper. Kaggle pre-installs 2.10.0
+#   (built for torch 2.10); with our torch downgrade its .so fails with
+#   "undefined symbol" and kills transformers' audio_utils import chain
+#   (every model warm). Lockstep match for torch 2.5.1. Unused by our
+#   code paths, but transformers probes it at import time.
+torchaudio==2.5.1
 triton==3.1.0
 transformers==5.17.0
 # - websockets: REQUIRED for uvicorn to accept WS /talk. Without it
