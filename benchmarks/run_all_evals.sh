@@ -11,7 +11,10 @@
 # hours-long CPU runs). Results land in benchmarks/results/.
 set -u
 TAG="${1:-kaggle}"
-PY="${PY:-.venv/bin/python}"
+# PY override wins; else .venv if present (local), else system python3 (Kaggle).
+if [ -z "${PY:-}" ]; then
+  if [ -x .venv/bin/python ]; then PY=.venv/bin/python; else PY=python3; fi
+fi
 export PYTHONPATH=.
 
 FAILED=0

@@ -19,7 +19,13 @@ transformers==5.17.0
 #   registers, so /docs and route lists look fine — misleading).
 fastapi==0.141.1
 uvicorn==0.52.4
-websockets==17.1
+# - websockets: range (not a pin) so pip can satisfy langgraph-sdk (<17)
+#   and uvicorn at the same time. Fresh resolver runs fail on an exact
+#   pin (seen on Kaggle: langgraph-sdk 0.4.x requires websockets<17).
+#   Verified: WS /talk + bridge protocol tests pass on the resolved
+#   version (see AGENTS.md). Do NOT re-pin exact without re-running
+#   tests/src/test_server.py + tests/src/test_bridge.py.
+websockets>=14,<18
 starlette==1.6.0
 pydantic==2.13.5
 soundfile==0.14.0
@@ -29,9 +35,6 @@ pyyaml==6.0.3
 kokoro==0.9.4
 # - langgraph: the voice-turn agent is a compiled StateGraph
 #   (src/agent/graph.py). Pulls langchain-core transitively.
-#   NOTE: keep websockets==17.1 above: newer langgraph releases may try
-#   to downgrade it, which breaks uvicorn WS framing — reinstall 17.1
-#   after langgraph if pip reports a websockets downgrade.
 langgraph==1.2.11
 # - textual: the opencode-style full-screen TUI (tui.py). Not needed
 #   for the server; install only for the terminal app.
