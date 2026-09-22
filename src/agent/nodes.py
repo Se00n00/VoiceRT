@@ -142,27 +142,87 @@ async def respond_node(state, *, llm, tts, sessions=None, writer=None):
                             state.get("history") or [])
     pending_done: AgentEvent | None = None
     try:
+        from src.models.llm import split_thinking
+
         splitter = SentenceSplitter()
+        # Thinking gate: hold pieces out of the TTS splitter while inside
+        # a <think> block, so thoughts are shown but never spoken. Tokens
+        # themselves still stream (visible as thinking in the UI).
+        pre_buf = ""
+        pre_n = 0
+        think_emitted = False
+        THINK_CAP = 80
+
+        async def _speak_sentence(sent):
+            nonlocal first_audio_at
+            t_tts = time.perf_counter()
+            try:
+                out = await tts.speak(sent)
+            finally:
+                node_s["tts"] = (node_s.get("tts", 0.0)
+                                 + time.perf_counter() - t_tts)
+            if first_audio_at is None:
+                first_audio_at = time.perf_counter() - t0
+            w(AgentEvent(node="tts", kind="audio", data={
+                "wav": np.asarray(out.wav, dtype=np.float32),
+                "sr": int(out.sample_rate),
+                "sentence": str(out.sentence or sent),
+                "synth_s": float(out.synth_s),
+            }))
+
         async for tok in llm.stream(messages):
             reply_ids.append(int(tok.token_id))
             w(AgentEvent(node="llm", kind="token", data={
                 "token": tok.piece, "first": bool(tok.first)}))
-            for sent in splitter.push(tok.piece or ""):
-                t_tts = time.perf_counter()
-                try:
-                    out = await tts.speak(sent)
-                finally:
-                    node_s["tts"] = (node_s.get("tts", 0.0)
-                                     + time.perf_counter() - t_tts)
-                if first_audio_at is None:
-                    first_audio_at = time.perf_counter() - t0
-                w(AgentEvent(node="tts", kind="audio", data={
-                    "wav": np.asarray(out.wav, dtype=np.float32),
-                    "sr": int(out.sample_rate),
-                    "sentence": str(out.sentence or sent),
-                    "synth_s": float(out.synth_s),
-                }))
+            piece = tok.piece or ""
+            if not think_emitted:
+                pre_buf += piece
+                pre_n += 1
+                low = pre_buf.lower()
+                if "</think>" in low:
+                    thinking, tail = split_thinking(pre_buf)
+                    if thinking:
+                        w(AgentEvent(node="llm", kind="thinking",
+                                     data={"text": thinking[:2000]}))
+                    think_emitted = True
+                    for sent in splitter.push(tail):
+                        await _speak_sentence(sent)
+                    pre_buf = ""
+                elif "<think>" not in low and (
+                        pre_n >= THINK_CAP or "." in pre_buf or "?" in pre_buf
+                        or "!" in pre_buf or "\n" in pre_buf):
+                    # Answer flowing with no think block in sight: normal
+                    # streaming path. (A think tag opening later still gets
+                    # caught by the final split, just not pre-gated.)
+                    think_emitted = True
+                    for sent in splitter.push(pre_buf):
+                        await _speak_sentence(sent)
+                    pre_buf = ""
+                elif pre_n >= THINK_CAP:
+                    # Unclosed think running long: emit thinking so far, then
+                    # resume streaming (final split will handle remainder).
+                    thinking, _ = split_thinking(pre_buf)
+                    if thinking:
+                        w(AgentEvent(node="llm", kind="thinking",
+                                     data={"text": thinking[:2000]}))
+                    think_emitted = True
+                    pre_buf = ""
+                continue
+            for sent in splitter.push(piece):
+                await _speak_sentence(sent)
         reply = await llm.decode(reply_ids)
+        thinking, answer = split_thinking(reply)
+        if thinking and not think_emitted:
+            w(AgentEvent(node="llm", kind="thinking",
+                         data={"text": thinking[:2000]}))
+        if pre_buf:
+            # Stream ended while holding (unclosed think or punctuation-free
+            # tail): speak only the answer part, never raw thoughts.
+            _, tail = split_thinking(pre_buf)
+            for sent in splitter.push(tail):
+                await _speak_sentence(sent)
+            pre_buf = ""
+        reply = answer
         pending_done = AgentEvent(node="llm", kind="done",
                                   data={"text": reply})
         tail = splitter.flush()

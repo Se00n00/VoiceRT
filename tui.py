@@ -103,6 +103,7 @@ class VoiceTermApp(App):
     #left { width: 65%; border: solid #2c3654; }
     #right { width: 35%; border: solid #2c3654; }
     #conv { height: 1fr; }
+    #stream { height: auto; max-height: 4; color: #8b93a7; }
     #entry { height: 3; border: solid #38bdf8; }
     #statusbar { height: 1; color: #8b93a7; }
     """
@@ -129,6 +130,7 @@ class VoiceTermApp(App):
         with Horizontal():
             with Vertical(id="left"):
                 yield RichLog(id="conv", highlight=True, markup=True, wrap=True)
+                yield Static(id="stream")
                 yield Input(id="entry", placeholder="Add a follow-up  ( / for commands · v for voice )")
                 yield Static(id="statusbar")
             yield Visualizer(id="right")
@@ -136,6 +138,10 @@ class VoiceTermApp(App):
 
     async def on_mount(self) -> None:
         self.conv = self.query_one("#conv", RichLog)
+        self.stream_line = self.query_one("#stream", Static)
+        self._stream_buf = ""
+        self._stream_tick = 0.0
+        self._last_think = ""
         self.entry = self.query_one("#entry", Input)
         self.viz = self.query_one("#right", Visualizer)
         self.query_one("#left").border_title = " conversation "
@@ -144,8 +150,15 @@ class VoiceTermApp(App):
         self.run_worker(self._warm(), exclusive=True)
 
     def _status(self) -> None:
+        try:
+            model = getattr(getattr(self.agent, "llm", None), "config", None)
+            label = getattr(model, "model", None) or "MiniCPM5-1B"
+            # Short label: "openbmb/MiniCPM5-1B" -> "MiniCPM5-1B"
+            label = str(label).split("/")[-1]
+        except Exception:
+            label = "MiniCPM5-1B"
         bar = self.query_one("#statusbar", Static)
-        bar.update(f"Qwen3-0.6B · session {self.sid[:8]} · "
+        bar.update(f"{label} · session {self.sid[:8]} · "
                    f"{self.cwd} · / commands · v voice")
 
     # -- model wiring ---------------------------------------------------
@@ -179,6 +192,7 @@ class VoiceTermApp(App):
             self.conv.write(f"[yellow]degraded: {missing}[/yellow]")
         else:
             self.conv.write("[green]ready — voice + terminal live.[/green]")
+        self._status()
         self.entry.focus()
 
     async def _confirm(self, action) -> bool:
@@ -245,12 +259,38 @@ class VoiceTermApp(App):
             self.run_worker(self._voice_turn(), exclusive=True)
 
     # -- turns ----------------------------------------------------------
+    def _stream_clear(self) -> None:
+        try:
+            self._stream_buf = ""
+            self.stream_line.update("")
+        except Exception:
+            pass
+
+    def _stream_push(self, piece: str) -> None:
+        """Accumulate a live token chip into the transient stream line."""
+        import time as _time
+
+        try:
+            self._stream_buf = (self._stream_buf + str(piece or ""))[-1200:]
+            now = _time.monotonic()
+            # Throttle widget updates: per-token re-renders flood the loop.
+            if now - getattr(self, "_stream_tick", 0.0) < 0.15:
+                return
+            self._stream_tick = now
+            tail = self._stream_buf[-400:]
+            self.stream_line.update(f"[dim]{tail}▌[/dim]")
+        except Exception:
+            pass
+
     async def _text_turn(self, text: str) -> None:
         self.busy = True
         self.conv.write(f"[bold cyan]› {text}[/bold cyan]")
         self.conv.write("[dim]⬡ Cooking…[/dim]")
+        self._stream_clear()
+        self._last_think = ""
         loop = asyncio.get_running_loop()
         audio: list[tuple] = []
+        saw = {"chat": False}
 
         async def _run():
             async for event in self.harness.run_turn(text, session_id=self.sid, cwd=self.cwd):
@@ -258,19 +298,50 @@ class VoiceTermApp(App):
                     continue
                 d = event.data or {}
                 if event.kind == "action":
+                    self._stream_clear()
                     a = d.get("action", {})
                     self.conv.write(f"[dim]▸ {a.get('action')}: "
-                                    f"{a.get('command') or a.get('path') or ''}[/dim]")
+                                    f"{a.get('command') or a.get('path') or a.get('pattern') or ''}[/dim]")
+                elif event.kind == "thinking":
+                    # Think traces are first-class: dimmed, never dropped —
+                    # but never twice: skip exact repeats of the last trace.
+                    think = str(d.get("text", "") or "")
+                    if think and think != getattr(self, "_last_think", ""):
+                        self._last_think = think
+                        self.conv.write(f"[dim italic]› think {think[:1200]}[/dim italic]")
+                elif event.kind == "token":
+                    self._stream_push(str(d.get("piece", "") or ""))
                 elif event.kind == "observation":
+                    self._stream_clear()
                     self.conv.write(f"[dim]{str(d.get('observation', ''))[:800]}[/dim]")
+                elif event.kind == "confirm":
+                    a = d.get("action", {})
+                    self.conv.write(f"[yellow]⬡ confirm {a.get('action')}: "
+                                    f"{a.get('command') or a.get('path') or ''} "
+                                    f"(y/n)[/yellow]")
+                elif event.kind == "stuck":
+                    self.conv.write(f"[yellow]↻ stuck: {d.get('reason', '')}[/yellow]")
                 elif event.kind == "deny":
+                    self._stream_clear()
                     self.conv.write(f"[red]✕ {d.get('reason')}[/red]")
                 elif event.kind == "chat":
-                    self.conv.write(f"[white]{d.get('reply', '')}[/white]")
+                    self._stream_clear()
+                    reply = str(d.get("reply", "") or "")
+                    if reply.strip():
+                        saw["chat"] = True
+                        self.conv.write(f"[white]{reply[:2000]}[/white]")
+                elif event.kind == "summary":
+                    # Fallback visibility: tools-only turns emit no chat;
+                    # surface the summary reply so the turn never looks empty.
+                    self._stream_clear()
+                    reply = str(d.get("reply", "") or "")
+                    if reply.strip() and not saw["chat"]:
+                        self.conv.write(f"[white]{reply[:2000]}[/white]")
                 elif event.kind == "audio":
                     audio.append((np.asarray(d.get("wav", []), dtype=np.float32),
                                   int(d.get("sr", 24000))))
                 elif event.kind == "error":
+                    self._stream_clear()
                     self.conv.write(f"[red]error: {d.get('message')}[/red]")
 
         try:

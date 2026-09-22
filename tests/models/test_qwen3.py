@@ -103,10 +103,15 @@ class TestQwen3Path(unittest.TestCase):
 
 
 class TestThinking(unittest.TestCase):
-    def test_strip_think_blocks(self):
+    def test_decode_preserves_think(self):
+        """decode() must NOT strip <think>: callers split via split_thinking.
+
+        Stripping here destroyed the terminal think→toolcall loop
+        (decode_with_thinking could never recover thinking once stripped).
+        """
         import asyncio
 
-        from src.models.llm import LlmConfig, LlmModel
+        from src.models.llm import LlmConfig, LlmModel, split_thinking
 
         model = LlmModel(LlmConfig(thinking=True))
 
@@ -116,20 +121,24 @@ class TestThinking(unittest.TestCase):
 
         model._tok = StubTok()
         text = asyncio.run(model.decode([1, 2, 3]))
-        self.assertEqual(text, "Hi there.")
+        self.assertEqual(text, "<think>hmm, reasoning</think>Hi there.")
+        th, ans = split_thinking(text)
+        self.assertEqual((th, ans), ("hmm, reasoning", "Hi there."))
+        th2, ans2 = asyncio.run(model.decode_with_thinking([1, 2, 3]))
+        self.assertEqual((th2, ans2), ("hmm, reasoning", "Hi there."))
 
     def test_off_by_default(self):
         from src.models.llm import LlmConfig
 
         self.assertFalse(LlmConfig().thinking)
-        self.assertEqual(LlmConfig().model, "Qwen/Qwen3-0.6B")
+        self.assertEqual(LlmConfig().model, "openbmb/MiniCPM5-1B")
 
 
 class TestQwen3Defaults(unittest.TestCase):
     def test_agent_default(self):
         from src.main import VoiceAgentConfig
 
-        self.assertEqual(VoiceAgentConfig().llm.model, "Qwen/Qwen3-0.6B")
+        self.assertEqual(VoiceAgentConfig().llm.model, "openbmb/MiniCPM5-1B")
 
     def test_no_yaml_configs_dir(self):
         import os

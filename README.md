@@ -210,3 +210,30 @@ cd tui-ink && npm install && npm run dev
 ```
 
 First boot warms legs (~1-2 min). Headphones (or speakers down) avoid the mic re-ingesting replies; without them the app still works — it pauses listening while speaking and discards its own echo. Advanced: run the backend separately (`PYTHONPATH=. python bridge.py`) and point the TUI at it with `VOICE_BRIDGE=http://127.0.0.1:8004`.
+
+## Sandboxed tool execution (docker)
+
+Terminal tools run on the host by default. Pass a `SandboxConfig` to run
+`exec`/`exec_bg`/`poll` inside a per-turn container instead
+(`src/sandbox/docker.py:DockerSandbox`, a deepagents `BaseSandbox` over
+the docker CLI — no new dependencies):
+
+```python
+from src.sandbox.docker import SandboxConfig
+from src.agent.terminal import TerminalConfig, TerminalHarness
+harness = TerminalHarness(llm=..., config=TerminalConfig(sandbox=SandboxConfig()))
+# or: PYTHONPATH=. .venv/bin/python llm_chat.py --sandbox
+```
+
+What it is (honest version): separate pid/network/mount namespaces,
+`--cap-drop ALL`, memory/cpu/pids limits, no privileged flag. The turn
+cwd is bind-mounted at `/work`, so file ops work on host files unchanged
+— containment covers processes, network, devices and resources, not
+filesystem secrecy. Policy deny-list + `y/n` confirm stay on top.
+`read`/`write`/`edit`/`grep`/`list` stay host-side on the same tree;
+`spawn_terminal` always stays on host (it opens a host window).
+
+Defaults: image `python:3.12-slim` (needs `bash`, `python3`, GNU
+`timeout`), `--network none`, `--memory 1g`, `--cpus 2`. Requirements:
+docker daemon access (`sudo usermod -aG docker $USER` + re-login) —
+without it the turn fails fast with the fix printed.

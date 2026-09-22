@@ -186,10 +186,18 @@ class PersistentShell:
     def __init__(self, cwd: str = ".", timeout_s: float = 30.0):
         self.cwd = os.path.abspath(cwd or ".")
         self.timeout_s = float(timeout_s)
-        self.jobs = JobManager(cwd=self.cwd)
+        self.jobs = self._make_jobs()
         self._lock = threading.Lock()
         self._proc: subprocess.Popen | None = None
         self._spawn()
+
+    def _make_jobs(self) -> "JobManager":
+        """Job backend. Docker sessions override with container jobs."""
+        return JobManager(cwd=self.cwd)
+
+    def _spawn_argv(self) -> tuple[list, str | None]:
+        """(argv, cwd) for the session process. Docker overrides argv."""
+        return ["bash", "--noprofile", "--norc", "-s"], self.cwd
 
     def _spawn(self) -> None:
         old, self._proc = self._proc, None
@@ -202,9 +210,9 @@ class PersistentShell:
                 old.kill()
             except Exception:
                 pass
+        argv, cwd = self._spawn_argv()
         self._proc = subprocess.Popen(
-            ["bash", "--noprofile", "--norc", "-s"],
-            cwd=self.cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            argv, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, bufsize=1)
 
     def _run_once(self, command: str, token: str, deadline: float) -> tuple[str, bool]:
@@ -290,11 +298,27 @@ class PersistentShell:
     def close(self) -> None:
         with self._lock:
             proc, self._proc = self._proc, None
+            if proc is not None:
+                try:
+                    _LEFTOVER.pop(proc.stdout.fileno(), None)
+                except Exception:
+                    pass
         if proc is not None:
             try:
                 proc.kill()
             except Exception:
                 pass
+            try:
+                proc.wait(timeout=1)
+            except Exception:
+                pass
+            for attr in ("stdin", "stdout", "stderr"):
+                try:
+                    f = getattr(proc, attr, None)
+                    if f:
+                        f.close()
+                except Exception:
+                    pass
         try:
             self.jobs.close()
         except Exception:

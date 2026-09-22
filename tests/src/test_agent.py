@@ -186,6 +186,96 @@ def _agent_with(segs):
     return ag
 
 
+class TestThinking(unittest.TestCase):
+    def test_split_closed(self):
+        from src.models.llm import split_thinking
+
+        th, ans = split_thinking("<think>plan A then B</think>Done.")
+        self.assertEqual(th, "plan A then B")
+        self.assertEqual(ans, "Done.")
+
+    def test_split_unclosed(self):
+        from src.models.llm import split_thinking
+
+        th, ans = split_thinking("<think>hmm, let me see")
+        self.assertEqual(th, "hmm, let me see")
+        self.assertEqual(ans, "")
+
+    def test_split_none(self):
+        from src.models.llm import split_thinking
+
+        th, ans = split_thinking("Hi there.")
+        self.assertEqual((th, ans), ("", "Hi there."))
+
+    def test_split_case_insensitive(self):
+        from src.models.llm import split_thinking
+
+        th, ans = split_thinking("<THINK>  spaced  </THINK>  ok")
+        self.assertEqual((th, ans), ("spaced", "ok"))
+
+    def test_voice_thinking_not_spoken(self):
+        import asyncio
+        import time
+
+        import numpy as np
+
+        from src.agent.nodes import respond_node
+        from src.models.llm import LlmToken
+
+        class ThinkLlm(_FakeLlm):
+            async def decode(self, ids):
+                return "<think>choose greeting</think>Hi there."
+
+            async def stream(self, messages, max_tokens=None):
+                for i, piece in enumerate(["<think>choose ", "greeting</think>",
+                                           "Hi ", "there."]):
+                    yield LlmToken(token_id=10 + i, piece=piece, first=(i == 0))
+
+        tts = _FakeTts()
+        spoken = []
+        orig = tts.speak
+
+        async def spy(text):
+            spoken.append(text)
+            return await orig(text)
+
+        tts.speak = spy  # type: ignore
+        events = []
+        state = {"text": "hi", "history": [], "sid": "s",
+                 "remember": False, "node_s": {},
+                 "t0": time.perf_counter()}
+        asyncio.run(respond_node(state, llm=ThinkLlm(), tts=tts,
+                                 sessions=None, writer=events.append))
+        kinds = [(e.node, e.kind) for e in events]
+        self.assertIn(("llm", "thinking"), kinds)
+        think = [e for e in events if e.kind == "thinking"][0]
+        self.assertIn("choose greeting", think.data["text"])
+        # thoughts never reach TTS; answer does, whole
+        self.assertTrue(spoken)
+        self.assertFalse(any("choose greeting" in s for s in spoken))
+        self.assertIn(("llm", "done"), kinds)
+        done = [e for e in events if e.kind == "done"][0]
+        self.assertEqual(done.data["text"], "Hi there.")
+        self.assertEqual(events[-1].data["reply"], "Hi there.")
+
+    def test_voice_no_think_unchanged(self):
+        import asyncio
+        import time
+
+        from src.agent.nodes import respond_node
+
+        tts = _FakeTts()
+        events = []
+        state = {"text": "hi", "history": [], "sid": "s",
+                 "remember": False, "node_s": {},
+                 "t0": time.perf_counter()}
+        asyncio.run(respond_node(state, llm=_FakeLlm(), tts=tts,
+                                 sessions=None, writer=events.append))
+        kinds = [(e.node, e.kind) for e in events]
+        self.assertNotIn(("llm", "thinking"), kinds)
+        self.assertEqual(events[-1].data["reply"], "Hi there.")
+
+
 class TestVoiceAgent(unittest.TestCase):
     def _run(self, ag, audio, **kw):
         import asyncio

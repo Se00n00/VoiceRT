@@ -1,7 +1,9 @@
 """Download all voice-pipeline weights.
 
-- whisper-base + Qwen3-0.6B + Kokoro-82M via
+- whisper-base + Qwen3-0.6B + Kokoro-82M + MiniCPM5-1B (tokenizer) via
   huggingface_hub.snapshot_download (HF cache)
+- MiniCPM5-1B Q4_K_M GGUF (default LLM backend) via snapshot_download
+  with allow-list (657MB, not the full repo)
 - Silero VAD ONNX via stdlib urllib to src/models/engines/silero_vad/silero_vad.onnx
    (matches the ``VadConfig.onnx_path`` default)
 
@@ -18,7 +20,13 @@ HF_REPOS = [
     "openai/whisper-base",
     "Qwen/Qwen3-0.6B",
     "hexgrad/Kokoro-82M",
+    "openbmb/MiniCPM5-1B",  # tokenizer + config (weights come from GGUF below)
 ]
+
+HF_PATTERNS = {
+    # repo -> allow_patterns (keep the default-LLM fetch small)
+    "openbmb/MiniCPM5-1B-GGUF": ["*Q4_K_M*"],
+}
 
 SILERO_URL = (
     "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/"
@@ -27,10 +35,13 @@ SILERO_URL = (
 SILERO_REL = os.path.join("src", "models", "engines", "silero_vad", "silero_vad.onnx")
 
 
-def download_hf(repo):
+def download_hf(repo, patterns=None):
     from huggingface_hub import snapshot_download
 
-    path = snapshot_download(repo)
+    if patterns:
+        path = snapshot_download(repo, allow_patterns=patterns)
+    else:
+        path = snapshot_download(repo)
     print(f"hf {repo} -> {path}")
     return path
 
@@ -58,6 +69,12 @@ def main(argv=None):
     for repo in HF_REPOS:
         try:
             download_hf(repo)
+        except Exception as exc:
+            print(f"FAILED hf {repo}: {exc}")
+            failures.append(repo)
+    for repo, patterns in HF_PATTERNS.items():
+        try:
+            download_hf(repo, patterns)
         except Exception as exc:
             print(f"FAILED hf {repo}: {exc}")
             failures.append(repo)

@@ -5,8 +5,8 @@ from src.agent.memory import LCSessionHistory, LangChainSessionMemory
 from src.agent.terminal import (
     TerminalConfig,
     TerminalHarness,
-    TerminalState,
-    build_terminal_graph,
+    TurnCtx,
+    build_terminal_tools,
     run_command,
 )
 from src.agent.nodes import (
@@ -25,8 +25,8 @@ __all__ = [
     "LCSessionHistory",
     "TerminalConfig",
     "TerminalHarness",
-    "TerminalState",
-    "build_terminal_graph",
+    "TurnCtx",
+    "build_terminal_tools",
     "run_command",
     "NODES",
     "AgentState",

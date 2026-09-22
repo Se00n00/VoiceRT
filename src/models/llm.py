@@ -3,20 +3,62 @@ import asyncio
 import re
 from dataclasses import dataclass, field
 
-__all__ = ["LlmConfig", "LlmResult", "LlmToken", "LlmModel", "SYSTEM_PROMPT"]
+__all__ = ["LlmConfig", "LlmResult", "LlmToken", "LlmModel", "SYSTEM_PROMPT",
+           "split_thinking"]
 
 SYSTEM_PROMPT = "You are a voice assistant. Reply in one short spoken sentence."
 
-_THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
+_THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE)
+_THINK_OPEN_RE = re.compile(r"<think\s*>", re.IGNORECASE)
+_THINK_CLOSE_RE = re.compile(r"</think\s*>", re.IGNORECASE)
+
+
+def split_thinking(text: str) -> tuple:
+    """Split model output into (thinking, answer).
+
+    Robust: handles multiple blocks, mixed case, unclosed tags, and
+    reasoning leaked outside tags. No tags -> ("", text). Pure, tested.
+    """
+    raw = str(text or "")
+    # Collect all closed blocks
+    blocks = _THINK_RE.findall(raw)
+    if blocks:
+        # Use first block's content as thinking, but join all if multiple
+        thinking_parts = []
+        for b in _THINK_RE.finditer(raw):
+            g = b.group(0)
+            thinking_parts.append(_THINK_CLOSE_RE.sub("", _THINK_OPEN_RE.sub("", g)).strip())
+        thinking = "\n".join(p for p in thinking_parts if p).strip()
+        answer = _THINK_RE.sub("", raw).strip()
+        # If answer is empty but thinking exists, try to recover: maybe model
+        # put answer inside think due to truncation — keep as thinking
+        return thinking, answer
+    o = _THINK_OPEN_RE.search(raw)
+    c = _THINK_CLOSE_RE.search(raw)
+    if o and not c:
+        # Unclosed: everything after <think> is thinking
+        return _THINK_CLOSE_RE.sub("", raw[o.end():]).strip(), raw[:o.start()].strip()
+    if c and not o:
+        # Orphan close: treat before as thinking
+        return raw[:c.start()].strip(), raw[c.end():].strip()
+    return "", raw.strip()
 
 
 @dataclass(frozen=True)
 class LlmConfig:
     """No YAML: construct (or override fields) in code."""
 
-    model: str = "Qwen/Qwen3-0.6B"
+    model: str = "openbmb/MiniCPM5-1B"
+    # Backend switch.
+    #  - "minicpm" = BF16 eager (stock transformers, no Triton) — default
+    #    while mixed-quant (4-bit bulk + BF16 important layers) is trialled.
+    #  - "minicpm_q4k" = Q4_K_M GGUF via src/models/minicpm.py (packed, fused).
+    #  - "qwen" = fused Qwen3 path (set model="Qwen/Qwen3-0.6B" with it).
+    backend: str = "minicpm"
+    # GGUF file/dir for the q4k backend ("auto" = HF cache download).
+    gguf_path: str = "auto"
     max_tokens: int = 48
-    max_seq: int = 512
+    max_seq: int = 8192
     device: str = "cuda"
     system_prompt: str = SYSTEM_PROMPT
     thinking: bool = False  # Qwen3 <think> traces (stripped from output)
@@ -64,12 +106,39 @@ class LlmModel:
         if self._leg is None:
             import torch
 
-            # fused single-file model: src/models/qwen.py (1 fused layer x28, batched, KV-cache)
-            from src.models.qwen import QwenFused
-
             device = self.config.device
             if device.startswith("cuda") and not torch.cuda.is_available():
                 device = "cpu"
+            backend = getattr(self.config, "backend", "qwen") or "qwen"
+            if backend == "minicpm_q4k":
+                # MiniCPM5-1B Q4_K_M: src/models/minicpm.py (packed GGUF
+                # + fused decode, fp16 KV). gguf_path "auto" = HF cache.
+                from src.models.minicpm import MiniCPMFused
+
+                gguf = getattr(self.config, "gguf_path", "auto") or "auto"
+                self._leg = MiniCPMFused(
+                    gguf_path=None if gguf == "auto" else gguf,
+                    device=device,
+                    model=self.config.model,
+                    max_seq=max(8192, self.config.max_seq),
+                    max_new_tokens=self.config.max_tokens,
+                )
+                return self._leg
+            if backend in ("minicpm", "minicpm_hf", "minicpm_bf16"):
+                # BF16 eager (stock transformers, no Triton) — default while
+                # mixed-quant (4-bit bulk + BF16 important layers) is trialled.
+                from src.models.minicpm_hf import MiniCPMHF
+
+                self._leg = MiniCPMHF(
+                    model=self.config.model,
+                    device=device,
+                    max_len=max(self.config.max_seq, 8192),
+                    max_new_tokens=self.config.max_tokens,
+                )
+                return self._leg
+            # fused single-file model: src/models/qwen.py (1 fused layer x28, batched, KV-cache)
+            from src.models.qwen import QwenFused
+
             self._leg = QwenFused(
                 device=device,
                 model=self.config.model,
@@ -196,43 +265,75 @@ class LlmModel:
         msgs.append({"role": "user", "content": body})
         return msgs
 
-    async def encode(self, messages: list) -> list:
+    async def encode(self, messages: list, tools: list | None = None) -> list:
         tok = self._tokenizer()
-        thinking = bool(self.config.thinking)
+        # MiniCPM thinks + uses native XML tools; Qwen stays as configured.
+        # All minicpm variants (bf16, q4k, hf) think — do not compromise.
+        thinking = bool(self.config.thinking) or str(
+            getattr(self.config, "backend", "")).startswith("minicpm")
 
         def _run():
+            kw: dict = {}
+            if tools:
+                kw["tools"] = tools
             try:
                 return tok.apply_chat_template(
                     messages, return_tensors="pt",
                     add_generation_prompt=True,
-                    enable_thinking=thinking)["input_ids"][0].tolist()
+                    enable_thinking=thinking, **kw)["input_ids"][0].tolist()
             except TypeError:
-                # Older tokenizer without the Qwen3 thinking switch.
-                return tok.apply_chat_template(
-                    messages, return_tensors="pt",
-                    add_generation_prompt=True)["input_ids"][0].tolist()
+                # Older tokenizer without the Qwen3 thinking switch (and
+                # without tools support): plain template.
+                try:
+                    return tok.apply_chat_template(
+                        messages, return_tensors="pt",
+                        add_generation_prompt=True,
+                        **kw)["input_ids"][0].tolist()
+                except TypeError:
+                    return tok.apply_chat_template(
+                        messages, return_tensors="pt",
+                        add_generation_prompt=True)["input_ids"][0].tolist()
 
         return await asyncio.to_thread(_run)
 
     async def decode(self, ids) -> str:
+        """Decode token ids, preserving <think> traces.
+
+        Thinking is NEVER stripped here: callers split via
+        :func:`split_thinking` (terminal ``propose`` emits it as a
+        ``thinking`` event, voice ``respond`` gates it from TTS, chat
+        model forwards it in ``additional_kwargs``). Stripping here
+        silently destroyed the think→toolcall loop (``decode_with_thinking``
+        could never recover thinking once stripped).
+        """
         tok = self._tokenizer()
         ids = [int(i) for i in ids]
 
         def _run():
-            text = tok.decode(ids, skip_special_tokens=True)
-            if self.config.thinking:
-                text = _THINK_RE.sub("", text).strip()
-            return text
+            return tok.decode(ids, skip_special_tokens=True)
 
         return await asyncio.to_thread(_run)
 
+    async def decode_with_thinking(self, ids) -> tuple:
+        """Decode + split (thinking, answer). Never strips silently."""
+        return split_thinking(await self.decode(ids))
+
     async def generate(self, messages: list,
-                       max_tokens: int | None = None) -> LlmResult:
-        """Full reply (non-streaming). Raises when weights are missing."""
+                       max_tokens: int | None = None,
+                       tools: list | None = None,
+                       stop: list[str] | None = None) -> LlmResult:
+        """Full reply (non-streaming). Raises when weights are missing.
+
+        ``tools`` (OpenAI-style specs) is forwarded to the chat template;
+        templates without tool support ignore it via encode() fallbacks.
+        ``stop`` (e.g. ``["</function>"]``) is forwarded to legs with
+        native stop support (MiniCPM HF) so a tool call ends cleanly at
+        the envelope close; legs without it ignore the kwarg.
+        """
         # paged path: real InferenceEngine (continuous batching)
         eng = self._paged_engine()
         if eng is not None:
-            ids = await self.encode(messages)
+            ids = await self.encode(messages, tools=tools)
             limit = int(max_tokens or self.config.max_tokens)
             from src.inference.config import SamplingParams as _SP
             sp = _SP(max_tokens=limit, temperature=0.0)
@@ -248,9 +349,19 @@ class LlmModel:
             return LlmResult(text=text, ttft_s=0.0, tps=0.0,
                              output_ids=tuple(out_ids))
         leg = self._backend()
-        ids = await self.encode(messages)
-        out = await asyncio.to_thread(
-            leg.generate, ids, int(max_tokens or self.config.max_tokens))
+        ids = await self.encode(messages, tools=tools)
+        limit = int(max_tokens or self.config.max_tokens)
+        if stop:
+            try:
+                out = await asyncio.to_thread(
+                    leg.generate, ids, limit, stop_strings=stop)
+            except TypeError:
+                # Leg without native stop support (fused/q4k): plain call.
+                out = await asyncio.to_thread(
+                    leg.generate, ids, int(max_tokens or self.config.max_tokens))
+        else:
+            out = await asyncio.to_thread(
+                leg.generate, ids, int(max_tokens or self.config.max_tokens))
         # QwenFused returns {"ids": [..] } batched dict; handle both
         raw_ids = out["ids"] if isinstance(out, dict) else out
         if isinstance(raw_ids, list) and raw_ids and isinstance(raw_ids[0], list):
@@ -266,12 +377,21 @@ class LlmModel:
         return LlmResult(text=text, ttft_s=ttft,
                          tps=float(tps), output_ids=tuple(raw_ids if isinstance(raw_ids, (list,tuple)) else []))
 
-    async def stream(self, messages: list, max_tokens: int | None = None):
-        """Async generator of :class:`LlmToken` as produced (for TTS)."""
+    async def stream(self, messages: list, max_tokens: int | None = None,
+                     tools: list | None = None,
+                     stop: list[str] | None = None):
+        """Async generator of :class:`LlmToken` as produced (for TTS/TUI).
+
+        ``tools`` is forwarded to the chat template like in
+        :meth:`generate`, so streamed terminal steps keep MiniCPM's native
+        tool definitions (without them the streamed path would lose tool
+        calls the non-streamed path makes). ``stop`` is forwarded to legs
+        with native stop support so a tool call ends at the envelope.
+        """
         # paged path streams via InferenceEngine step loop
         eng = self._paged_engine()
         if eng is not None:
-            ids = await self.encode(messages)
+            ids = await self.encode(messages, tools=tools)
             limit = int(max_tokens or self.config.max_tokens)
             from src.inference.config import SamplingParams as _SP
             sp = _SP(max_tokens=limit, temperature=0.0)
@@ -340,7 +460,7 @@ class LlmModel:
         import torch
 
         leg = self._backend()
-        ids = await self.encode(messages)
+        ids = await self.encode(messages, tools=tools)
         limit = int(max_tokens or self.config.max_tokens)
         queue: asyncio.Queue = asyncio.Queue()
         loop = asyncio.get_running_loop()
@@ -351,8 +471,13 @@ class LlmModel:
                     # QwenFused.generate returns dict, not stream; emulate stream via generate then chunk
                     # Prefer generate_stream if available (legacy QwenEngine), else fallback to generate
                     if hasattr(leg, "generate_stream"):
-                        for i, (tok_id, ttft) in enumerate(
-                                leg.generate_stream(ids, limit)):
+                        try:
+                            it = (leg.generate_stream(ids, limit, stop_strings=stop)
+                                  if stop else leg.generate_stream(ids, limit))
+                        except TypeError:
+                            # Leg without native stop support: plain stream.
+                            it = leg.generate_stream(ids, limit)
+                        for i, (tok_id, ttft) in enumerate(it):
                             loop.call_soon_threadsafe(
                                 queue.put_nowait, ("tok", (tok_id, ttft, i == 0)))
                     else:

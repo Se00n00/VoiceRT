@@ -8,19 +8,23 @@ with the extension).
 """
 from src.tools.terminal import (
     TERMINAL_PREAMBLE,
+    TERMINAL_TOOLS,
     TerminalAction,
     check_policy,
     is_denied,
     needs_confirm,
     parse_terminal_action,
+    parse_xml_action,
 )
 
 __all__ = [
     "ALLOWED_OPS",
     "TERMINAL_PREAMBLE",
+    "TERMINAL_TOOLS",
     "TerminalAction",
     "check_policy",
     "is_denied",
     "needs_confirm",
     "parse_terminal_action",
+    "parse_xml_action",
 ]

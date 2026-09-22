@@ -13,9 +13,12 @@ export type TurnEvent =
   | { event: "action"; action: Record<string, unknown> }
   | { event: "observation"; observation: string }
   | { event: "chat"; reply: string }
+  | { event: "thinking"; text: string }
+  | { event: "token"; piece: string }
   | { event: "audio"; wav_b64: string; sr: number }
   | { event: "confirm"; action: Record<string, unknown> }
   | { event: "summary"; reply: string }
+  | { event: "stuck"; reason: string }
   | { event: "error"; message: string }
   | { event: string; [k: string]: unknown };
 
@@ -34,8 +37,7 @@ export async function stt(pcm: Buffer, sr = 16000): Promise<{ kind: string; text
   return (await r.json()) as { kind: string; text?: string; message?: string };
 }
 
-export async function say(text: string): Promise<{ kind: string; wav_b64?: string; sr?: number; message?: string }> {
-  const r = await fetch(`${API}/term/say`, {
+export async function say(text: string): Promise<{ kind: string; wav_b64?: string; sr?: number; message?: string }> {  const r = await fetch(`${API}/term/say`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text: text.slice(0, 500) }),
@@ -96,6 +98,74 @@ export class TermSocket {
     } catch {
       /* socket died mid-turn; server side times out the confirm */
     }
+  }
+
+  close(): void {
+    try {
+      this.ws?.close();
+    } catch {
+      /* ignore */
+    }
+    this.ws = null;
+  }
+
+  get connected(): boolean {
+    return this.ws !== null;
+  }
+}
+
+/** Persistent turn socket for the autonomous DeepAgent (MCP + todos, no confirm). */
+export class DeepSocket {
+  private ws: WebSocket | null = null;
+  onEvent: (e: TurnEvent) => void = () => {};
+  onOpen: () => void = () => {};
+  onClose: () => void = () => {};
+
+  connect(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket(`${wsURL()}/deep`);
+      const to = setTimeout(() => reject(new Error("ws open timeout (bridge up on :8004?)")), 8000);
+      ws.addEventListener("open", () => {
+        clearTimeout(to);
+        this.ws = ws;
+        this.onOpen();
+        resolve();
+      });
+      ws.addEventListener("error", () => {
+        clearTimeout(to);
+        reject(new Error("ws error"));
+      });
+      ws.addEventListener("message", (ev) => {
+        try {
+          const m = JSON.parse(String((ev as MessageEvent).data)) as TurnEvent;
+          this.onEvent(m);
+        } catch {
+          /* ignore */
+        }
+      });
+      ws.addEventListener("close", () => {
+        this.ws = null;
+        this.onClose();
+      });
+    });
+  }
+
+  turn(text: string, sessionId: string, cwd: string): void {
+    try {
+      this.ws?.send(JSON.stringify({ type: "turn", text, session_id: sessionId, cwd }));
+    } catch {
+      this.ws = null;
+      this.onClose();
+    }
+  }
+
+  close(): void {
+    try {
+      this.ws?.close();
+    } catch {
+      /* ignore */
+    }
+    this.ws = null;
   }
 
   get connected(): boolean {
@@ -175,4 +245,27 @@ export function stopBackend(): void {
     /* ignore */
   }
   child = null;
+}
+
+export type ModelInfo = {
+  name: string;
+  label: string;
+  backend: string;
+  desc: string;
+  ready: boolean;
+  current: boolean;
+};
+
+export async function getModel(): Promise<{ current: string; available: ModelInfo[] }> {
+  const r = await fetch(`${API}/model`);
+  return (await r.json()) as { current: string; available: ModelInfo[] };
+}
+
+export async function switchModel(name: string): Promise<{ kind: string; current?: string; label?: string; message?: string; note?: string }> {
+  const r = await fetch(`${API}/model/switch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  return (await r.json()) as { kind: string; current?: string; label?: string; message?: string; note?: string };
 }

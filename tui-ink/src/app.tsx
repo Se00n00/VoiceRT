@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Box, Text, useApp, useInput, useStdout } from "ink";
+import { Box, Static, Text, useApp, useInput, useStdout } from "ink";
 import TextInput from "ink-text-input";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { API, TermSocket, ensureBackend, health, say, stopBackend, stt, type TurnEvent } from "./bridge.js";
+import { API, DeepSocket, TermSocket, ensureBackend, getModel, health, say, stopBackend, stt, switchModel, type TurnEvent } from "./bridge.js";
 import { NB, b64ToF32, envelope, pcmToF32, rmsLevel, spectrum } from "./audio.js";
 
 /** Word-Jaccard similarity 0..1 (echo detection). */
@@ -44,13 +44,34 @@ export function isEcho(spoken: string[], heard: string): boolean {
   return false;
 }
 
-type Msg = { id: string; who: "you" | "agent" | "sys" | "act" | "obs" | "err" | "ask"; text: string };
+type Msg = { id: string; who: "you" | "agent" | "sys" | "act" | "obs" | "err" | "ask" | "think"; text: string };
 type VizMode = "idle" | "user" | "agent";
 type Mode = "auto" | "voice";
 const MODES: Mode[] = ["auto", "voice"];
 
 const uid = () => randomBytes(4).toString("hex");
-const MODEL = "Qwen3-0.6B";
+const MODEL_FALLBACK = "minicpm5-1b-bf16";
+
+// Display caps: a single unbounded message (multi-KB listing, long
+// thinking trace) wraps into dozens of terminal rows and used to blow
+// past the fixed-height layout and break the whole app. Truncate at
+// push time; the full text stays in session memory on the backend.
+const CAP_FOR: Record<Msg["who"], number> = {
+  you: 2000,
+  agent: 2000,
+  sys: 500,
+  act: 300,
+  obs: 800,
+  err: 500,
+  ask: 500,
+  think: 800,
+};
+function capText(who: Msg["who"], text: string): string {
+  const t = String(text ?? "");
+  const cap = CAP_FOR[who] ?? 500;
+  if (t.length <= cap) return t;
+  return t.slice(0, cap) + ` …[${t.length - cap} chars more]`;
+}
 
 
 
@@ -64,6 +85,7 @@ export function App({ seconds = 5 }: { seconds?: number }) {
   const [sid, setSid] = useState(() => randomBytes(8).toString("hex"));
   const [cwd, setCwd] = useState(() => process.cwd());
   const [serverOk, setServerOk] = useState<boolean | null>(null);
+  const [modelLabel, setModelLabel] = useState<string>(MODEL_FALLBACK);
   const [viz, setViz] = useState<{ mode: VizMode; bins: number[] }>({ mode: "idle", bins: new Array(NB).fill(0) });
   const [tick, setTick] = useState(0);
   const [pending, setPending] = useState<Record<string, unknown> | null>(null);
@@ -113,14 +135,44 @@ export function App({ seconds = 5 }: { seconds?: number }) {
   }
 
   const push = useCallback((who: Msg["who"], text: string) => {
-    setMsgs((m) => [...m.slice(-199), { id: uid(), who, text }]);
+    const capped = capText(who, text);
+    if (!capped.trim()) return;
+    setMsgs((m) => {
+      // Dedupe: the backend may re-emit an identical trace (retried
+      // step, overlapping socket) — never render the same bubble twice.
+      const last = m[m.length - 1];
+      if (last && last.who === who && last.text === capped) return m;
+      return [...m.slice(-199), { id: uid(), who, text: capped }];
+    });
   }, []);
 
   const calm = useCallback(() => setViz({ mode: "idle", bins: new Array(NB).fill(0) }), []);
 
-  // idle wave
+  // Live token stream: token events accumulate in a ref (no re-render
+  // per token) and flush to state on the 120ms tick. Cleared whenever
+  // a final per-step event (chat/action/observation/summary/error)
+  // lands, so the transient chips never duplicate the final bubble.
+  const [streamText, setStreamText] = useState("");
+  const streamBuf = useRef("");
+  const streamDirty = useRef(false);
+  const clearStream = useCallback(() => {
+    streamBuf.current = "";
+    streamDirty.current = false;
+    setStreamText("");
+  }, []);
+  // Per-turn assistant visibility: reset on send; the summary handler
+  // uses it to surface a reply when the turn produced none.
+  const turnChatCount = useRef(0);
+
+  // idle wave + stream flush
   useEffect(() => {
-    const t = setInterval(() => setTick((x) => x + 1), 120);
+    const t = setInterval(() => {
+      setTick((x) => x + 1);
+      if (streamDirty.current) {
+        streamDirty.current = false;
+        setStreamText(streamBuf.current.slice(-400));
+      }
+    }, 120);
     return () => clearInterval(t);
   }, []);
   void tick;
@@ -256,57 +308,132 @@ export function App({ seconds = 5 }: { seconds?: number }) {
     })();
   }, []);
 
-  // persistent socket
+  // persistent socket — autonomous DeepAgent (MCP + todos) is the main,
+  // with TermSocket as fallback. Both speak the same event protocol.
+  // Boot guard: without it a re-run effect (or StrictMode remount)
+  // opens a SECOND live socket and every turn renders twice.
+  const booted = useRef(false);
   useEffect(() => {
-    const s = new TermSocket();
-    sock.current = s;
-    s.onEvent = (e: TurnEvent) => {
-      if (e.event === "action") {
-        const a = (e as { action: Record<string, unknown> }).action ?? {};
-        push("act", `▸ ${String(a["action"] ?? "?")}: ${String(a["command"] ?? a["path"] ?? "")}`);
-      } else if (e.event === "observation") {
-        push("obs", String((e as { observation: string }).observation ?? "").slice(0, 800));
-      } else if (e.event === "chat") {
-        const reply = String((e as { reply: string }).reply ?? "");
-        push("agent", reply);
-        void speakAgent(reply);
-      } else if (e.event === "audio") {
-        // Bridge TTS audio is voiced in voice mode only (auto = text).
-        if (modeRef.current === "voice") {
-          const ev = e as { wav_b64: string; sr: number };
-          void playAudio(b64ToF32(ev.wav_b64), ev.sr ?? 24000);
+    if (booted.current) return;
+    booted.current = true;
+    let active: DeepSocket | TermSocket | null = null;
+    let cancelled = false;
+    const setupHandlers = (sockInst: DeepSocket | TermSocket) => {
+      sockInst.onEvent = (e: TurnEvent) => {
+        if (e.event === "action") {
+          clearStream();
+          const a = (e as { action: Record<string, unknown> }).action ?? {};
+          if (String(a["action"]) === "write_todos") {
+            const todos = (a["todos"] as unknown as Array<{ content: string; status: string }>) || [];
+            if (Array.isArray(todos) && todos.length) {
+              push("act", `todos: ${todos.map((t) => `${t.status === "completed" ? "✓" : t.status === "in_progress" ? "●" : "○"} ${t.content}`).join(" | ")}`);
+            }
+            return;
+          }
+          push("act", `▸ ${String(a["action"] ?? "?")}: ${String(a["command"] ?? a["path"] ?? a["pattern"] ?? "")}`);
+        } else if (e.event === "observation") {
+          clearStream();
+          push("obs", String((e as { observation: string }).observation ?? "").slice(0, 800));
+        } else if (e.event === "chat") {
+          clearStream();
+          const reply = String((e as { reply: string }).reply ?? "");
+          if (reply.trim()) {
+            turnChatCount.current += 1;
+            push("agent", reply);
+            void speakAgent(reply);
+          }
+        } else if (e.event === "thinking") {
+          const th = String((e as { text: string }).text ?? "").slice(0, 1200);
+          if (th) push("think", th);
+        } else if (e.event === "token") {
+          // Live chips accumulate off-render; the tick flushes them to
+          // the transient line below. Raw pieces may include think tags
+          // mid-stream — the final parsed events replace this preview.
+          const piece = String((e as { piece: string }).piece ?? "");
+          if (piece) {
+            streamBuf.current = (streamBuf.current + piece).slice(-1200);
+            streamDirty.current = true;
+          }
+        } else if (e.event === "stuck") {
+          push("sys", `↻ stuck: ${String((e as { reason: string }).reason ?? "")}`);
+        } else if (e.event === "audio") {
+          if (modeRef.current === "voice") {
+            const ev = e as { wav_b64: string; sr: number };
+            void playAudio(b64ToF32(ev.wav_b64), ev.sr ?? 24000);
+          }
+        } else if (e.event === "summary") {
+          // Fallback visibility: if the turn ran but produced no chat
+          // bubble (e.g. tools-only finish), surface the summary reply
+          // so the assistant never looks silent.
+          const reply = String((e as { reply: string }).reply ?? "");
+          if (turnChatCount.current === 0 && reply.trim()) {
+            turnChatCount.current += 1;
+            push("agent", reply);
+            void speakAgent(reply);
+          }
+          clearStream();
+          setBusy(false);
+          chainNext();
+        } else if (e.event === "error") {
+          clearStream();
+          push("err", `error: ${String((e as { message: string }).message ?? "")}`);
+          setBusy(false);
         }
-      } else if (e.event === "summary") {
-        setBusy(false);
-        chainNext();
-      } else if (e.event === "error") {
-        push("err", `error: ${String((e as { message: string }).message ?? "")}`);
-        setBusy(false);
+      };
+      if (sockInst instanceof TermSocket) {
+        (sockInst as TermSocket).onConfirm = (action) => {
+          if (modeRef.current === "voice") voiceConfirmRef.current(action);
+          else setPending(action);
+        };
       }
-    };
-    s.onConfirm = (action) => {
-      if (modeRef.current === "voice") voiceConfirmRef.current(action);
-      else setPending(action);
+      sock.current = sockInst as any;
+      active = sockInst;
     };
     // Single local app: reuse a healthy backend if one is already up,
     // else spawn bridge.py as our own child (killed with us on exit).
-    // server.py is never involved.
     const boot = async () => {
       const want = await ensureBackend((m) => push("sys", m));
+      if (cancelled) return;
       if (!want) {
         push("err", "local agent backend failed to start (see terminal above)");
         return;
       }
       try {
-        await s.connect();
+        const mi = await getModel();
+        const cur = mi.available.find((a) => a.current) ?? mi.available[0];
+        if (cur?.label) setModelLabel(cur.label);
       } catch {
-        push("err", "bridge unreachable after start — retrying on next turn");
+        /* keep fallback label */
+      }
+      // Now that backend is up, connect the autonomous socket
+      let sockInst: DeepSocket | TermSocket = new DeepSocket();
+      setupHandlers(sockInst);
+      try {
+        await (sockInst as DeepSocket).connect();
+        active = sockInst;
+      } catch {
+        const fallback = new TermSocket();
+        setupHandlers(fallback);
+        try {
+          await fallback.connect();
+          active = fallback;
+        } catch {
+          push("err", "bridge unreachable after start — retrying on next turn");
+        }
       }
     };
     void boot();
     return () => {
+      cancelled = true;
       try {
-        s && sock.current === s && (sock.current = null);
+        // Close the socket so a stale connection can never keep pushing
+        // duplicate events after unmount/remount.
+        active?.close();
+      } catch {
+        /* ignore */
+      }
+      try {
+        if (active && sock.current === active) sock.current = null;
       } catch {
         /* ignore */
       }
@@ -321,11 +448,13 @@ export function App({ seconds = 5 }: { seconds?: number }) {
         return;
       }
       setBusy(true);
+      turnChatCount.current = 0;
+      clearStream();
       push("you", text);
       push("sys", "⬡ Cooking…");
       sock.current.turn(text, sid, cwd);
     },
-    [push, sid, cwd]
+    [push, sid, cwd, clearStream]
   );
 
   // Mic primitive: records `secs` of PCM, drives the viz, returns null
@@ -448,7 +577,7 @@ export function App({ seconds = 5 }: { seconds?: number }) {
   };
 
   const onSubmit = useCallback(
-    (text: string) => {
+    async (text: string) => {
       setValue("");
       const t = text.trim();
       if (!t || busyRef.current) return;
@@ -483,6 +612,15 @@ export function App({ seconds = 5 }: { seconds?: number }) {
         push("sys", `mode: ${modeRef.current} (Tab toggles auto ↔ voice)`);
         return;
       }
+      if (t === "/opencode" || t.startsWith("/opencode ")) {
+        const arg = t.slice("/opencode".length).trim();
+        const targetCwd = arg || cwd;
+        push("sys", `spawning opencode in ${targetCwd}…`);
+        const { spawnOpencode } = await import("./opencode.js");
+        const ok = await spawnOpencode(targetCwd, (m) => push("sys", m));
+        if (!ok) push("err", "opencode spawn failed — is kitty/tmux installed?");
+        return;
+      }
       if (t.startsWith("/mode ")) {
         const m = t.split(/\s+/, 2)[1] as Mode;
         if (m === "auto" || m === "voice") {
@@ -491,8 +629,36 @@ export function App({ seconds = 5 }: { seconds?: number }) {
         } else push("err", "mode must be auto|voice");
         return;
       }
+      if (t === "/model") {
+        try {
+          const mi = await getModel();
+          push("sys", mi.available.map((a) =>
+            `${a.current ? "●" : "○"} ${a.name} — ${a.label} [${a.backend}]${a.ready ? "" : ` (blocked: ${a.desc})`}`).join("\n"));
+        } catch {
+          push("err", "could not reach /model (bridge down?)");
+        }
+        return;
+      }
+      if (t.startsWith("/model ")) {
+        const name = (t.split(/\s+/, 2)[1] ?? "").trim();
+        if (!name) {
+          push("err", "usage: /model <name> (see /model)");
+          return;
+        }
+        push("sys", `switching model → ${name} (re-warming LLM leg…)`);
+        try {
+          const r = await switchModel(name);
+          if (r.kind === "ok") {
+            if (r.label) setModelLabel(r.label);
+            push("sys", `model → ${r.label ?? r.current ?? name}${r.note ? ` (${r.note})` : ""}`);
+          } else push("err", `model switch failed: ${r.message ?? "unknown"}`);
+        } catch (e) {
+          push("err", `model switch failed: ${String(e)}`);
+        }
+        return;
+      }
       if (t === "/help") {
-        push("sys", "/new /cwd PATH /clear /voice [sec] /mode [m] /help /quit · Tab mode · v voice · y/n confirm");
+        push("sys", "/new /cwd PATH /clear /opencode [dir] /voice [sec] /mode [m] /model [name] /help /quit · Tab mode · v voice · y/n confirm · ctrl+o opencode");
         return;
       }
       if (t.startsWith("/")) {
@@ -526,6 +692,12 @@ export function App({ seconds = 5 }: { seconds?: number }) {
       }
       return;
     }
+    if (key.ctrl && (input === "o" || input === "O")) {
+      const targetCwd = cwd;
+      push("sys", `spawning opencode in ${targetCwd}…`);
+      import("./opencode.js").then(({ spawnOpencode }) => spawnOpencode(targetCwd, (m) => push("sys", m)));
+      return;
+    }
     if ((input === "v" || input === "V") && value.trim() === "" && !busyRef.current) {
       if (modeRef.current !== "voice") {
         push("sys", "voice lives in voice mode — Tab to switch.");
@@ -535,9 +707,10 @@ export function App({ seconds = 5 }: { seconds?: number }) {
     }
   });
 
-  const rows = process.stdout.rows ?? 30;
-  const convH = Math.max(6, rows - 9);
-
+  // History lives in <Static>: appended bubbles scroll into the
+  // terminal scrollback instead of fighting yoga inside a fixed-height
+  // box — that fight is what broke the whole app once chat exceeded
+  // one screen. Per-message caps at push time bound every bubble.
   // Agent voice as three vertical bars: middle bigger, sides smaller,
   // same thickness (3 cells), bright white. Driven by low/mid/high bands
   // of the agent levels; gentle idle pulse otherwise. No user visualizer.
@@ -570,13 +743,15 @@ export function App({ seconds = 5 }: { seconds?: number }) {
   const off = Math.max(0, Math.floor((rw0 - trioWidth) / 2));
 
   const colorFor = (w: Msg["who"]) =>
-    w === "you" ? "cyan" : w === "agent" ? "white" : w === "err" ? "red" : w === "ask" ? "yellow" : "gray";
+    w === "you" ? "cyan" : w === "agent" ? "white" : w === "err" ? "red" : w === "ask" ? "yellow" : w === "think" ? "gray" : "gray";
   const labelFor = (w: Msg["who"]) =>
-    w === "you" ? "› " : w === "agent" ? "" : w === "ask" ? "⬡ Confirm? " : "";
+    w === "you" ? "› " : w === "agent" ? "" : w === "ask" ? "⬡ Confirm? " : w === "think" ? "› think " : "";
 
   // Right panel: visualizer ONLY — no labels, no status. Borderless,
   // filled with the same faint tone as the left border. Ink 5 has no Box
   // background, so every row is a full-width Text carrying the fill.
+  // Fixed content height (bars only): it never grows, so it can never
+  // overflow the layout no matter how long the chat gets.
   const cols = process.stdout.columns ?? 100;
   const rw = Math.max(10, Math.floor(cols * 0.18) - 2);
   const pad = (s: string) => (s + " ".repeat(rw)).slice(0, rw);
@@ -585,22 +760,23 @@ export function App({ seconds = 5 }: { seconds?: number }) {
   for (let r = BH; r >= 1; r--) {
     rightRows.push({ text: " ".repeat(off) + barLine(r), color: "white", bold: true });
   }
-  while (rightRows.length < rows - 1) rightRows.push({ text: "" });
 
   return (
-    <Box flexDirection="row" height={rows - 1}>
-      <Box flexDirection="column" width="82%" height={rows - 1} borderStyle="single" borderColor="#232327" paddingX={1}>
-        <Text bold color="#5a5a60">
-          {" conversation "}
-        </Text>
-        <Box flexGrow={1} flexDirection="column" overflow="hidden">
-          {msgs.slice(-convH + 1).map((m) => (
-            <Text key={m.id} color={colorFor(m.who)} wrap="wrap">
+    <Box flexDirection="row">
+      <Box flexDirection="column" flexGrow={1} flexShrink={1} borderStyle="single" borderColor="#232327" paddingX={1}>
+        <Static items={msgs}>
+          {(m) => (
+            <Text key={m.id} color={colorFor(m.who)} dimColor={m.who === "think"} wrap="wrap">
               {labelFor(m.who)}
               {m.text}
             </Text>
-          ))}
-        </Box>
+          )}
+        </Static>
+        {streamText ? (
+          <Text dimColor color="gray" wrap="wrap">
+            {streamText.slice(-400)}▌
+          </Text>
+        ) : null}
         <Box borderStyle="single" borderColor="white">
           <Text color="white">
             {" "}
@@ -617,7 +793,7 @@ export function App({ seconds = 5 }: { seconds?: number }) {
           />
         </Box>
         <Text color="white">
-          {MODEL} · {mode} · session {sid.slice(0, 8)} · {cwd} · {serverOk === null ? "…" : serverOk ? "●" : "○ bridge down"} · Tab mode · v voice
+          {modelLabel} · {mode} · session {sid.slice(0, 8)} · {cwd} · {serverOk === null ? "…" : serverOk ? "●" : "○ bridge down"} · Tab mode · v voice
         </Text>
         {pending ? (
           <Text color="yellow" wrap="wrap">
@@ -625,7 +801,7 @@ export function App({ seconds = 5 }: { seconds?: number }) {
           </Text>
         ) : null}
       </Box>
-      <Box flexDirection="column" width="18%">
+      <Box flexDirection="column" width="18%" flexShrink={0}>
         {rightRows.map((l, i) => (
           <Text key={i} backgroundColor="#232327" color={l.color ?? "white"} bold={l.bold}>
             {pad(l.text)}
