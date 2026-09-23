@@ -105,6 +105,16 @@ def score_case(case, action, required):
     return 0, 1, 1, _valid(action, required)
 
 
+def result_flag(tp, fp, fn) -> str:
+    """Display flag: true negatives (chat cases, correctly silent) are TN,
+    not FN. Pure (t13-t15 used to print FN while scoring 0/0/0)."""
+    if tp:
+        return "OK "
+    if fp:
+        return "fp "
+    return "TN " if not fn else "FN "
+
+
 def _valid(action, required):
     if action is None or getattr(action, "op", "") == "done":
         return None
@@ -145,7 +155,7 @@ async def main_async(args, cases):
         })
         got = "none" if pred is None else pred["tool"]
         want = "none" if case.get("expected") is None else case["expected"]["tool"]
-        flag = "OK " if tp else ("fp " if fp else "FN ")
+        flag = result_flag(tp, fp, fn)
         print(f"[{flag}] {case['id']:4s} want={want:12s} got={got:12s} "
               f"retry={retries} {dt:5.1f}s", flush=True)
     return rows, {"model": args.model, "backend": args.backend,

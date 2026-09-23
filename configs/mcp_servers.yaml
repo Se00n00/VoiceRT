@@ -1,0 +1,39 @@
+# MCP servers for the voice agent's extra tools.
+#
+# Loaded by src/agent/mcp/config.py. Selection order: explicit path arg >
+# $MCP_CONFIG > this file > bundled voice-tools fallback (if absent).
+#
+# Rules:
+# - No secrets here, ever. Keys travel via environment (e.g. .env), and
+#   `env:` below only MERGES over the process environment.
+# - `command: null` means "current Python interpreter".
+# - `cwd` is resolved relative to the repo root.
+# - `enabled: false` skips a server without deleting it.
+# - `tool_name_prefix: true` prefixes every tool with its server name
+#   (useful once two servers expose the same tool name).
+
+tool_name_prefix: false
+
+servers:
+  voice-tools:
+    enabled: true
+    transport: stdio
+    command: null
+    args: ["-m", "src.agent.mcp.server"]
+    cwd: "."
+    env: {}
+
+  # Example: a second local stdio server (disabled until you need it).
+  # web-extra:
+  #   enabled: false
+  #   transport: stdio
+  #   command: null
+  #   args: ["-m", "my_pkg.my_server"]
+  #   cwd: "."
+  #   env: {}
+
+  # Example: remote HTTP server (disabled; needs no local process).
+  # remote-tools:
+  #   enabled: false
+  #   transport: http
+  #   url: "http://localhost:8000/mcp"

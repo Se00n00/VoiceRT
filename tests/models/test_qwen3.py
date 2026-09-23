@@ -145,8 +145,15 @@ class TestQwen3Defaults(unittest.TestCase):
 
         root = os.path.dirname(os.path.dirname(
             os.path.dirname(os.path.abspath(__file__))))
-        self.assertFalse(os.path.exists(os.path.join(root, "configs")),
-                         "configs/ is dead: dataclasses replaced YAML")
+        cfgdir = os.path.join(root, "configs")
+        # configs/ is sanctioned for MCP server wiring only; model/leg
+        # config stays dataclass-bound (no YAML).
+        if not os.path.isdir(cfgdir):
+            return
+        allowed = {"mcp_servers.yaml"}
+        found = {f for f in os.listdir(cfgdir) if f.endswith((".yaml", ".yml"))}
+        self.assertTrue(found <= allowed,
+                        f"configs/ holds non-MCP YAML: {sorted(found - allowed)}")
 
 
 if __name__ == "__main__":

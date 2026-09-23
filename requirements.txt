@@ -45,6 +45,7 @@ soundfile==0.14.0
 numpy==2.5.3
 onnxruntime==1.30.0
 pyyaml==6.0.3
+httpx==0.28.1
 kokoro==0.9.4
 # - langgraph: the voice-turn agent is a compiled StateGraph
 #   (src/agent/graph.py). Pulls langchain-core transitively.
@@ -58,6 +59,12 @@ langgraph==1.2.11
 langchain==1.4.2
 langchain-core==1.6.3
 deepagents==0.7.16
+# - mcp/langchain-mcp-adapters: the agent's extra tools (python_exec /
+#   fetch / web_search) are served by a local MCP stdio server
+#   (src/agent/mcp/server.py) and loaded via the stdio client
+#   (src/agent/mcp/client.py). PINNED to the tested combo.
+mcp==1.30.0
+langchain-mcp-adapters==0.3.2
 # - textual: the opencode-style full-screen TUI (tui.py). Not needed
 #   for the server; install only for the terminal app.
 textual==8.2.8

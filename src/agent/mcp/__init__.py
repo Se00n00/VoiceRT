@@ -1,37 +1,20 @@
-"""Agent-local MCP package: canonical tools + stdio server.
+"""Agent-local MCP package: extra tools + stdio server + client.
 
-- ``tools``: single-definition implementations (scoped fs, docker exec,
-  python exec, fetch, searxng).
-- ``server``: thin FastMCP wrappers for external (stdio) consumers.
+- ``tools``: single-definition implementations (``python_exec``,
+  ``fetch``, ``web_search``).
+- ``server``: thin FastMCP wrappers for stdio consumers.
+- ``client``: stdio loader returning LangChain tools for the agent.
 """
 from src.agent.mcp import tools
 from src.agent.mcp.tools import (
-    DEFAULT_ROOTS,
-    default_roots,
-    docker_exec,
     fetch,
-    fs_edit,
-    fs_grep,
-    fs_list,
-    fs_read,
-    fs_write,
     python_exec,
-    searxng_search,
-    searxng_url,
+    web_search,
 )
 
 __all__ = [
     "tools",
-    "DEFAULT_ROOTS",
-    "default_roots",
-    "docker_exec",
     "fetch",
-    "fs_edit",
-    "fs_grep",
-    "fs_list",
-    "fs_read",
-    "fs_write",
     "python_exec",
-    "searxng_search",
-    "searxng_url",
+    "web_search",
 ]

@@ -49,6 +49,13 @@ tests/
 # voice-agent JSON session memory (runtime state, per docs/architecture.md)
 sessions/
 
+# secrets (API keys etc. — never commit)
+.env
+.env.*
+
+# local per-session conversation dotfiles (<store_dir>, default .voicert/)
+.voicert/
+
 # node app build outputs (rebuild with npm install && npm run build)
 tui-ink/node_modules/
 tui-ink/dist/

@@ -201,6 +201,23 @@ class TestFullManifests(unittest.TestCase):
                 if (r["category"] not in ("irrelevance", "chatable")
                         and r["expected_kind"] != "multiturn"):
                     self.assertIsNotNone(r["expected"], r["id"])
+class TestResultFlag(unittest.TestCase):
+    def test_tn_not_fn(self):
+        from benchmarks.toolcall_eval import result_flag, score_case
+
+        # chat case, model silent: scores 0/0/0 -> TN (was misprinted FN)
+        tp, fp, fn, _ = score_case({"expected": None}, None, {})
+        self.assertEqual((tp, fp, fn), (0, 0, 0))
+        self.assertEqual(result_flag(tp, fp, fn), "TN ")
+
+    def test_matrix(self):
+        from benchmarks.toolcall_eval import result_flag
+
+        self.assertEqual(result_flag(1, 0, 0), "OK ")
+        self.assertEqual(result_flag(0, 1, 1), "fp ")
+        self.assertEqual(result_flag(0, 0, 1), "FN ")
+
+
 class TestGtString(unittest.TestCase):
     def test_quoted_and_bare(self):
         from benchmarks.bfcl_eval import parse_gt_string

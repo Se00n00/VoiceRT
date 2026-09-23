@@ -127,6 +127,46 @@ class LocalChatModel(BaseChatModel):
             action = parse_bare_tail(raw)
         return thinking, answer, action
 
+    @staticmethod
+    def _builtin_call(action) -> tuple:
+        """Old terminal op -> deepagents built-in (name, args).
+
+        The prompt still shows the legacy schema (exec/read/write/... with
+        path/text args); the graph executes the built-ins (execute/
+        read_file/... with file_path/content args). Anything without a
+        built-in passes through unchanged (the tool node reports it and
+        the model recovers).
+        """
+        d = action.as_dict()
+        op = action.op
+
+        def _abs(p: str) -> str:
+            p = str(p or "")
+            return p if p.startswith("/") else "/" + p
+
+        if op == "exec":
+            return "execute", {"command": d.get("command", "")}
+        if op == "read":
+            return "read_file", {"file_path": _abs(d.get("path", ""))}
+        if op == "write":
+            return "write_file", {"file_path": _abs(d.get("path", "")),
+                                  "content": d.get("text", "")}
+        if op == "edit":
+            return "edit_file", {"file_path": _abs(d.get("path", "")),
+                                 "old_string": d.get("anchor", ""),
+                                 "new_string": d.get("text", "")}
+        if op == "list":
+            return "ls", {"path": _abs(d.get("path", "") or ".")}
+        if op == "grep":
+            args: dict = {"pattern": d.get("pattern", "")}
+            if d.get("path", ""):
+                args["path"] = _abs(d.get("path", ""))
+            return "grep", args
+        if op == "searxng":
+            # advertised name; the attached tool is the direct web_search.
+            return "web_search", {"pattern": d.get("pattern", "")}
+        return op, {k: v for k, v in d.items() if k != "action"}
+
     def _needs_retry(self, raw: str, thinking: str, answer: str) -> str | None:
         """One-retry nudge for garbled or echoed output, else None."""
         if is_degenerate(raw):
@@ -226,9 +266,10 @@ class LocalChatModel(BaseChatModel):
 
         thinking, answer, action = self._parse_action(raw)
         if action and action.op != "done":
+            name, args = self._builtin_call(action)
             tc = {
-                "name": action.op,
-                "args": {k: v for k, v in action.as_dict().items() if k != "action"},
+                "name": name,
+                "args": args,
                 "id": f"call_{uuid.uuid4().hex[:8]}",
                 "type": "tool_call",
             }
@@ -311,10 +352,10 @@ class LocalChatModel(BaseChatModel):
         if action and action.op != "done":
             import uuid
 
+            name, args = self._builtin_call(action)
             chunks.append(create_tool_call_chunk(
-                name=action.op,
-                args=json.dumps({k: v for k, v in action.as_dict().items()
-                                 if k != "action"}),
+                name=name,
+                args=json.dumps(args),
                 id=f"call_{uuid.uuid4().hex[:8]}",
                 index=0,
             ))

@@ -1,9 +1,10 @@
-"""MCP stdio server: scoped filesystem, docker exec, python, web.
+"""MCP stdio server: python_exec, fetch, web_search.
 
 Thin FastMCP wrappers only — every implementation lives in
-:mod:`src.agent.mcp.tools` (the single definition). Policy here is
-autonomous (deny breakers, auto-approve the rest); the interactive
-confirm gate lives in the turn-scoped local toolset instead.
+:mod:`src.agent.mcp.tools` (the single definition). Arg names are the
+agent-facing ones (``code`` / ``path`` / ``pattern``), matching the
+native model-facing defs and :meth:`LocalChatModel._builtin_call`
+(``searxng`` ops arrive here as ``web_search``).
 
 Run standalone over stdio::
 
@@ -16,58 +17,22 @@ from src.agent.mcp import tools as T
 mcp = FastMCP("voice-tools")
 
 
-@mcp.tool(name="read")
-def read_tool(path: str) -> str:
-    """Read a text file under ~/Documents or ~/Projects."""
-    return T.fs_read(path)
-
-
-@mcp.tool(name="write")
-def write_tool(path: str, text: str) -> str:
-    """Write text to a file under ~/Documents or ~/Projects."""
-    return T.fs_write(path, text)
-
-
-@mcp.tool(name="edit")
-def edit_tool(path: str, anchor: str, text: str) -> str:
-    """Anchored patch: replace `anchor` verbatim in the file with `text`."""
-    return T.fs_edit(path, anchor, text)
-
-
-@mcp.tool(name="list")
-def list_tool(path: str = ".") -> str:
-    """List directory entries under ~/Documents or ~/Projects."""
-    return T.fs_list(path)
-
-
-@mcp.tool(name="grep")
-def grep_tool(pattern: str, path: str = ".") -> str:
-    """Grep a pattern across files under ~/Documents or ~/Projects."""
-    return T.fs_grep(pattern, path)
-
-
-@mcp.tool(name="docker_exec")
-def docker_exec_tool(command: str, timeout: int = 30) -> str:
-    """Run one command inside an isolated container (timeout, no shell)."""
-    return T.docker_exec(command, timeout=timeout)
-
-
 @mcp.tool(name="python_exec")
 def python_exec_tool(code: str, timeout: int = 30) -> str:
-    """Run Python code inside an isolated container (no shell, no host files)."""
+    """Run Python code on this host and return its output."""
     return T.python_exec(code, timeout=timeout)
 
 
 @mcp.tool(name="fetch")
-def fetch_tool(url: str) -> str:
-    """Fetch a web page (http/https) and return its text."""
-    return T.fetch(url)
+def fetch_tool(path: str) -> str:
+    """Fetch a web page URL and return its text."""
+    return T.fetch(path)
 
 
-@mcp.tool(name="searxng")
-def searxng_tool(query: str) -> str:
-    """Web search via the local SearXNG instance."""
-    return T.searxng_search(query)
+@mcp.tool(name="web_search")
+def web_search_tool(pattern: str) -> str:
+    """Web search, returns titles/URLs/snippets."""
+    return T.web_search(pattern)
 
 
 if __name__ == "__main__":

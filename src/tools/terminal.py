@@ -9,10 +9,11 @@ Same contract as the browser tools: the ONE Qwen model either chats
     {"action": "list", "path": "."}
     {"action": "done", "reply": "Listed the repo."}
 
-This module is pure (no weights, no yaml). Execution lives in
-:mod:`src.agent.terminal` (LangGraph harness); the policy here decides
-deny / confirm / allow. Your shell, your risk: denies cover
-system-breakers, everything mutating needs an explicit yes.
+This module is pure (no weights, no yaml). File/shell execution lives in
+deepagents' backend tools plus the MCP extras
+(:mod:`src.agent.mcp.tools`); the policy here decides deny / confirm /
+allow. Your shell, your risk: denies cover system-breakers, everything
+mutating needs an explicit yes.
 """
 import json
 import re
@@ -42,62 +43,62 @@ ALLOWED_OPS = ("exec", "exec_bg", "poll", "read", "write", "edit", "grep", "list
 # as `tools=` to apply_chat_template). Same eight ops as the JSON schema.
 TERMINAL_TOOLS = [
     {"name": "exec",
-     "description": "Run a bash shell command (persistent CWD/env). Prefer read-only commands.",
+     "description": "Run a bash shell command.",
      "parameters": {"type": "object",
                     "properties": {"command": {"type": "string"}},
                     "required": ["command"]}},
     {"name": "exec_bg",
-     "description": "Start a long-running shell command in the background. Poll it later.",
+     "description": "Start a long-running shell command in the background.",
      "parameters": {"type": "object",
                     "properties": {"command": {"type": "string"}},
                     "required": ["command"]}},
     {"name": "poll",
-     "description": "Poll a background job started by exec_bg. Poll until running is false.",
+     "description": "Poll a background job started by exec_bg.",
      "parameters": {"type": "object",
                     "properties": {"command": {"type": "string",
                                                "description": "job id like job-1"}},
                     "required": ["command"]}},
     {"name": "read",
-     "description": "Read a text file below the working directory.",
+     "description": "Read a text file.",
      "parameters": {"type": "object",
                     "properties": {"path": {"type": "string"}},
                     "required": ["path"]}},
     {"name": "write",
-     "description": "Write text to a file below the working directory.",
+     "description": "Write text to a file.",
      "parameters": {"type": "object",
                     "properties": {"path": {"type": "string"},
                                    "text": {"type": "string"}},
                     "required": ["path", "text"]}},
     {"name": "edit",
-     "description": "Anchored patch: replace `anchor` verbatim in the file with `text`. Anchor must copy from the file; fails if missing.",
+     "description": "Replace anchor text verbatim in a file.",
      "parameters": {"type": "object",
                     "properties": {"path": {"type": "string"},
                                    "anchor": {"type": "string"},
                                    "text": {"type": "string"}},
                     "required": ["path", "anchor", "text"]}},
     {"name": "grep",
-     "description": "Grep a pattern across files below the working directory.",
+     "description": "Grep a pattern across files.",
      "parameters": {"type": "object",
                     "properties": {"pattern": {"type": "string"},
                                    "path": {"type": "string"}},
                     "required": ["pattern"]}},
     {"name": "list",
-     "description": "List directory entries below the working directory.",
+     "description": "List directory entries.",
      "parameters": {"type": "object",
                     "properties": {"path": {"type": "string"}}}},
     {"name": "python_exec",
-     "description": "Run Python code inside an isolated container (no shell, no host files). Use for data work, plotting, quick scripts.",
+     "description": "Run Python code in an isolated container.",
      "parameters": {"type": "object",
                     "properties": {"code": {"type": "string"}},
                     "required": ["code"]}},
     {"name": "fetch",
-     "description": "Fetch a web page (http/https) and return its text, truncated. Offline-friendly: for local files use read instead.",
+     "description": "Fetch a web page as text.",
      "parameters": {"type": "object",
                     "properties": {"path": {"type": "string",
                                             "description": "page URL"}},
                     "required": ["path"]}},
     {"name": "searxng",
-     "description": "Web search via the local SearXNG instance. Returns titles, URLs and snippets.",
+     "description": "Web search, returns titles/URLs/snippets.",
      "parameters": {"type": "object",
                     "properties": {"pattern": {"type": "string",
                                                "description": "search query"}},
