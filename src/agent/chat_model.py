@@ -90,6 +90,17 @@ class LocalChatModel(BaseChatModel):
     def _prompt_tools(self, text: str = "", observation: str = ""):
         tools = self.bound_tools
         if tools is None and str(getattr(getattr(self.llm, "config", None), "backend", "")).startswith("minicpm"):
+            # Semantic shortlist wins when InjectToolMiddleware set one for
+            # this model call; otherwise the keyword router stays in charge.
+            from src.agent.tool_router import current_ops
+            from src.tools.terminal import TERMINAL_TOOLS as _NATIVE
+
+            ops = current_ops()
+            if ops:
+                by_name = {t["name"]: t for t in _NATIVE}
+                picked = [by_name[o] for o in ops if o in by_name]
+                if picked:
+                    return picked
             # Route: narrow the 9 native tool definitions to what this
             # step plausibly needs (small models drown in 9). The harness
             # appends a "CWD: ... SHELL: ..." trailer to every turn — strip

@@ -1,5 +1,15 @@
 <img src="VoiceRT.png">
 
+---
+
+```
+─── 01 / HIGH LEVEL ARCHITECTURE ───────────────────────────────────────────────────────────
+
+      ┌──────────────┐       ┌─────────────────────┐      ┌─────────────────┐      ┌───────────────┐
+wav |>  | Silero VAD |  ---|> | Tiny Whisper (STT) | ---|> | Mini CPM (LLM) | ---|> | Kokoro (TTS) | |> wav
+      └──────────────┘       └─────────────────────┘      └─────────────────┘      └───────────────┘
+```
+
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
 ![CUDA 12](https://img.shields.io/badge/CUDA-12-green)
 ![VRAM 4GB](https://img.shields.io/badge/VRAM-4GB-orange)

@@ -45,6 +45,7 @@ class VoiceAgentConfig:
     work_dir: str = "."
     exec_timeout_s: float = 30.0
     mcp_config: str | None = None
+    use_tool_router: bool = True
 
 
 class VoiceAgent:
@@ -63,19 +64,24 @@ class VoiceAgent:
         self.agent = self._build_agent(self._extra_tools)
 
     def _build_agent(self, extra_tools):
+        from src.agent.tool_router import InjectToolMiddleware
+
+        middleware = [
+            TodoListMiddleware(
+                system_prompt="Plan multi-step work with write_todos; "
+                              "skip it for single replies.",
+                tool_description="Track multi-step work "
+                                 "(one call per turn).",
+            ),
+            TrimObservationsMiddleware(limit=1500),
+        ]
+        if self.config.use_tool_router:
+            middleware.append(InjectToolMiddleware())
         return create_deep_agent(
             model=self.chat_model,
             backend=self.backend,
             tools=list(extra_tools),
-            middleware=[
-                TodoListMiddleware(
-                    system_prompt="Plan multi-step work with write_todos; "
-                                  "skip it for single replies.",
-                    tool_description="Track multi-step work "
-                                     "(one call per turn).",
-                ),
-                TrimObservationsMiddleware(limit=1500),
-            ],
+            middleware=middleware,
             system_prompt=SYSTEM_PROMPT,
         )
 
