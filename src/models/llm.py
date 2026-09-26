@@ -4,7 +4,8 @@ import re
 from dataclasses import dataclass, field
 
 __all__ = ["LlmConfig", "LlmResult", "LlmToken", "LlmModel", "SYSTEM_PROMPT",
-           "split_thinking", "leg_device", "assert_cuda_leg"]
+           "split_thinking", "leg_device", "assert_cuda_leg",
+           "assert_ready_leg"]
 
 SYSTEM_PROMPT = "You are a voice assistant. Reply in one short spoken sentence."
 
@@ -81,17 +82,41 @@ def assert_cuda_leg(llm, what: str = "model") -> str:
     return dev
 
 
+def assert_ready_leg(llm, what: str = "model") -> str:
+    """Backend-aware readiness gate. Returns a status string.
+
+    GPU weight legs go through :func:`assert_cuda_leg` (a sick driver
+    fails fast); CPU sidecar legs (``backend="gemma"``) must be healthy
+    instead — they have no CUDA leg by design, so the CUDA assert would
+    wrongly abort them.
+    """
+    backend = str(getattr(getattr(llm, "config", None), "backend", ""))
+    if backend == "gemma":
+        leg = llm._backend()
+        url = getattr(leg, "base_url", "?")
+        if not leg._health():
+            raise SystemExit(
+                f"ABORT: gemma sidecar unhealthy at {url}. "
+                f"Start llama-server first (see S0) and retry.")
+        return f"sidecar {url}"
+    return assert_cuda_leg(llm, what)
+
+
 @dataclass(frozen=True)
 class LlmConfig:
     """No YAML: construct (or override fields) in code."""
 
     model: str = "openbmb/MiniCPM5-1B"
     # Backend switch.
-    #  - "minicpm" = BF16 eager (stock transformers, no Triton) — default
-    #    while mixed-quant (4-bit bulk + BF16 important layers) is trialled.
+    #  - "gemma" = Gemma-4-E4B-it Q4_K_M via local llama.cpp sidecar
+    #    (CPU-only, no VRAM) — DEFAULT: big brain on CPU, fast hands stay
+    #    available via the switches below.
+    #  - "minicpm" = BF16 eager (stock transformers, no Triton) — switch
+    #    option while mixed-quant (4-bit bulk + BF16 important layers) is
+    #    trialled.
     #  - "minicpm_q4k" = Q4_K_M GGUF via src/models/minicpm.py (packed, fused).
     #  - "qwen" = fused Qwen3 path (set model="Qwen/Qwen3-0.6B" with it).
-    backend: str = "minicpm"
+    backend: str = "gemma"
     # GGUF file/dir for the q4k backend ("auto" = HF cache download).
     gguf_path: str = "auto"
     max_tokens: int = 48
@@ -99,6 +124,14 @@ class LlmConfig:
     device: str = "cuda"
     system_prompt: str = SYSTEM_PROMPT
     thinking: bool = False  # Qwen3 <think> traces (stripped from output)
+    # Gemma-4-E4B-it Q4_K_M via local llama.cpp sidecar (CPU-only, no VRAM).
+    # Opt-in with backend="gemma" (MiniCPM stays the default until S2).
+    gemma_gguf: str = "auto"  # explicit GGUF path or "auto" (HF cache)
+    gemma_file: str = "gemma-4-E4B-it-Q4_K_M.gguf"
+    gemma_port: int = 8080
+    gemma_ctx: int = 4096
+    gemma_threads: int = 0  # 0 = server default
+    gemma_bin: str = "auto"  # explicit llama-server path or "auto"
     # paged inference engine (real QwenRunner, no dummy). Disabled by default
     # so tests stay fast; enable in VoiceAgent/server for batching.
     use_paged: bool = False
@@ -141,12 +174,28 @@ class LlmModel:
 
     def _backend(self):
         if self._leg is None:
+            backend = getattr(self.config, "backend", "qwen") or "qwen"
+            if backend == "gemma":
+                # CPU sidecar (llama-server, no VRAM, no tokenizer files in
+                # the GGUF repo — the leg takes (messages, tools) directly).
+                # NOTE: resolved BEFORE any torch/CUDA probe — a sick
+                # driver can hang torch.cuda.is_available() itself, and a
+                # CPU leg must never touch CUDA init at all.
+                from src.models.gemma_llamacpp import GemmaLlamaCpp
+
+                self._leg = GemmaLlamaCpp(
+                    gguf_path=getattr(self.config, "gemma_gguf", "auto"),
+                    port=getattr(self.config, "gemma_port", 8080),
+                    n_ctx=getattr(self.config, "gemma_ctx", 4096),
+                    threads=getattr(self.config, "gemma_threads", 0),
+                    server_bin=getattr(self.config, "gemma_bin", "auto"),
+                )
+                return self._leg
             import torch
 
             device = self.config.device
             if device.startswith("cuda") and not torch.cuda.is_available():
                 device = "cpu"
-            backend = getattr(self.config, "backend", "qwen") or "qwen"
             if backend == "minicpm_q4k":
                 # MiniCPM5-1B Q4_K_M: src/models/minicpm.py (packed GGUF
                 # + fused decode, fp16 KV). gguf_path "auto" = HF cache.
@@ -188,6 +237,11 @@ class LlmModel:
         """Lazily build paged InferenceEngine (real QwenRunner, no dummy)."""
         if not getattr(self.config, "use_paged", False):
             return None
+        if str(getattr(self.config, "backend", "")) == "gemma":
+            # Sidecar legs own their inference (llama-server); the paged
+            # GPU engine is incoherent here — and must never warm GPU
+            # weights behind a CPU backend's back.
+            return None
         if self._paged_engine_inst is not None:
             return self._paged_engine_inst
         try:
@@ -225,8 +279,11 @@ class LlmModel:
         return self._tok
 
     async def warm(self) -> "LlmModel":
-        # warm tokenizer first (lightweight)
-        await asyncio.to_thread(self._tokenizer)
+        # warm tokenizer first (lightweight) — except sidecar legs, which
+        # need no local tokenizer (GGUF repos ship none; gated downloads
+        # would fail here instead of at the leg with a clear message).
+        if str(getattr(self.config, "backend", "")) != "gemma":
+            await asyncio.to_thread(self._tokenizer)
         if getattr(self.config, "use_paged", False):
             # paged path owns its own QwenRunner weights — don't also warm fused leg
             try:
@@ -386,6 +443,16 @@ class LlmModel:
             return LlmResult(text=text, ttft_s=0.0, tps=0.0,
                              output_ids=tuple(out_ids))
         leg = self._backend()
+        if getattr(leg, "is_sidecar", False):
+            # CPU sidecar (Gemma): (messages, tools) straight through, no
+            # ids round-trip (no local tokenizer for the GGUF repo).
+            limit = int(max_tokens or self.config.max_tokens)
+            out = await asyncio.to_thread(
+                leg.chat, messages, tools, limit, stop)
+            return LlmResult(text=out.get("text", ""),
+                             ttft_s=float(out.get("ttft", 0.0)),
+                             tps=float(out.get("decode_tps", 0.0)),
+                             output_ids=())
         ids = await self.encode(messages, tools=tools)
         limit = int(max_tokens or self.config.max_tokens)
         if stop:
@@ -497,6 +564,40 @@ class LlmModel:
         import torch
 
         leg = self._backend()
+        if getattr(leg, "is_sidecar", False):
+            # CPU sidecar (Gemma): text pieces straight through; token_id
+            # -1 tells callers to fall back to joined pieces (no local
+            # token ids exist for the GGUF repo).
+            limit = int(max_tokens or self.config.max_tokens)
+            queue: asyncio.Queue = asyncio.Queue()
+            loop = asyncio.get_running_loop()
+            acc: dict = {}
+
+            def _run_sidecar():
+                try:
+                    for i, piece in enumerate(
+                            leg.chat_stream(acc, messages, tools, limit, stop)):
+                        loop.call_soon_threadsafe(
+                            queue.put_nowait, ("tok", (piece, i == 0)))
+                    loop.call_soon_threadsafe(queue.put_nowait, ("end", None))
+                except Exception as exc:  # noqa: BLE001 - forwarded
+                    loop.call_soon_threadsafe(queue.put_nowait, ("err", exc))
+
+            worker = loop.run_in_executor(None, _run_sidecar)
+            try:
+                while True:
+                    kind, payload = await queue.get()
+                    if kind == "end":
+                        return
+                    if kind == "err":
+                        raise payload
+                    piece, first = payload
+                    yield LlmToken(token_id=-1, piece=str(piece),
+                                   first=bool(first))
+            finally:
+                await worker
+            return
+
         ids = await self.encode(messages, tools=tools)
         limit = int(max_tokens or self.config.max_tokens)
         queue: asyncio.Queue = asyncio.Queue()

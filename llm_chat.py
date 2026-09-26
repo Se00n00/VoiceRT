@@ -174,8 +174,8 @@ async def harness_loop(llm: LlmModel, cwd: str, logf=None,
 
 async def main() -> None:
     ap = argparse.ArgumentParser(description="plain LLM REPL (no TUI)")
-    ap.add_argument("--model", default="openbmb/MiniCPM5-1B")
-    ap.add_argument("--backend", default="minicpm", help="minicpm | minicpm_q4k | qwen")
+    ap.add_argument("--model", default="google/gemma-4-E4B-it")
+    ap.add_argument("--backend", default="gemma", help="gemma | minicpm | minicpm_q4k | qwen")
     ap.add_argument("--cwd", default=".")
     ap.add_argument("--max-tokens", type=int, default=256)
     ap.add_argument("--no-tools", action="store_true", help="raw generate, skip harness tool loop")
@@ -192,9 +192,9 @@ async def main() -> None:
         llm.config = replace(llm.config, max_tokens=args.max_tokens)
     print(f"warming {args.model} [{args.backend}] ...")
     await llm.warm()
-    from src.models.llm import assert_cuda_leg
+    from src.models.llm import assert_ready_leg
 
-    print(f"llm ready on {assert_cuda_leg(llm)}.")
+    print(f"llm ready on {assert_ready_leg(llm)}.")
 
     sandbox = None
     if args.sandbox:

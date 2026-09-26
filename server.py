@@ -96,29 +96,16 @@ def _paged_requested(agent) -> bool:
 def get_agent():
     """Process-wide :class:`VoiceAgent`, built on first use.
 
-    On CUDA, opts into paged LLM engine (real QwenRunner, continuous batching)
-    so the inference engine is actively in the hot path for every LLM turn.
+    Default leg is the Gemma CPU sidecar (zero VRAM), so no paged GPU
+    engine is requested: STT/TTS stay on GPU, the LLM stays on CPU/RAM.
+    GPU-only backends (qwen/minicpm) may still opt into paging via an
+    explicit VoiceAgentConfig — never by default.
     """
     global _agent
     if _agent is None:
-        from src.main import VoiceAgent, VoiceAgentConfig
+        from src.main import VoiceAgent
 
-        try:
-            import torch
-            # enable paged only when CUDA + weights are usable; warm will
-            # degrade gracefully to fused path if engine fails (OOM / missing)
-            if torch.cuda.is_available():
-                from src.models.llm import LlmConfig
-
-                cfg = VoiceAgentConfig(
-                    llm=LlmConfig(use_paged=True, paged_blocks=32,
-                                  paged_batch_size=4))
-                _agent = VoiceAgent(cfg)
-            else:
-                _agent = VoiceAgent()
-        except Exception:
-            from src.main import VoiceAgent as _VA
-            _agent = _VA()
+        _agent = VoiceAgent()
     return _agent
 
 
@@ -570,6 +557,14 @@ def create_app(agent=None):
             print("voice-agent ready", flush=True)
             if getattr(ag, "missing", []):
                 print(f"voice-agent missing: {ag.missing}", flush=True)
+            # device placement: LLM is a CPU sidecar (no VRAM), STT/TTS on GPU
+            try:
+                llm = getattr(ag, "llm", None)
+                backend = getattr(getattr(llm, "config", None), "backend", "?")
+                print(f"llm backend={backend} (CPU sidecar, 0 VRAM); "
+                      f"stt/tts on GPU when CUDA is up", flush=True)
+            except Exception:
+                pass
             # report paged engine so operator sees inference engine is live
             try:
                 est = _engine_stats(ag)
@@ -581,6 +576,8 @@ def create_app(agent=None):
                           f"graph={est.get('cuda_graph')}", flush=True)
                 elif _paged_requested(ag):
                     print("paged engine: requested but not active (fallback to fused)", flush=True)
+                else:
+                    print("paged engine: off (CPU LLM sidecar owns inference)", flush=True)
             except Exception:
                 pass
         except Exception as exc:  # never fail startup for import checks

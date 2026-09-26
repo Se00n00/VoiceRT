@@ -130,9 +130,9 @@ async def main_async(args, cases):
     llm = LlmModel(LlmConfig(model=args.model, backend=args.backend))
     print(f"warming {args.model} [{args.backend}] ...", flush=True)
     await llm.warm()
-    from src.models.llm import assert_cuda_leg
+    from src.models.llm import assert_ready_leg
 
-    print(f"ready on {assert_cuda_leg(llm)}.", flush=True)
+    print(f"ready on {assert_ready_leg(llm)}.", flush=True)
     cm = LocalChatModel(llm=llm)
     base = int(getattr(getattr(llm, "config", None), "max_tokens", 48) or 48)
     is_minicpm = str(getattr(getattr(llm, "config", None), "backend", "")).startswith("minicpm")
@@ -189,9 +189,9 @@ def summarize(rows):
 def main():
     ap = argparse.ArgumentParser(description="BFCL-style offline tool-call eval")
     ap.add_argument("--subset", default="benchmarks/toolcall_subset.json")
-    ap.add_argument("--model", default="openbmb/MiniCPM5-1B")
-    ap.add_argument("--backend", default="minicpm")
-    ap.add_argument("--tag", default="minicpm")
+    ap.add_argument("--model", default="google/gemma-4-E4B-it")
+    ap.add_argument("--backend", default="gemma")
+    ap.add_argument("--tag", default="gemma")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--offset", type=int, default=0)
     args = ap.parse_args()

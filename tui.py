@@ -8,14 +8,15 @@ Full alternate-screen app, two clean rectangles::
     │┌ input ─────────────────┐ │                      │
     ││ chat or /command      │ │                      │
     │└───────────────────────┘ │                      │
-    │ Qwen3 · session · cwd     │                      │
+    │ Gemma-4 · session · cwd    │                      │
     └───────────────────────────┴──────────────────────┘
 
 Run:  PYTHONPATH=. python tui.py
 Keys: Enter send · v voice turn · y/n confirm gate · / commands
       (/new /cwd /clear /voice /help /quit) · q quit
 
-Stop the API server first: both need the same 4GB GPU.
+Stop the API server first: the TUI owns the local agent (LLM on CPU/RAM,
+STT/TTS on GPU) — two agents side by side fight over the GPU legs.
 """
 import argparse
 import asyncio
@@ -151,18 +152,23 @@ class VoiceTermApp(App):
     def _status(self) -> None:
         try:
             model = getattr(getattr(self.agent, "llm", None), "config", None)
-            label = getattr(model, "model", None) or "MiniCPM5-1B"
-            # Short label: "openbmb/MiniCPM5-1B" -> "MiniCPM5-1B"
+            label = getattr(model, "model", None) or "gemma-4-E4B-it"
+            # Short label: "google/gemma-4-E4B-it" -> "gemma-4-E4B-it"
             label = str(label).split("/")[-1]
         except Exception:
-            label = "MiniCPM5-1B"
+            label = "gemma-4-E4B-it"
         bar = self.query_one("#statusbar", Static)
         bar.update(f"{label} · session {self.sid[:8]} · "
                    f"{self.cwd} · / commands · v voice")
 
     # -- model wiring ---------------------------------------------------
     async def _warm(self) -> None:
-        """Warm legs one by one with live progress (first boot ~2 min)."""
+        """Warm legs one by one with live progress.
+
+        LLM is the Gemma CPU sidecar (llama-server load, no VRAM);
+        STT/TTS warm on GPU when CUDA is up. First boot downloads
+        weights + GGUF, so it takes a few minutes.
+        """
         import time as _time
 
         from src.main import VoiceAgent
@@ -177,7 +183,7 @@ class VoiceTermApp(App):
             except Exception as exc:
                 self.conv.write(f"[red]✕ {name}: {exc}[/red] "
                                 f"[dim]{_time.time() - t0:.0f}s[/dim]")
-        # idempotent second pass: wires paged engine + missing list + flag
+        # idempotent second pass: fills missing list + warmed flag
         # (leg backends/tokenizers are cached, so this is fast).
         await agent.warm()
         self.agent = agent

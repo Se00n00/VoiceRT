@@ -38,6 +38,9 @@ _PARAM_RE = re.compile(
     r'<param\s+name="([^"]+)"\s*>(?:<!\[CDATA\[(.*?)\]\]>|(.*?))</param\s*>',
     re.DOTALL | re.IGNORECASE)
 _JSON_RE = re.compile(r"\{.*?\}", re.DOTALL)
+_GEMMA_RE = re.compile(
+    r"<\|tool_call>call:([A-Za-z0-9_.\-]+)(.*?)<tool_call\|>",
+    re.DOTALL)
 _CALL_RE = re.compile(r"^([\w.]+)\((.*)\)\s*$", re.DOTALL)
 
 SYSTEM = ("You are a helpful assistant with access to functions. "
@@ -77,8 +80,19 @@ def _extract_bare(text, known):
 
 
 def extract_calls(text, known=None):
-    """All (name, args) calls in raw output: native XML, bare tail, JSON."""
+    """All (name, args) calls in raw output: Gemma native, XML, bare, JSON."""
     out = []
+    for gm in _GEMMA_RE.finditer(text or ""):
+        raw_args = (gm.group(2) or "").strip()
+        try:
+            args = json.loads(raw_args) if raw_args else {}
+        except Exception:
+            continue
+        if isinstance(args, dict):
+            out.append((gm.group(1).strip(),
+                        {str(k): v for k, v in args.items()}))
+    if out:
+        return out
     for fm in _FUNC_RE.finditer(text or ""):
         params = {}
         for pm in _PARAM_RE.finditer(fm.group(2)):
@@ -476,9 +490,9 @@ async def main_async(args, cases):
     llm = LlmModel(LlmConfig(model=args.model, backend=args.backend))
     print(f"warming {args.model} [{args.backend}] ...", flush=True)
     await llm.warm()
-    from src.models.llm import assert_cuda_leg
+    from src.models.llm import assert_ready_leg
 
-    print(f"ready on {assert_cuda_leg(llm)}.", flush=True)
+    print(f"ready on {assert_ready_leg(llm)}.", flush=True)
     cm = LocalChatModel(llm=llm)
     base = int(getattr(getattr(llm, "config", None), "max_tokens", 48) or 48)
     is_minicpm = str(getattr(getattr(llm, "config", None), "backend", "")).startswith("minicpm")
@@ -556,9 +570,9 @@ def main():
     ap.add_argument("--manifests", nargs="+",
                     default=["benchmarks/bfcl_v1.json", "benchmarks/bfcl_v2.json",
                              "benchmarks/bfcl_v3.json"])
-    ap.add_argument("--model", default="openbmb/MiniCPM5-1B")
-    ap.add_argument("--backend", default="minicpm")
-    ap.add_argument("--tag", default="minicpm")
+    ap.add_argument("--model", default="google/gemma-4-E4B-it")
+    ap.add_argument("--backend", default="gemma")
+    ap.add_argument("--tag", default="gemma")
     ap.add_argument("--k", type=int, default=3)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--offset", type=int, default=0)

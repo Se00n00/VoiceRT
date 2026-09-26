@@ -59,3 +59,4 @@ sessions/
 # node app build outputs (rebuild with npm install && npm run build)
 tui-ink/node_modules/
 tui-ink/dist/
+tui-preview/node_modules/

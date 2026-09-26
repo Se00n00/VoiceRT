@@ -23,7 +23,7 @@ async def _run_async(cases, model, backend, max_seq, k, resume_keys,
         skipped_row,
     )
     from src.agent.chat_model import LocalChatModel
-    from src.models.llm import LlmConfig, LlmModel, assert_cuda_leg, leg_device
+    from src.models.llm import LlmConfig, LlmModel, assert_ready_leg
 
     if resume_keys:
         cases = filter_cases(cases, done=resume_keys)
@@ -35,10 +35,12 @@ async def _run_async(cases, model, backend, max_seq, k, resume_keys,
           flush=True)
     await llm.warm()
     if allow_cpu:
+        from src.models.llm import leg_device
+
         print(f"CPU MODE: leg on {leg_device(llm)} (slow, smoke only).",
               flush=True)
     else:
-        print(f"ready on {assert_cuda_leg(llm)}.", flush=True)
+        print(f"ready on {assert_ready_leg(llm)}.", flush=True)
     cm = LocalChatModel(llm=llm)
     max_tokens = _step_max_tokens(llm)
     budget = int(max_seq) - int(max_tokens) - 512

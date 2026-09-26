@@ -14,24 +14,26 @@ import time
 CONFIRM_LOG = "auto-approve (deny verdicts still block)"
 
 
-async def warm_agent(model="openbmb/MiniCPM5-1B", backend="minicpm",
+async def warm_agent(model="google/gemma-4-E4B-it", backend="gemma",
                      sessions_dir=None):
     """Build VoiceAgent with warmed LLM leg, TTS disabled."""
     from src.main import VoiceAgent, VoiceAgentConfig
-    from src.models.llm import LlmConfig, LlmModel, assert_cuda_leg
+    from src.models.llm import LlmConfig, LlmModel, assert_ready_leg
 
+    # sessions_dir kept for API compat (JsonSessionMemory persists per sid).
     cfg = VoiceAgentConfig(
-        sessions_dir=sessions_dir or tempfile.mkdtemp(prefix="eval-sess-"))
+        **({"sessions_dir": sessions_dir} if sessions_dir else {}))
     agent = VoiceAgent(cfg)
     agent.llm = LlmModel(LlmConfig(model=model, backend=backend))
     print(f"warming LLM {model} [{backend}] ...", flush=True)
     await agent.llm.warm()
     # the agent loop runs through chat_model: rewrap so it sees this leg
+    # (VoiceAgent rebuilds the graph every turn, so the rewrap takes effect).
     from src.agent.chat_model import LocalChatModel
 
     agent.chat_model = LocalChatModel(llm=agent.llm)
     agent.tts = None
-    print(f"agent ready (llm-only) on {assert_cuda_leg(agent.llm)}.", flush=True)
+    print(f"agent ready (llm-only) on {assert_ready_leg(agent.llm)}.", flush=True)
     return agent
 
 

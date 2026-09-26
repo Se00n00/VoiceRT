@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Box, Static, Text, useApp, useInput, useStdout } from "ink";
+import { Box, Spacer, Static, Text, useApp, useInput, useStdout } from "ink";
 import TextInput from "ink-text-input";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { API, DeepSocket, TermSocket, ensureBackend, getModel, health, say, stopBackend, stt, switchModel, type TurnEvent } from "./bridge.js";
+import { DARK, type Theme } from "./theme.js";
 import { NB, b64ToF32, envelope, pcmToF32, rmsLevel, spectrum } from "./audio.js";
 
 /** Word-Jaccard similarity 0..1 (echo detection). */
@@ -50,7 +51,7 @@ type Mode = "auto" | "voice";
 const MODES: Mode[] = ["auto", "voice"];
 
 const uid = () => randomBytes(4).toString("hex");
-const MODEL_FALLBACK = "minicpm5-1b-bf16";
+const MODEL_FALLBACK = "gemma-4-E4B-it-Q4_K_M";
 
 // Display caps: a single unbounded message (multi-KB listing, long
 // thinking trace) wraps into dozens of terminal rows and used to blow
@@ -76,7 +77,7 @@ function capText(who: Msg["who"], text: string): string {
 
 
 
-export function App({ seconds = 5 }: { seconds?: number }) {
+export function App({ seconds = 5, theme = DARK, themeNote = "" }: { seconds?: number; theme?: Theme; themeNote?: string }) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const [msgs, setMsgs] = useState<Msg[]>([]);
@@ -98,6 +99,9 @@ export function App({ seconds = 5 }: { seconds?: number }) {
   busyRef.current = busy;
   const modeRef = useRef<Mode>("auto");
   modeRef.current = mode;
+  // Mic master switch: OFF pauses all voice capture (v, /voice, live loop).
+  const [micOn, setMicOn] = useState(true);
+  const micRef = useRef(true);
   // Half-duplex: never listen while the agent is speaking, or the mic
   // re-ingests our own TTS and the conversation loops on itself.
   // Refcount (not boolean): overlapping playbacks must not clear each other.
@@ -146,7 +150,79 @@ export function App({ seconds = 5 }: { seconds?: number }) {
     });
   }, []);
 
+  // Boot report: which theme won and why (probe ok / silent / forced).
+  useEffect(() => {
+    if (themeNote) push("sys", themeNote);
+  }, []);
+
   const calm = useCallback(() => setViz({ mode: "idle", bins: new Array(NB).fill(0) }), []);
+
+  const setMic = useCallback((next?: boolean) => {
+    const v = next ?? !micRef.current;
+    micRef.current = v;
+    setMicOn(v);
+    push("sys", v ? "mic on — press v to talk" : "mic off — voice input paused");
+  }, [push]);
+
+  // True while listenOnce owns the mic (voice turn / spoken confirm).
+  const recordingRef = useRef(false);
+
+  // Live mic monitor: mic ON means the equalizer hears the room. One
+  // arecord stays open while idle (levels only — no STT, no turns) and
+  // yields while a turn records/plays so captures never fight.
+  const micMonRef = useRef<import("node:child_process").ChildProcess | null>(null);
+  useEffect(() => {
+    const killMon = () => {
+      const p = micMonRef.current;
+      micMonRef.current = null;
+      // SIGKILL: arecord sometimes shrugs off SIGTERM and lingers.
+      if (p) { try { p.kill("SIGKILL"); } catch { /* dead */ } }
+    };
+    if (!micOn) {
+      killMon();
+      return;
+    }
+    let dead = false;
+    let child: import("node:child_process").ChildProcess;
+    try {
+      child = spawn("arecord", ["-q", "-f", "S16_LE", "-r16000", "-c1", "-t", "raw", "-"], {
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+    } catch {
+      push("err", "arecord missing — mic monitor off");
+      micRef.current = false;
+      setMicOn(false);
+      return;
+    }
+    micMonRef.current = child;
+    let last = 0;
+    child.stdout?.on("data", (d: Buffer) => {
+      if (dead || !micRef.current) return;
+      if (busyRef.current || speakingRef.current || recordingRef.current) return;
+      const now = Date.now();
+      if (now - last < 120) return;
+      last = now;
+      try {
+        // Room-hiss gate: per-chunk normalized spectrum dances on noise,
+        // so only real levels reach the bars; silence stays flat stubs.
+        const bins = rmsLevel(d) < 0.12 ? new Array(NB).fill(0) : spectrum(pcmToF32(d));
+        setViz({ mode: "user", bins });
+      } catch { /* bad chunk — skip a frame */ }
+    });
+    child.on("error", () => {
+      if (dead) return;
+      micRef.current = false;
+      setMicOn(false);
+      push("err", "mic monitor failed — mic off");
+    });
+    child.on("close", () => {
+      if (micMonRef.current === child) micMonRef.current = null;
+    });
+    return () => {
+      dead = true;
+      killMon();
+    };
+  }, [micOn, push]);
 
   // Live token stream: token events accumulate in a ref (no re-render
   // per token) and flush to state on the 120ms tick. Cleared whenever
@@ -471,17 +547,22 @@ export function App({ seconds = 5 }: { seconds?: number }) {
         push("err", "arecord missing — type your command instead");
         return null;
       }
-      setViz({ mode: "user", bins: new Array(NB).fill(0) });
-      child.stdout?.on("data", (d: Buffer) => {
-        chunks.push(d);
-        setViz({ mode: "user", bins: spectrum(pcmToF32(d)) });
-        void rmsLevel(d);
-      });
-      await new Promise((r) => setTimeout(r, secs * 1000));
-      child.kill("SIGTERM");
-      calm();
-      const pcm = Buffer.concat(chunks);
-      return pcm.length >= 3200 ? pcm : null;
+      recordingRef.current = true;
+      try {
+        setViz({ mode: "user", bins: new Array(NB).fill(0) });
+        child.stdout?.on("data", (d: Buffer) => {
+          chunks.push(d);
+          setViz({ mode: "user", bins: spectrum(pcmToF32(d)) });
+          void rmsLevel(d);
+        });
+        await new Promise((r) => setTimeout(r, secs * 1000));
+        child.kill("SIGTERM");
+        calm();
+        const pcm = Buffer.concat(chunks);
+        return pcm.length >= 3200 ? pcm : null;
+      } finally {
+        recordingRef.current = false;
+      }
     },
     [push, calm]
   );
@@ -495,6 +576,11 @@ export function App({ seconds = 5 }: { seconds?: number }) {
     async (secs: number, force = false) => {
       if (modeRef.current !== "voice") return;
       if (!force && busyRef.current) return;
+      if (!micRef.current) {
+        setBusy(false);
+        if (!force) push("sys", "mic is off — press m to enable.");
+        return;
+      }
       await waitSilent();
       if (!force && busyRef.current) return;
       setBusy(true);
@@ -547,6 +633,11 @@ export function App({ seconds = 5 }: { seconds?: number }) {
   // Voice-mode confirm gate: speak the question, listen for yes/no.
   const voiceConfirm = useCallback(
     async (action: Record<string, unknown>) => {
+      if (!micRef.current) {
+        push("sys", "mic is off — confirm denied. Press m to enable.");
+        sock.current?.confirm(false);
+        return;
+      }
       const what = String(action["command"] ?? action["path"] ?? action["action"] ?? "?");
       push("ask", `Should I run: ${what}? Say yes or no.`);
       await speakAgent(`Should I run ${what.slice(0, 120)}? Say yes or no.`);
@@ -657,8 +748,17 @@ export function App({ seconds = 5 }: { seconds?: number }) {
         }
         return;
       }
+      if (t === "/mic" || t === "/mic on" || t === "/mic off") {
+        const arg = t.slice(4).trim().toLowerCase();
+        if (arg && arg !== "on" && arg !== "off") {
+          push("err", "usage: /mic [on|off]");
+        } else {
+          setMic(arg === "on" ? true : arg === "off" ? false : undefined);
+        }
+        return;
+      }
       if (t === "/help") {
-        push("sys", "/new /cwd PATH /clear /opencode [dir] /voice [sec] /mode [m] /model [name] /help /quit · Tab mode · v voice · y/n confirm · ctrl+o opencode");
+        push("sys", "/new /cwd PATH /clear /opencode [dir] /voice [sec] /mode [m] /model [name] /mic [on|off] /help /quit · Tab mode · v voice · m mic · y/n confirm · ctrl+o opencode");
         return;
       }
       if (t.startsWith("/")) {
@@ -667,7 +767,7 @@ export function App({ seconds = 5 }: { seconds?: number }) {
       }
       runText(t);
     },
-    [exit, push, voiceStep, runText, seconds]
+    [exit, push, voiceStep, runText, seconds, setMic]
   );
 
   useInput((input, key) => {
@@ -698,6 +798,10 @@ export function App({ seconds = 5 }: { seconds?: number }) {
       import("./opencode.js").then(({ spawnOpencode }) => spawnOpencode(targetCwd, (m) => push("sys", m)));
       return;
     }
+    if ((input === "m" || input === "M") && value.trim() === "" && !busyRef.current) {
+      setMic();
+      return;
+    }
     if ((input === "v" || input === "V") && value.trim() === "" && !busyRef.current) {
       if (modeRef.current !== "voice") {
         push("sys", "voice lives in voice mode — Tab to switch.");
@@ -711,76 +815,103 @@ export function App({ seconds = 5 }: { seconds?: number }) {
   // terminal scrollback instead of fighting yoga inside a fixed-height
   // box — that fight is what broke the whole app once chat exceeded
   // one screen. Per-message caps at push time bound every bubble.
-  // Agent voice as three vertical bars: middle bigger, sides smaller,
-  // same thickness (3 cells), bright white. Driven by low/mid/high bands
-  // of the agent levels; gentle idle pulse otherwise. No user visualizer.
+  // Agent voice as five joined bars: one solid symmetric rectangle per
+  // band, driven by five spectrum bands of live mic/agent levels and
+  // amplitude-smoothed. Idle = flat equal stubs (no motion without sound).
   const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + (b ?? 0), 0) / xs.length : 0);
   const bins = viz.bins;
-  const live = viz.mode === "agent";
-  const t = tick / 8;
-  // Floors keep all three bars visible even in short terminals / quiet audio.
-  const bands = live
+  // Live off ANY sound: mic input while recording AND agent playback.
+  // Idle holds flat equal stubs — bars only vibe on actual sound.
+  const live = viz.mode !== "idle";
+  // Floors keep all five bars visible even in short terminals / quiet audio.
+  const targets = live
     ? [
-        Math.max(avg(bins.slice(0, 8)), 0.14),
-        Math.min(1, Math.max(avg(bins.slice(8, 16)) * 1.35, 0.2)),
-        Math.max(avg(bins.slice(16, 24)), 0.14),
+        Math.max(avg(bins.slice(0, 5)), 0.12),
+        Math.max(avg(bins.slice(5, 10)), 0.12),
+        Math.min(1, Math.max(avg(bins.slice(10, 15)) * 1.35, 0.18)),
+        Math.max(avg(bins.slice(15, 20)), 0.12),
+        Math.max(avg(bins.slice(20, 24)), 0.12),
       ]
-    : [
-        0.26 + 0.1 * Math.abs(Math.sin(t)),
-        0.4 + 0.14 * Math.abs(Math.sin(t + 1.3)),
-        0.26 + 0.1 * Math.abs(Math.sin(t + 2.6)),
-      ];
-  // VoiceRT mark: three bars, middle tallest, sides ~60%, same thickness.
-  // Bottoms locked on one baseline, only the tops move. Big and tall.
-  const BH = 12;
+    : [0.3, 0.3, 0.3, 0.3, 0.3];
+  // Smooth amplitude: ease each band toward its target (fast attack,
+  // slow release) so bars glide instead of jumping frame to frame.
+  const smoothBands = useRef<number[]>([0.24, 0.32, 0.38, 0.32, 0.24]);
+  smoothBands.current = targets.map((tgt, i) => {
+    const cur = smoothBands.current[i] ?? tgt;
+    const rate = tgt > cur ? 0.55 : 0.3;
+    return cur + (tgt - cur) * rate;
+  });
+  const bands = smoothBands.current;
+  // Compact joined widget: 2*HALF+1 continuous rows, symmetric about the
+  // middle row (k=0 always fills, fusing both halves into one solid
+  // rectangle per band). Pinned to the panel top.
+  const rows = stdout.rows ?? 24;
+  const HALF = 4;
   const BW = 3;
   const GAP = "  ";
-  const barLine = (r: number) =>
-    bands.map((v) => ((v ?? 0) * BH >= r ? "█".repeat(BW) : " ".repeat(BW)).valueOf()).join(GAP);
-  const trioWidth = BW * 3 + GAP.length * 2;
+  const barLine = (k: number) =>
+    bands.map((v) => ((v ?? 0) * HALF >= k ? "█".repeat(BW) : " ".repeat(BW)).valueOf()).join(GAP);
+  const barsWidth = BW * 5 + GAP.length * 4;
   const cols0 = process.stdout.columns ?? 100;
   const rw0 = Math.max(10, Math.floor(cols0 * 0.18) - 2);
-  const off = Math.max(0, Math.floor((rw0 - trioWidth) / 2));
+  const off = Math.max(0, Math.floor((rw0 - barsWidth) / 2));
+  // Mic switch label, centered over the bars. Toggled with `m` / `/mic`.
+  // Rendered as a button badge (Ink has no mouse support, so the `m`
+  // key IS the button in-terminal; the preview page adds a real one).
+  const micLabel = `[${micOn ? "●" : "○"} MIC ${micOn ? "ON" : "OFF"}] · m`;
+  const micPad = Math.max(0, Math.floor((barsWidth - micLabel.length) / 2));
 
   const colorFor = (w: Msg["who"]) =>
-    w === "you" ? "cyan" : w === "agent" ? "white" : w === "err" ? "red" : w === "ask" ? "yellow" : w === "think" ? "gray" : "gray";
+    w === "you" ? theme.accent : w === "agent" ? theme.ink : w === "err" ? theme.danger : w === "ask" ? theme.warn : w === "think" ? theme.dim : theme.dim;
   const labelFor = (w: Msg["who"]) =>
     w === "you" ? "› " : w === "agent" ? "" : w === "ask" ? "⬡ Confirm? " : w === "think" ? "› think " : "";
 
-  // Right panel: visualizer ONLY — no labels, no status. Borderless,
-  // filled with the same faint tone as the left border. Ink 5 has no Box
-  // background, so every row is a full-width Text carrying the fill.
-  // Fixed content height (bars only): it never grows, so it can never
-  // overflow the layout no matter how long the chat gets.
+  // Every Text carries the screen backdrop: terminal cells have no
+  // other paint, so this is what makes the whole screen solid #000
+  // (dark) / #fff (light) instead of showing the terminal default
+  // through the gaps. The growing filler pins the prompt to the bottom
+  // AND paints the empty middle.
+  const BG = theme.screen;
   const cols = process.stdout.columns ?? 100;
   const rw = Math.max(10, Math.floor(cols * 0.18) - 2);
   const pad = (s: string) => (s + " ".repeat(rw)).slice(0, rw);
   type RRow = { text: string; color?: string; bold?: boolean };
-  const rightRows: RRow[] = [{ text: "" }];
-  for (let r = BH; r >= 1; r--) {
-    rightRows.push({ text: " ".repeat(off) + barLine(r), color: "white", bold: true });
+  const rightRows: RRow[] = [];
+  for (let k = HALF; k >= -HALF; k--) {
+    rightRows.push({ text: " ".repeat(off) + barLine(Math.abs(k)), color: theme.ink, bold: true });
   }
 
   return (
-    <Box flexDirection="row">
-      <Box flexDirection="column" flexGrow={1} flexShrink={1} borderStyle="single" borderColor="#232327" paddingX={1}>
+    <Box flexDirection="row" height={rows}>
+      <Box flexDirection="column" width="18%" flexShrink={0} height={rows} justifyContent="flex-start" paddingTop={3}>
+        <Text backgroundColor={theme.panel} color={micOn ? theme.accent : theme.dim} bold={micOn}>
+          {pad(" ".repeat(off + micPad) + micLabel)}
+        </Text>
+        {rightRows.map((l, i) => (
+          <Text key={i} backgroundColor={theme.panel} color={l.color ?? theme.ink} bold={l.bold}>
+            {pad(l.text)}
+          </Text>
+        ))}
+      </Box>
+      <Box flexDirection="column" flexGrow={1} flexShrink={1} borderStyle="round" borderColor={theme.border} paddingX={1} height={rows}>
         <Static items={msgs}>
           {(m) => (
-            <Text key={m.id} color={colorFor(m.who)} dimColor={m.who === "think"} wrap="wrap">
+            <Text key={m.id} color={colorFor(m.who)} backgroundColor={BG} dimColor={m.who === "think"} wrap="wrap">
               {labelFor(m.who)}
               {m.text}
             </Text>
           )}
         </Static>
+        <Spacer />
         {streamText ? (
-          <Text dimColor color="gray" wrap="wrap">
+          <Text dimColor color={theme.dim} backgroundColor={BG} wrap="wrap">
             {streamText.slice(-400)}▌
           </Text>
         ) : null}
-        <Box borderStyle="single" borderColor="white">
-          <Text color="white">
+        <Box borderStyle="single" borderColor={theme.inputBorder}>
+          <Text color={theme.ink} backgroundColor={BG}>
             {" "}
-            {mode === "voice" ? <Text color="#3b82f6">voice</Text> : mode}
+            {mode === "voice" ? <Text color={theme.voiceBlue}>voice</Text> : mode}
             {" -> "}
           </Text>
           <TextInput
@@ -792,21 +923,14 @@ export function App({ seconds = 5 }: { seconds?: number }) {
             }
           />
         </Box>
-        <Text color="white">
-          {modelLabel} · {mode} · session {sid.slice(0, 8)} · {cwd} · {serverOk === null ? "…" : serverOk ? "●" : "○ bridge down"} · Tab mode · v voice
+        <Text color={theme.ink} backgroundColor={BG}>
+          {modelLabel} · {mode} · session {sid.slice(0, 8)} · {cwd} · {serverOk === null ? "…" : serverOk ? "●" : "○ bridge down"} · Tab mode · v voice · {micOn ? "● mic" : "○ mic"}
         </Text>
         {pending ? (
-          <Text color="yellow" wrap="wrap">
+          <Text color={theme.warn} backgroundColor={BG} wrap="wrap">
             Confirm {String(pending["action"] ?? "?")}: {String(pending["command"] ?? pending["path"] ?? "")} (y/n)
           </Text>
         ) : null}
-      </Box>
-      <Box flexDirection="column" width="18%" flexShrink={0}>
-        {rightRows.map((l, i) => (
-          <Text key={i} backgroundColor="#232327" color={l.color ?? "white"} bold={l.bold}>
-            {pad(l.text)}
-          </Text>
-        ))}
       </Box>
     </Box>
   );

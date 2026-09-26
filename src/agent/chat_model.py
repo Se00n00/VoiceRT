@@ -30,7 +30,7 @@ from langchain_core.messages import (
 from langchain_core.outputs import ChatGeneration, ChatResult
 
 from src.models.llm import LlmModel, split_thinking
-from src.tools.terminal import TERMINAL_TOOLS, is_degenerate, is_echo, parse_bare_tail, parse_terminal_action, parse_xml_action
+from src.tools.terminal import TERMINAL_TOOLS, is_degenerate, is_echo, parse_bare_tail, parse_gemma_action, parse_terminal_action, parse_xml_action
 
 
 class LocalChatModel(BaseChatModel):
@@ -123,11 +123,15 @@ class LocalChatModel(BaseChatModel):
         return max(base_max, 320) if is_minicpm else max(base_max, 256)
 
     def _parse_action(self, raw: str):
-        """Native envelope first, fuzzy aliases second, bare tail last."""
+        """Gemma native envelope first, JSON, fuzzy aliases, bare tail last."""
         thinking, answer = split_thinking(raw)
-        action = parse_terminal_action(answer) if answer.strip() else None
+        action = parse_gemma_action(answer) if answer.strip() else None
+        if action is None and answer.strip():
+            action = parse_terminal_action(answer)
         if action is None and answer.strip():
             action = parse_xml_action(answer)
+        if action is None:
+            action = parse_gemma_action(raw)
         if action is None:
             action = parse_terminal_action(raw)
         if action is None:

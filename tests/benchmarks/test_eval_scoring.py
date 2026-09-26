@@ -234,5 +234,28 @@ class TestGtString(unittest.TestCase):
         self.assertEqual(parse_gt_string(""), (None, {}))
 
 
+class TestGemmaExtract(unittest.TestCase):
+    def test_native_blocks_extracted(self):
+        from benchmarks.bfcl_eval import extract_calls
+
+        calls = extract_calls(
+            '<|tool_call>call:spotify.play{"artist": "X"}<tool_call|>')
+        self.assertEqual(calls, [("spotify.play", {"artist": "X"})])
+
+    def test_parallel_blocks_all_captured(self):
+        from benchmarks.bfcl_eval import extract_calls
+
+        calls = extract_calls(
+            '<|tool_call>call:a{"x": 1}<tool_call|> noise '
+            '<|tool_call>call:b{"y": 2}<tool_call|>')
+        self.assertEqual([n for n, _ in calls], ["a", "b"])
+
+    def test_bad_block_skipped(self):
+        from benchmarks.bfcl_eval import extract_calls
+
+        self.assertEqual(
+            extract_calls('<|tool_call>call:a{nope}<tool_call|>'), [])
+
+
 if __name__ == "__main__":
     unittest.main()

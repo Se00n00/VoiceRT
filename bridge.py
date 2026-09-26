@@ -56,16 +56,24 @@ def _lock():
 
 
 # Model profiles the user can switch between with `/model`.
-# Default is BF16 eager (plain torch, no Triton) while mixed-quant
-# (4-bit bulk + BF16 important layers) is trialled. Q4_K stays as
-# opt-in for the VRAM-constrained case.
+# Default is the Gemma CPU sidecar (big brain on CPU/RAM, 0 VRAM):
+# STT/TTS keep the GPU, the LLM never touches it. MiniCPM/Qwen stay as
+# GPU-weight switches.
 MODEL_PROFILES = {
+    "gemma": {
+        "name": "gemma",
+        "label": "gemma-4-E4B-it-Q4_K_M",
+        "model": "google/gemma-4-E4B-it",
+        "backend": "gemma",
+        "desc": "default CPU sidecar via llama-server (0 VRAM, needs ~6GB RAM)",
+        "ready": True,
+    },
     "minicpm": {
         "name": "minicpm",
         "label": "minicpm5-1b-bf16",
         "model": "openbmb/MiniCPM5-1B",
         "backend": "minicpm",
-        "desc": "default BF16 eager (no Triton, most faithful)",
+        "desc": "BF16 eager GPU fallback (plain torch, most faithful)",
         "ready": True,
     },
     "minicpm-q4k": {
@@ -102,7 +110,7 @@ MODEL_PROFILES = {
     },
 }
 
-_current_model = {"name": "minicpm"}
+_current_model = {"name": "gemma"}
 
 
 def _build_llm(profile: dict):
@@ -155,8 +163,14 @@ async def switch_model(name: str) -> dict:
             await new_llm.warm()
         except Exception as exc:
             return {"kind": "error", "message": f"new leg failed to warm: {exc}"[:300]}
-        try:  # smoke: tokenizer path alive before we commit to the swap
-            await new_llm.encode([{"role": "user", "content": "ok"}])
+        try:  # smoke: leg alive before we commit to the swap
+            leg = new_llm._backend()
+            if getattr(leg, "is_sidecar", False):
+                # CPU sidecar (Gemma): no local tokenizer/encode path —
+                # warm() already proved /health, nothing more to smoke.
+                pass
+            else:
+                await new_llm.encode([{"role": "user", "content": "ok"}])
         except Exception as exc:
             return {"kind": "error", "message": f"new leg failed smoke: {exc}"[:200]}
         old = getattr(agent, "llm", None)

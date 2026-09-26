@@ -19,8 +19,8 @@ from eval.common import ensure_dir, load_done_keys, timestamp, write_results
 
 
 def _add_common(ap):
-    ap.add_argument("--model", default="openbmb/MiniCPM5-1B")
-    ap.add_argument("--backend", default="minicpm")
+    ap.add_argument("--model", default="google/gemma-4-E4B-it")
+    ap.add_argument("--backend", default="gemma")
     ap.add_argument("--tag", default="eval")
     ap.add_argument("--cache-dir", default="/tmp/hf_eval")
     ap.add_argument("--results-dir", default="eval/results")

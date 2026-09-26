@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>voice-term · live terminal mirror</title>
+<link rel="stylesheet" href="/vendor/xterm.css" />
+<style>
+  html, body { height: 100%; margin: 0; background: #000; }
+  #term { height: 100vh; width: 100vw; }
+  /* Real clickable mic toggle: the terminal app has no mouse support
+     (Ink), so this HTML button sends the same `m` keypress instead. */
+  #mic {
+    position: fixed; top: 10px; right: 12px; z-index: 10;
+    font: 13px/1 ui-monospace, "JetBrains Mono", Menlo, monospace;
+    color: #e5e5e5; background: rgba(30, 30, 34, 0.85);
+    border: 1px solid #3a3a41; border-radius: 8px; padding: 7px 12px;
+    cursor: pointer; user-select: none;
+  }
+  #mic:hover { background: rgba(50, 50, 56, 0.9); }
+</style>
+</head>
+<body>
+<button id="mic" title="toggle mic (same as pressing m)">🎤 mic</button>
+<div id="term"></div>
+<script src="/vendor/xterm.js"></script>
+<script src="/vendor/addon-fit.js"></script>
+<script>
+  // Follow the OS scheme like the app follows the terminal: gaps the app
+  // doesn't paint show this, so it must match the theme backdrop.
+  // The scheme is also passed to the server (?theme= + live updates) so
+  // the pty app boots in the same mode instead of its dark fallback.
+  const scheme = matchMedia("(prefers-color-scheme: light)");
+  const schemeName = () => (scheme.matches ? "light" : "dark");
+  const xtermTheme = (light) => ({
+    background: light ? "#ffffff" : "#000000",
+    foreground: light ? "#000000" : "#ffffff",
+    cursor: light ? "#1d4ed8" : "#38bdf8",
+  });
+  const term = new Terminal({
+    fontFamily: 'ui-monospace, "JetBrains Mono", Menlo, monospace',
+    fontSize: 14,
+    scrollback: 5000,
+    theme: xtermTheme(scheme.matches),
+  });
+  scheme.addEventListener("change", (e) => {
+    term.options.theme = xtermTheme(e.matches);
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify({ t: "theme", mode: e.matches ? "light" : "dark" }));
+    }
+  });
+  const fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  term.open(document.getElementById("term"));
+
+  let ws = null, retryMs = 500;
+  let lastCols = 0, lastRows = 0;
+  // Only SIGWINCH on real size changes — unguarded resize loops were the
+  // flicker: observer -> fit -> signal -> Ink repaint -> observer -> …
+  const fitSend = () => {
+    try {
+      fit.fit();
+      if (term.cols !== lastCols || term.rows !== lastRows) {
+        lastCols = term.cols;
+        lastRows = term.rows;
+        if (ws && ws.readyState === 1) {
+          ws.send(JSON.stringify({ t: "resize", cols: term.cols, rows: term.rows }));
+        }
+      }
+    } catch { /* terminal not laid out yet */ }
+  };
+
+  function connect() {
+    ws = new WebSocket(`ws://${location.host}/pty?theme=${schemeName()}`);
+    ws.onopen = () => { retryMs = 500; fitSend(); };
+    ws.onmessage = (ev) => {
+      let m;
+      try { m = JSON.parse(ev.data); } catch { return; }
+      if (m.t === "out") term.write(m.d);
+      else if (m.t === "restarted" || m.t === "running") { term.clear(); fitSend(); }
+    };
+    ws.onclose = () => setTimeout(connect, (retryMs = Math.min(retryMs * 2, 5000)));
+    ws.onerror = () => { try { ws.close(); } catch {} };
+  }
+
+  term.onData((d) => {
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify({ t: "in", d }));
+  });
+  document.getElementById("mic").onclick = () => {
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify({ t: "in", d: "m" }));
+  };
+  new ResizeObserver(fitSend).observe(document.getElementById("term"));
+  connect();
+</script>
+</body>
+</html>

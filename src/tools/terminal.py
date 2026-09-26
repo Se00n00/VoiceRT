@@ -26,6 +26,7 @@ __all__ = [
     "parse_terminal_action",
     "parse_xml_action",
     "parse_bare_tail",
+    "parse_gemma_action",
     "check_policy",
     "is_denied",
     "needs_confirm",
@@ -414,6 +415,47 @@ def parse_xml_action(text: str) -> TerminalAction | None:
 _BARE_RE = re.compile(
     r'name="([^"]+)"\s*>\s*([^<>\n]*?)(?=\s*name="[^"]+"\s*>|\s*$)',
     re.DOTALL | re.IGNORECASE | re.MULTILINE)
+
+
+_GEMMA_RE = re.compile(
+    r"<\|tool_call>call:([A-Za-z0-9_.\-]+)(.*?)<tool_call\|>",
+    re.DOTALL)
+
+
+def parse_gemma_action(text: str) -> TerminalAction | None:
+    """Parse Gemma-4 native ``<|tool_call>call:name{args}<tool_call|>`` blocks.
+
+    Server-side template rendering (llama.cpp) emits these when OpenAI
+    tools are passed; the leg re-serializes structured calls into the
+    same grammar (see :mod:`src.models.gemma_llamacpp`). The arg span
+    runs to the block marker so nested objects survive; it must parse
+    as one JSON object. First valid block wins (single-action
+    contract; multi-call grading lives in the eval extractor).
+    Unknown op names return None. Never raises.
+    """
+    if not text or "<|tool_call>" not in text:
+        return None
+    for m in _GEMMA_RE.finditer(text):
+        name = (m.group(1) or "").strip()
+        op = _norm_op(name)
+        if not op:
+            continue
+        args = {}
+        raw_args = (m.group(2) or "").strip()
+        if raw_args:
+            try:
+                parsed = json.loads(raw_args)
+            except Exception:
+                continue
+            if not isinstance(parsed, dict):
+                continue
+            args = parsed
+        obj = {"action": op}
+        obj.update({str(k): v for k, v in args.items()})
+        action = _from_obj(obj, strict=False)
+        if action is not None:
+            return action
+    return None
 
 
 def parse_bare_tail(text: str) -> TerminalAction | None:
