@@ -18,6 +18,7 @@ active turn drains.
 """
 
 import asyncio
+import os
 import time
 from dataclasses import dataclass, field
 
@@ -81,14 +82,29 @@ class VoiceAgentConfig:
     exec_timeout_s: float = 30.0
     mcp_config: str | None = None
     use_tool_router: bool = True
-    # paged LLM engine (GPU Qwen/MiniCPM only). Incoherent with the Gemma
-    # CPU sidecar — forced off for backend="gemma" (see __init__).
+    # paged LLM engine (GPU Qwen/MiniCPM only). Incoherent with sidecar
+    # backends — forced off for backend="gemma"/"bonsai" (see __init__).
     llm_paged: bool = False
     llm_paged_blocks: int = 16
     llm_paged_batch_size: int = 4
+    # Text turns speak their reply (TTS alloc on GPU) by default. On 4GB
+    # cards next to a 27B LLM there is no headroom left — set False for
+    # text-only operation (TUI auto mode): no audio event, no VRAM touch,
+    # no red OOM blob next to a perfectly good reply. Voice turns and
+    # /term/say are unaffected. Bridge sets it from VOICE_TEXT_ONLY=1.
+    speak_text_turns: bool = True
     # legacy text-queue knob (kept for API compat, unused by voice turns).
     max_queue: int = 16
     sandbox: object = None
+    # Three-tier memory (all off by default — prod behavior unchanged).
+    # memory_tokens: L1 token-budget window (0 = count cap only).
+    # memory_recall: inject L2 episodes + L3 facts into the turn prompt.
+    # memory_store: consolidate evicted L1 turns into L2 on remember.
+    # memory_dir: local state root (episodic.db, facts.md — gitignored).
+    memory_tokens: int = 0
+    memory_recall: bool = False
+    memory_store: bool = False
+    memory_dir: str = "memory"
 
 
 def _lc_messages(history: list) -> list:
@@ -142,15 +158,19 @@ def _vram_mb():
 
 
 class VoiceAgent:
-    """VAD -> STT -> deep-agent LLM (Gemma CPU) -> TTS (GPU), streaming."""
+    """VAD -> STT -> deep-agent LLM (Bonsai 27B sidecar) -> TTS (GPU), streaming."""
 
     def __init__(self, config: VoiceAgentConfig | None = None):
         self.config = config or VoiceAgentConfig()
         cfg = self.config
-        # Gemma sidecar owns its own inference (llama-server on CPU): the
-        # paged GPU engine must never warm weights behind its back.
+        # Sidecar legs own their own inference (llama-server on CPU, or
+        # Bonsai with partial GPU offload): the paged GPU engine must
+        # never warm weights behind their back.
         llm_cfg = cfg.llm
-        if str(getattr(llm_cfg, "backend", "")) == "gemma" and cfg.llm_paged:
+        if str(getattr(llm_cfg, "backend", "")) in ("gemma",
+                                                    "bonsai",
+                                                    "gemma270",
+                                                    "qwen17") and cfg.llm_paged:
             from dataclasses import replace
 
             llm_cfg = replace(llm_cfg, use_paged=False)
@@ -187,7 +207,9 @@ class VoiceAgent:
             max_turns=cfg.max_session_turns,
             max_age_s=cfg.session_ttl_s,
             max_sessions=cfg.max_sessions,
+            max_tokens=getattr(cfg, "memory_tokens", 0) or 0,
         )
+        self._episodic = None  # lazy EpisodicStore (memory_store/recall)
         try:
             from src.models.runtime import FIFOScheduler
 
@@ -203,6 +225,40 @@ class VoiceAgent:
         self.agent = self._build_agent(self._extra_tools or [])
 
     # -- construction -------------------------------------------------
+    def _summarization_middleware(self, backend):
+        """In-turn compaction guard (returns None when unavailable).
+
+        deepagents' SummarizationMiddleware with OUR estimator and a
+        tool-stripped summarizer sharing the warmed leg (no extra warm,
+        thinking capped by the leg config). Scope is strictly in-turn
+        growth: trigger near ctx, keep recent steps. Cross-turn memory
+        stays in sessions/L2/L3 — this middleware is amnesiac across
+        turns (the graph is rebuilt per turn), so it must never be the
+        only compressor. File offload stays OFF for the same reason
+        (two writers, one summary).
+        """
+        try:
+            from deepagents.middleware.summarization import (
+                SummarizationMiddleware)
+
+            from src.agent.budget import CONTEXT_TOKENS, count_messages
+            from src.agent.chat_model import LocalChatModel
+
+            backend_id = str(getattr(
+                getattr(self.llm, "config", None), "backend", ""))
+            ctx = int(CONTEXT_TOKENS.get(backend_id, 8192))
+            summarizer = LocalChatModel(llm=self.llm, no_tools=True)
+            return SummarizationMiddleware(
+                model=summarizer,
+                backend=backend,
+                trigger=("tokens", max(2048, int(ctx * 0.9))),
+                keep=("messages", 6),
+                token_counter=count_messages,
+                trim_tokens_to_summarize=1500,
+            )
+        except Exception:
+            return None
+
     def _build_agent(self, extra_tools):
         from deepagents import create_deep_agent
         from langchain.agents.middleware import TodoListMiddleware
@@ -223,6 +279,13 @@ class VoiceAgent:
                 from src.agent.tool_router import InjectToolMiddleware
 
                 middleware.append(InjectToolMiddleware())
+            except Exception:
+                pass
+        if self.backend is not None:
+            try:
+                summ = self._summarization_middleware(self.backend)
+                if summ is not None:
+                    middleware.append(summ)
             except Exception:
                 pass
         try:
@@ -253,6 +316,9 @@ class VoiceAgent:
         """Build every leg; collect failures instead of raising."""
         self.missing = []
         for name in ("vad", "stt", "llm", "tts"):
+            if name == "tts" and not self.config.speak_text_turns:
+                self.missing.append("tts leg: skipped (text-only)")
+                continue
             leg = getattr(self, name, None)
             if leg is None:
                 continue
@@ -433,11 +499,19 @@ class VoiceAgent:
                              data={"message": f"agent build: {exc}"[:300]})
             return
         history = self.sessions.history(sid) if sid else []
+        mem_ctx = self._memory_context(sid, str(text)) if sid else ""
         lc_msgs = _lc_messages(history) + [
-            HumanMessage(content=str(text) + f"\nCWD: {cwd} SHELL: bash")]
+            HumanMessage(content=str(text) + mem_ctx +
+                         f"\nCWD: {cwd} SHELL: bash")]
         final_reply = ""
         thinking = ""
         last_think = ""
+        # True once live think deltas streamed this step: the updates-mode
+        # copy of the same trace must not re-render (it would duplicate the
+        # grown bubble — and in a different, newline-joined format).
+        # Display-only flag: `thinking`/`last_think` still update so the
+        # summary, memory and TTS gating keep correct data.
+        live_think_shown = False
         did_work = False
         rl = 10 + int(getattr(self.config, "max_agent_steps", 6) or 6) * 5
         try:
@@ -456,6 +530,16 @@ class VoiceAgent:
                         for piece in _chunk_pieces(msg):
                             yield AgentEvent(node="term", kind="token",
                                              data={"piece": piece[:500]})
+                        # Live think lane: reasoning deltas stream here while
+                        # the step is still generating (the full trace lands
+                        # via the updates-mode thinking event at step end).
+                        ak = getattr(msg, "additional_kwargs", None) or {}
+                        if isinstance(ak, dict) and ak.get("thinking_delta"):
+                            live_think_shown = True
+                            yield AgentEvent(
+                                node="term", kind="thinking",
+                                data={"text": str(ak["thinking_delta"])[:500],
+                                      "append": True})
                     continue
                 if not isinstance(payload, dict):
                     continue
@@ -473,9 +557,14 @@ class VoiceAgent:
                             if think and think != last_think:
                                 last_think = think
                                 thinking = think
-                                yield AgentEvent(node="term", kind="thinking",
-                                                 data={"text": think[:2000]})
+                                if live_think_shown:
+                                    live_think_shown = False
+                                else:
+                                    yield AgentEvent(
+                                        node="term", kind="thinking",
+                                        data={"text": think[:2000]})
                             if tool_calls:
+                                live_think_shown = False  # new step
                                 for tc in tool_calls:
                                     if isinstance(tc, dict):
                                         name = tc.get("name", "?")
@@ -491,8 +580,10 @@ class VoiceAgent:
                                                          **args}})
                                     did_work = True
                             elif str(content or "").strip():
+                                live_think_shown = False
                                 final_reply = self._resolve_reply(content)
                         elif role == "tool":
+                            live_think_shown = False
                             did_work = True
                             obs = str(content or "")
                             if obs.startswith("Blocked:"):
@@ -513,8 +604,10 @@ class VoiceAgent:
         thinking2, reply = split_thinking(final_reply)
         if thinking2 and thinking2 != last_think:
             thinking = thinking2
-            yield AgentEvent(node="term", kind="thinking",
-                             data={"text": thinking[:2000]})
+            if not live_think_shown:
+                yield AgentEvent(node="term", kind="thinking",
+                                 data={"text": thinking[:2000]})
+            live_think_shown = False
         if not reply and did_work:
             reply = "Done."
         if reply and is_degenerate(reply):
@@ -523,7 +616,12 @@ class VoiceAgent:
             reply = "Sorry — I garbled that. Try rephrasing."
         if sid and (text or reply):
             try:
+                before = [m.get("content", "") for m in
+                          self.sessions.history(sid)] if getattr(
+                              self.config, "memory_store", False) else []
                 self.sessions.remember_turn(sid, str(text), reply)
+                if before:
+                    self._memory_consolidate(sid, before)
             except Exception:
                 pass
         out_turns.append((str(text), reply, thinking))
@@ -557,6 +655,67 @@ class VoiceAgent:
         finally:
             lock.release()
 
+    # -- three-tier memory ------------------------------------------------
+    def _episodic_store(self):
+        """Lazy L2 store (None unless memory_store/recall enabled)."""
+        if self._episodic is None and (
+                getattr(self.config, "memory_store", False)
+                or getattr(self.config, "memory_recall", False)):
+            try:
+                from src.agent.episodic import EpisodicStore
+
+                self._episodic = EpisodicStore(
+                    os.path.join(getattr(self.config, "memory_dir",
+                                         "memory"), "episodic.db"))
+            except Exception:
+                self._episodic = None
+        return self._episodic
+
+    def _memory_consolidate(self, sid, before_contents) -> None:
+        """Store L1-evicted turns as L2 episodes (extractive summary)."""
+        try:
+            after = {m.get("content", "") for m in
+                     self.sessions.history(sid)}
+            dropped = [c for c in (before_contents or [])
+                       if c and c not in after]
+            if not dropped:
+                return
+            from src.agent.episodic import summarize_turns
+
+            store = self._episodic_store()
+            if store is None:
+                return
+            summary = summarize_turns(
+                [{"role": "user", "content": c} for c in dropped])
+            if summary:
+                store.store(summary, session=str(sid or ""))
+        except Exception:
+            pass
+
+    def _memory_context(self, sid, text: str) -> str:
+        """L2 episodes + L3 facts injected above the CWD trailer."""
+        if not getattr(self.config, "memory_recall", False):
+            return ""
+        try:
+            parts = []
+            store = self._episodic_store()
+            if store is not None:
+                rows = store.recall(text, k=3, session=str(sid or ""))
+                if rows:
+                    parts.append(
+                        "\n[Past episodes — USE these to answer when "
+                        "relevant; prefer them over guessing]\n" + "\n".join(
+                            "- " + r["summary"][:300] for r in rows))
+            from src.agent.facts import format_block, load_facts
+
+            facts = load_facts(os.path.join(
+                getattr(self.config, "memory_dir", "memory"), "facts.md"))
+            if facts:
+                parts.append("\n[User facts]\n" + format_block(facts))
+            return "".join(parts)
+        except Exception:
+            return ""
+
     # -- text turns (TUI, bridge, CLI, evals) ----------------------------
     async def run_text(self, text: str, session_id: str | None = None,
                        cwd: str | None = None, confirm_fn=None):
@@ -583,7 +742,8 @@ class VoiceAgent:
                 reply = "Sorry — I garbled that. Try rephrasing."
             last_reply, last_think = reply, thinking
             yield AgentEvent(node="term", kind="chat", data={"reply": reply})
-            if getattr(self, "tts", None) is not None:
+            if getattr(self.config, "speak_text_turns", True) and getattr(
+                    self, "tts", None) is not None:
                 try:
                     out = await self.tts.speak(_speak_head(reply))
                     yield AgentEvent(node="term", kind="audio", data={

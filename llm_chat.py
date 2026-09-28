@@ -174,8 +174,8 @@ async def harness_loop(llm: LlmModel, cwd: str, logf=None,
 
 async def main() -> None:
     ap = argparse.ArgumentParser(description="plain LLM REPL (no TUI)")
-    ap.add_argument("--model", default="google/gemma-4-E4B-it")
-    ap.add_argument("--backend", default="gemma", help="gemma | minicpm | minicpm_q4k | qwen")
+    ap.add_argument("--model", default="prism-ml/Ternary-Bonsai-2-27B")
+    ap.add_argument("--backend", default="bonsai", help="bonsai | gemma | minicpm | minicpm_q4k | qwen")
     ap.add_argument("--cwd", default=".")
     ap.add_argument("--max-tokens", type=int, default=256)
     ap.add_argument("--no-tools", action="store_true", help="raw generate, skip harness tool loop")

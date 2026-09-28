@@ -43,6 +43,9 @@ COMPLETE.md
 # local operator notes (keep local only)
 AGENTS.md
 
+# local harness plan (keep local only)
+PLAN.md
+
 # test suites run locally, not versioned
 tests/
 
@@ -56,7 +59,13 @@ sessions/
 # local per-session conversation dotfiles (<store_dir>, default .voicert/)
 .voicert/
 
+# local memory tiers (episodic db, facts, distill logs — runtime state)
+memory/
+
 # node app build outputs (rebuild with npm install && npm run build)
 tui-ink/node_modules/
 tui-ink/dist/
 tui-preview/node_modules/
+
+# local llama.cpp source + build trees (GBs; rebuild via cmake)
+third_party/

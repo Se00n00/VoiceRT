@@ -495,8 +495,13 @@ async def main_async(args, cases):
     print(f"ready on {assert_ready_leg(llm)}.", flush=True)
     cm = LocalChatModel(llm=llm)
     base = int(getattr(getattr(llm, "config", None), "max_tokens", 48) or 48)
-    is_minicpm = str(getattr(getattr(llm, "config", None), "backend", "")).startswith("minicpm")
-    max_tokens = max(base, 320) if is_minicpm else max(base, 256)
+    _be = str(getattr(getattr(llm, "config", None), "backend", ""))
+    if _be == "bonsai":
+        max_tokens = max(base, 512)
+    elif _be == "qwen17":
+        max_tokens = max(base, 512)
+    else:
+        max_tokens = max(base, 320) if _be.startswith("minicpm") else max(base, 256)
 
     rows = []
     for case in cases:

@@ -81,8 +81,7 @@
 
 ````
 
- [WAV 24kHz]                                      Architecture: Kokoro [StyleTTS2 + ISTFTNet]
-    │                                              .
+ [WAV 24kHz]                                      Architecture: Kokoro [StyleTTS2 + ISTFTNet]    │                                              .
     + ──────────┐                                   \_ [82M Parameters]
     |   ┌──────────────────────────┐               .
     │   |     ISTFT DECODER [512]  │                \_ [SR 24000 Hz / Hop 5]
@@ -99,5 +98,25 @@
     └──[LAYER-NORM]───┘                            .
     │                                               \_ [RTF 0.045 Eager]
  [INPUT]  (phonemes → 510 chunk)
+
+````
+
+````
+
+ [TEXT+IMAGE]                                   Architecture: Bonsai 2 27B [ternary hybrid-attention]
+    │                                              .
+    + ──────────┐                                   \_ [27.36B total: 24.35B lang + 0.47B vision + 2.54B embed/head]
+    |   ┌──────────────────────────┐               .
+    │   |   SwiGLU MLP 64×         │                \_ [ternary {-1,0,+1} g128 + FP16 scales + Hadamard rotation]
+    │   └──────────────────────────┘               .
+    |──[RMS-NORM]───┘                               \_ [PTQ1_0 5.93GB (1.76bpw) | PQ2_0 7.25GB (2.16bpw)]
+    + ──────────┐                                  .
+    │   ┌───────────────────────────┐               \_ [16384 Context (native 262K, no RoPE hacks)]
+    │   | HYBRID ATTN ~75% linear   │              .
+    │   |           ~25% full (16×)  │               \_ [KV q4_0 ~lossless | 16K KV ≈ 800MB est — M4 measures]
+    └──[RMS-NORM]───┘                              .
+    │                                               \_ [mmproj HQQ 0.63GB | native tool_calls | thinking_budget]
+ [INPUT]  (llama-server Prism fork prism-b10658+, -ngl auto: partial 4GB / full T4+)
+          backend="bonsai" (Gemma fallback until M4 baselines flip default)
 
 ````

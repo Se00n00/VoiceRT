@@ -56,9 +56,10 @@ def _lock():
 
 
 # Model profiles the user can switch between with `/model`.
-# Default is the Gemma CPU sidecar (big brain on CPU/RAM, 0 VRAM):
-# STT/TTS keep the GPU, the LLM never touches it. MiniCPM/Qwen stay as
-# GPU-weight switches.
+# Default is the Bonsai 27B-ternary sidecar (ngl auto: partial offload on
+# 4GB, full on T4+): STT/TTS keep the GPU, the LLM offloads by availability.
+# Gemma stays as the 0-VRAM CPU fallback. MiniCPM/Qwen stay as
+# GPU-weight switches (M3 deletion pending).
 MODEL_PROFILES = {
     "gemma": {
         "name": "gemma",
@@ -108,9 +109,33 @@ MODEL_PROFILES = {
         "desc": "fused voice model fallback",
         "ready": True,
     },
+    "bonsai": {
+        "name": "bonsai",
+        "label": "bonsai-2-27b-ptq1_0",
+        "model": "prism-ml/Ternary-Bonsai-2-27B",
+        "backend": "bonsai",
+        "desc": "27B ternary sidecar via Prism-fork llama-server (ngl auto, 16K ctx)",
+        "ready": True,
+    },
+    "gemma270": {
+        "name": "gemma270",
+        "label": "functiongemma-270m-q4_k_m",
+        "model": "google/functiongemma-270m-it",
+        "backend": "gemma270",
+        "desc": "270M function-calling sidecar, CPU-only 0 VRAM, 32K ctx (context lab)",
+        "ready": True,
+    },
+    "qwen17": {
+        "name": "qwen17",
+        "label": "qwen3-1.7b-q4_k_m",
+        "model": "Qwen/Qwen3-1.7B",
+        "backend": "qwen17",
+        "desc": "1.7B eval-grade sidecar, CPU-only 0 VRAM, 32K ctx (chat+tools)",
+        "ready": True,
+    },
 }
 
-_current_model = {"name": "gemma"}
+_current_model = {"name": "bonsai"}
 
 
 def _build_llm(profile: dict):
@@ -174,6 +199,16 @@ async def switch_model(name: str) -> dict:
         except Exception as exc:
             return {"kind": "error", "message": f"new leg failed smoke: {exc}"[:200]}
         old = getattr(agent, "llm", None)
+        try:
+            # Sidecar legs own a server subprocess (llama-server on :8080 /
+            # :8081). `del` alone would orphan it — a gemma→bonsai→gemma
+            # ping-pong would leak one server per switch. Read the already-
+            # constructed leg only (never trigger a fresh _backend() build).
+            old_leg = getattr(old, "_leg", None)
+            if getattr(old_leg, "is_sidecar", False):
+                old_leg.close()
+        except Exception:
+            pass
         agent.llm = new_llm
         try:
             del old
@@ -190,12 +225,23 @@ async def switch_model(name: str) -> dict:
 
 
 def get_agent():
-    """Process-wide VoiceAgent, built on first use."""
+    """Process-wide VoiceAgent, built on first use.
+
+    VOICE_TEXT_ONLY=1 skips the TTS leg (warm + per-turn speak): text
+    turns stay VRAM-clean on 4GB cards next to a 27B LLM. Voice turns
+    and /term/say still fail loudly if called — this flag declares a
+    text-only backend, it doesn't remove the voice paths.
+    """
     global _agent
     if _agent is None:
-        from src.main import VoiceAgent
+        import os
 
-        _agent = VoiceAgent()
+        from src.main import VoiceAgent, VoiceAgentConfig
+
+        if os.environ.get("VOICE_TEXT_ONLY", "").strip() == "1":
+            _agent = VoiceAgent(VoiceAgentConfig(speak_text_turns=False))
+        else:
+            _agent = VoiceAgent()
     return _agent
 
 

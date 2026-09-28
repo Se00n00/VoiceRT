@@ -86,17 +86,17 @@ def assert_ready_leg(llm, what: str = "model") -> str:
     """Backend-aware readiness gate. Returns a status string.
 
     GPU weight legs go through :func:`assert_cuda_leg` (a sick driver
-    fails fast); CPU sidecar legs (``backend="gemma"``) must be healthy
-    instead — they have no CUDA leg by design, so the CUDA assert would
-    wrongly abort them.
+    fails fast); sidecar legs (``backend="gemma"`` / ``"bonsai"``) must be
+    healthy instead — they own their inference (llama-server), so the
+    CUDA assert would wrongly abort them.
     """
     backend = str(getattr(getattr(llm, "config", None), "backend", ""))
-    if backend == "gemma":
+    if backend in ("gemma", "bonsai", "gemma270", "qwen17"):
         leg = llm._backend()
         url = getattr(leg, "base_url", "?")
         if not leg._health():
             raise SystemExit(
-                f"ABORT: gemma sidecar unhealthy at {url}. "
+                f"ABORT: {backend} sidecar unhealthy at {url}. "
                 f"Start llama-server first (see S0) and retry.")
         return f"sidecar {url}"
     return assert_cuda_leg(llm, what)
@@ -106,17 +106,20 @@ def assert_ready_leg(llm, what: str = "model") -> str:
 class LlmConfig:
     """No YAML: construct (or override fields) in code."""
 
-    model: str = "openbmb/MiniCPM5-1B"
+    model: str = "prism-ml/Ternary-Bonsai-2-27B"
     # Backend switch.
+    #  - "bonsai" = Ternary Bonsai 2 27B via Prism-fork llama.cpp sidecar
+    #    (-ngl auto from free VRAM, 16K ctx) — DEFAULT: 27B ternary brain,
+    #    STT/TTS keep the GPU, the rest offloads by availability.
     #  - "gemma" = Gemma-4-E4B-it Q4_K_M via local llama.cpp sidecar
-    #    (CPU-only, no VRAM) — DEFAULT: big brain on CPU, fast hands stay
+    #    (CPU-only, no VRAM) — fallback: big brain on CPU, fast hands stay
     #    available via the switches below.
     #  - "minicpm" = BF16 eager (stock transformers, no Triton) — switch
     #    option while mixed-quant (4-bit bulk + BF16 important layers) is
     #    trialled.
     #  - "minicpm_q4k" = Q4_K_M GGUF via src/models/minicpm.py (packed, fused).
     #  - "qwen" = fused Qwen3 path (set model="Qwen/Qwen3-0.6B" with it).
-    backend: str = "gemma"
+    backend: str = "bonsai"
     # GGUF file/dir for the q4k backend ("auto" = HF cache download).
     gguf_path: str = "auto"
     max_tokens: int = 48
@@ -125,13 +128,52 @@ class LlmConfig:
     system_prompt: str = SYSTEM_PROMPT
     thinking: bool = False  # Qwen3 <think> traces (stripped from output)
     # Gemma-4-E4B-it Q4_K_M via local llama.cpp sidecar (CPU-only, no VRAM).
-    # Opt-in with backend="gemma" (MiniCPM stays the default until S2).
+    # Fallback backend (select with backend="gemma"; Bonsai is the default).
     gemma_gguf: str = "auto"  # explicit GGUF path or "auto" (HF cache)
     gemma_file: str = "gemma-4-E4B-it-Q4_K_M.gguf"
     gemma_port: int = 8080
     gemma_ctx: int = 4096
     gemma_threads: int = 0  # 0 = server default
     gemma_bin: str = "auto"  # explicit llama-server path or "auto"
+    # FunctionGemma-270M sidecar (context lab: 0.25GB weights, CPU-only,
+    # 0 VRAM; native Gemma3 128K ctx — experiments start at 32K).
+    # Select with backend="gemma270". Served by the same llama.cpp
+    # sidecar pattern (stock server fine — standard GGUF, no fork).
+    gemma270_gguf: str = "auto"  # explicit path or "auto" (HF cache)
+    gemma270_repo: str = "bartowski/google_functiongemma-270m-it-GGUF"
+    gemma270_file: str = "google_functiongemma-270m-it-Q4_K_M.gguf"
+    gemma270_port: int = 8083
+    gemma270_ctx: int = 32768
+    gemma270_threads: int = 0  # 0 = server default
+    gemma270_bin: str = "auto"
+    # Qwen3-1.7B sidecar (eval-grade small brain: ~1.1GB Q4_K_M, CPU-only,
+    # 0 VRAM, native tool calling, real chat). Select backend="qwen17".
+    qwen17_gguf: str = "auto"
+    qwen17_repo: str = "unsloth/Qwen3-1.7B-GGUF"
+    qwen17_file: str = "Qwen3-1.7B-Q4_K_M.gguf"
+    qwen17_port: int = 8084
+    qwen17_ctx: int = 32768
+    qwen17_threads: int = 0
+    qwen17_bin: str = "auto"
+    # Ternary Bonsai 2 27B via Prism-fork llama.cpp sidecar (OFFLOAD:
+    # -ngl auto from free VRAM — partial on 4GB, full on T4+).
+    # Select with backend="bonsai" (Gemma stays the fallback until the
+    # M4 baselines prove Bonsai). Needs prism-b10658+ server binary.
+    bonsai_gguf: str = "auto"  # explicit GGUF path or "auto" (HF cache)
+    bonsai_packing: str = "ptq1_0"  # or "pq2_0" (bigger, faster prefill)
+    bonsai_mmproj: str = "auto"  # vision tower, or "skip" for text-only
+    bonsai_port: int = 8081
+    bonsai_ctx: int = 16384
+    bonsai_ngl: str = "auto"  # int, or "auto" = probe free VRAM at warm
+    bonsai_cache_k: str = "q4_0"
+    bonsai_threads: int = 0  # 0 = server default
+    bonsai_thinking: int | None = 128  # reasoning budget, None = server
+    # default (unbounded think — minutes per step at ~1 tok/s on 4GB),
+    # 0 disables it. 128 is the low leash: short traces stay live in the
+    # think bubble, runaway reasoning gets cut instead of stalling the
+    # turn. Agentic scores were measured thinking-on; raise or set None
+    # when quality matters more than latency.
+    bonsai_bin: str = "auto"  # explicit Prism-fork llama-server or "auto"
     # paged inference engine (real QwenRunner, no dummy). Disabled by default
     # so tests stay fast; enable in VoiceAgent/server for batching.
     use_paged: bool = False
@@ -155,6 +197,10 @@ class LlmToken:
     token_id: int = 0
     piece: str = ""
     first: bool = False
+    # "text" or "think": sidecar legs tag reasoning deltas so callers can
+    # render thinking live without polluting the answer preview. Default
+    # keeps every existing construction site working unchanged.
+    kind: str = "text"
 
 
 class LlmModel:
@@ -189,6 +235,70 @@ class LlmModel:
                     n_ctx=getattr(self.config, "gemma_ctx", 4096),
                     threads=getattr(self.config, "gemma_threads", 0),
                     server_bin=getattr(self.config, "gemma_bin", "auto"),
+                )
+                return self._leg
+            if backend == "gemma270":
+                # 270M context-lab sidecar: same leg, small GGUF, no size
+                # pin, own port. Resolved BEFORE any torch/CUDA probe.
+                from src.models.gemma_llamacpp import (
+                    GemmaLlamaCpp, resolve_small_gguf)
+
+                gguf = getattr(self.config, "gemma270_gguf", "auto")
+                if gguf == "auto":
+                    gguf = resolve_small_gguf(
+                        getattr(self.config, "gemma270_repo",
+                                "bartowski/google_functiongemma-270m-it-GGUF"),
+                        getattr(self.config, "gemma270_file",
+                                "google_functiongemma-270m-it-Q4_K_M.gguf"))
+                self._leg = GemmaLlamaCpp(
+                    gguf_path=gguf,
+                    expect_bytes=None,
+                    port=getattr(self.config, "gemma270_port", 8083),
+                    n_ctx=getattr(self.config, "gemma270_ctx", 32768),
+                    threads=getattr(self.config, "gemma270_threads", 0),
+                    server_bin=getattr(self.config, "gemma270_bin", "auto"),
+                )
+                return self._leg
+            if backend == "qwen17":
+                # Same generic sidecar leg, Qwen weights (standard GGUF).
+                from src.models.gemma_llamacpp import (
+                    GemmaLlamaCpp, resolve_small_gguf)
+
+                gguf = getattr(self.config, "qwen17_gguf", "auto")
+                if gguf == "auto":
+                    gguf = resolve_small_gguf(
+                        getattr(self.config, "qwen17_repo",
+                                "unsloth/Qwen3-1.7B-GGUF"),
+                        getattr(self.config, "qwen17_file",
+                                "Qwen3-1.7B-Q4_K_M.gguf"))
+                self._leg = GemmaLlamaCpp(
+                    gguf_path=gguf,
+                    expect_bytes=None,
+                    port=getattr(self.config, "qwen17_port", 8084),
+                    n_ctx=getattr(self.config, "qwen17_ctx", 32768),
+                    threads=getattr(self.config, "qwen17_threads", 0),
+                    server_bin=getattr(self.config, "qwen17_bin", "auto"),
+                )
+                return self._leg
+            if backend == "bonsai":
+                # 27B-ternary sidecar (Prism-fork llama-server, -ngl auto).
+                # NOTE: resolved BEFORE any torch/CUDA probe, like gemma —
+                # ngl probing reads VRAM without initializing torch state.
+                from src.models.bonsai_llamacpp import BonsaiLlamaCpp
+
+                self._leg = BonsaiLlamaCpp(
+                    gguf_path=getattr(self.config, "bonsai_gguf", "auto"),
+                    packing=getattr(self.config, "bonsai_packing", "ptq1_0"),
+                    mmproj=getattr(self.config, "bonsai_mmproj", "auto"),
+                    port=getattr(self.config, "bonsai_port", 8081),
+                    n_ctx=getattr(self.config, "bonsai_ctx", 16384),
+                    n_gpu_layers=getattr(self.config, "bonsai_ngl", "auto"),
+                    cache_type_k=getattr(self.config, "bonsai_cache_k",
+                                         "q4_0"),
+                    threads=getattr(self.config, "bonsai_threads", 0),
+                    thinking_budget=getattr(self.config, "bonsai_thinking",
+                                            None),
+                    server_bin=getattr(self.config, "bonsai_bin", "auto"),
                 )
                 return self._leg
             import torch
@@ -237,10 +347,12 @@ class LlmModel:
         """Lazily build paged InferenceEngine (real QwenRunner, no dummy)."""
         if not getattr(self.config, "use_paged", False):
             return None
-        if str(getattr(self.config, "backend", "")) == "gemma":
+        if str(getattr(self.config, "backend", "")) in ("gemma", "bonsai",
+                                                           "gemma270",
+                                                           "qwen17"):
             # Sidecar legs own their inference (llama-server); the paged
             # GPU engine is incoherent here — and must never warm GPU
-            # weights behind a CPU backend's back.
+            # weights behind a sidecar backend's back.
             return None
         if self._paged_engine_inst is not None:
             return self._paged_engine_inst
@@ -282,7 +394,10 @@ class LlmModel:
         # warm tokenizer first (lightweight) — except sidecar legs, which
         # need no local tokenizer (GGUF repos ship none; gated downloads
         # would fail here instead of at the leg with a clear message).
-        if str(getattr(self.config, "backend", "")) != "gemma":
+        if str(getattr(self.config, "backend", "")) not in ("gemma",
+                                                            "bonsai",
+                                                            "gemma270",
+                                                            "qwen17"):
             await asyncio.to_thread(self._tokenizer)
         if getattr(self.config, "use_paged", False):
             # paged path owns its own QwenRunner weights — don't also warm fused leg
@@ -292,9 +407,16 @@ class LlmModel:
                 pass
             # still warm fused as fallback if engine fails
             if self._paged_engine_inst is None:
-                await asyncio.to_thread(self._backend)
+                leg = await asyncio.to_thread(self._backend)
+                if getattr(leg, "is_sidecar", False):
+                    await asyncio.to_thread(leg.warm)
         else:
-            await asyncio.to_thread(self._backend)
+            leg = await asyncio.to_thread(self._backend)
+            if getattr(leg, "is_sidecar", False):
+                # Sidecar legs own a server subprocess: construct isn't
+                # enough — attach or spawn here so the first chat never
+                # meets conn-refused.
+                await asyncio.to_thread(leg.warm)
         return self
 
     def messages(self, text: str, history: list | None = None) -> list:
@@ -575,10 +697,16 @@ class LlmModel:
 
             def _run_sidecar():
                 try:
-                    for i, piece in enumerate(
+                    for i, item in enumerate(
                             leg.chat_stream(acc, messages, tools, limit, stop)):
+                        # Bonsai legs yield ("text"|"think", piece); older
+                        # sidecars (Gemma) yield bare str == text.
+                        if isinstance(item, (tuple, list)):
+                            kind, piece = item[0], item[1]
+                        else:
+                            kind, piece = "text", item
                         loop.call_soon_threadsafe(
-                            queue.put_nowait, ("tok", (piece, i == 0)))
+                            queue.put_nowait, ("tok", (kind, piece, i == 0)))
                     loop.call_soon_threadsafe(queue.put_nowait, ("end", None))
                 except Exception as exc:  # noqa: BLE001 - forwarded
                     loop.call_soon_threadsafe(queue.put_nowait, ("err", exc))
@@ -591,9 +719,10 @@ class LlmModel:
                         return
                     if kind == "err":
                         raise payload
-                    piece, first = payload
+                    pkind, piece, first = payload
                     yield LlmToken(token_id=-1, piece=str(piece),
-                                   first=bool(first))
+                                   first=bool(first),
+                                   kind=str(pkind or "text"))
             finally:
                 await worker
             return

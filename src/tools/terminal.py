@@ -27,6 +27,7 @@ __all__ = [
     "parse_xml_action",
     "parse_bare_tail",
     "parse_gemma_action",
+    "parse_functiongemma_action",
     "check_policy",
     "is_denied",
     "needs_confirm",
@@ -412,6 +413,53 @@ def parse_xml_action(text: str) -> TerminalAction | None:
     return None
 
 
+def _repair_json(raw: str) -> str:
+    """Append missing closing braces/brackets, or return "" when hopeless.
+
+    Models (even 27B ones, measured 2026-09-28) sometimes drop the final
+    ``}`` of an otherwise valid args object — the whole turn then dies
+    as chat because one brace is missing. Only strings starting with
+    ``{`` qualify; braces inside string literals don't count; at most
+    two closers are appended (deeper damage stays unparsed). Returns
+    parseable JSON or "" (the repaired candidate must itself decode —
+    garbage in stays out). Never raises.
+    """
+    s = (raw or "").strip()
+    if not s.startswith("{"):
+        return ""
+    stack: list[str] = []
+    in_str = False
+    esc = False
+    pairs = {"{": "}", "[": "]"}
+    for ch in s:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in pairs:
+            stack.append(pairs[ch])
+        elif ch in ("}", "]"):
+            if stack and stack[-1] == ch:
+                stack.pop()
+            else:
+                return ""  # stray closer — not a truncation, don't guess
+    if in_str or len(stack) > 2:
+        return ""
+    cand = s + "".join(reversed(stack))
+    try:
+        if isinstance(json.loads(cand), dict):
+            return cand
+    except Exception:
+        pass
+    return ""
+
+
 _BARE_RE = re.compile(
     r'name="([^"]+)"\s*>\s*([^<>\n]*?)(?=\s*name="[^"]+"\s*>|\s*$)',
     re.DOTALL | re.IGNORECASE | re.MULTILINE)
@@ -446,7 +494,13 @@ def parse_gemma_action(text: str) -> TerminalAction | None:
             try:
                 parsed = json.loads(raw_args)
             except Exception:
-                continue
+                fixed = _repair_json(raw_args)
+                try:
+                    parsed = json.loads(fixed) if fixed else None
+                except Exception:
+                    continue
+                if parsed is None:
+                    continue
             if not isinstance(parsed, dict):
                 continue
             args = parsed
@@ -455,6 +509,95 @@ def parse_gemma_action(text: str) -> TerminalAction | None:
         action = _from_obj(obj, strict=False)
         if action is not None:
             return action
+    return None
+
+
+_FUNCALL_RE = re.compile(
+    r"<start_function_call>call:([A-Za-z0-9_.\-]+)(.*?)<end_function_call>",
+    re.DOTALL)
+
+
+_SINGLE_ARG_OPS = {
+    # op -> arg key when the model emits a bare (braceless) value span
+    "exec": "command", "exec_bg": "command", "poll": "command",
+    "read": "path", "list": "path", "fetch": "path",
+    "grep": "pattern", "searxng": "pattern",
+}
+
+
+def _funcgemma_args(op: str, span: str) -> dict:
+    """Normalize a FunctionGemma arg span to a JSON-ish dict.
+
+    Observed shapes (measured 2026-09-28, 270M):
+    - ``{path:`.`.}`` — braces, backtick quotes, trailing dots
+    - ``{path:<escape>server.py<escape>}`` — <escape> entities as quotes
+    - ``https://example.com<escape>`` — bare value, no braces at all
+    Returns {} when nothing salvageable. Never raises.
+    """
+    t = (span or "").strip()
+    if not t:
+        return {}
+    t = t.replace("<escape>", '"').replace("`", '"').strip()
+    t = re.sub(r"\.+([\"'}}\]]?)\s*$", r"\1", t)
+    if t.startswith("{"):
+        # bare JS-ish keys are not JSON: {path:...} -> {"path":...}
+        t = re.sub(r"([{,]\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*:)", r'\1"\2"\3', t)
+        for cand in (t, _repair_json(t)):
+            if not cand:
+                continue
+            try:
+                parsed = json.loads(cand)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                pass
+        # last resort: {key: anything} captured as a plain string
+        m = re.match(r"^\{\s*[\"']?([A-Za-z_][A-Za-z0-9_]*)[\"']?\s*:\s*(.+?)\s*\}?$", t, re.DOTALL)
+        if m:
+            return {m.group(1): m.group(2).strip('\'" ')}
+        return {}
+    key = _SINGLE_ARG_OPS.get(op, "")
+    if key:
+        return {key: t.strip('" {}')}
+    return {}
+
+
+def parse_functiongemma_action(text: str) -> TerminalAction | None:
+    """Parse FunctionGemma-270M native call envelopes.
+
+    The model emits its own grammar (never our JSON)::
+
+        <start_function_call>call:list{path:`.`}<end_function_call>
+
+    then rambles on with imagined ``<start_function_response>`` blocks —
+    only the FIRST call block counts (callers stop generation at
+    ``<end_function_call>`` anyway, so longer chains never materialize).
+    Unknown op names return None. Never raises.
+    """
+    if not text or "<start_function_call>" not in text:
+        return None
+    for m in _FUNCALL_RE.finditer(text):
+        name = (m.group(1) or "").strip()
+        op = _norm_op(name)
+        if not op:
+            continue
+        args = _funcgemma_args(op, m.group(2) or "")
+        obj = {"action": op}
+        obj.update({str(k): v for k, v in args.items()})
+        action = _from_obj(obj, strict=False)
+        if action is not None:
+            return action
+    # Unclosed trailing block: generation often ends (EOS/stop) without
+    # the close marker — the call runs to end of string.
+    m = re.search(r"<start_function_call>call:([A-Za-z0-9_.\-]+)(.*)$",
+                  text, re.DOTALL)
+    if m:
+        op = _norm_op((m.group(1) or "").strip())
+        if op:
+            args = _funcgemma_args(op, m.group(2) or "")
+            obj = {"action": op}
+            obj.update({str(k): v for k, v in args.items()})
+            return _from_obj(obj, strict=False)
     return None
 
 

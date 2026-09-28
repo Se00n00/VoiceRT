@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Box, Spacer, Static, Text, useApp, useInput, useStdout } from "ink";
+import { Box, Spacer, Text, useApp, useInput, useStdout } from "ink";
 import TextInput from "ink-text-input";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -51,7 +51,7 @@ type Mode = "auto" | "voice";
 const MODES: Mode[] = ["auto", "voice"];
 
 const uid = () => randomBytes(4).toString("hex");
-const MODEL_FALLBACK = "gemma-4-E4B-it-Q4_K_M";
+const MODEL_FALLBACK = "bonsai-2-27b-ptq1_0";
 
 // Display caps: a single unbounded message (multi-KB listing, long
 // thinking trace) wraps into dozens of terminal rows and used to blow
@@ -90,6 +90,12 @@ export function App({ seconds = 5, theme = DARK, themeNote = "" }: { seconds?: n
   const [viz, setViz] = useState<{ mode: VizMode; bins: number[] }>({ mode: "idle", bins: new Array(NB).fill(0) });
   const [tick, setTick] = useState(0);
   const [pending, setPending] = useState<Record<string, unknown> | null>(null);
+  // Phase line above the input: what the agent is doing right now.
+  const [phase, setPhase] = useState("");
+  // Scrollback: PgUp/PgDn shifts the visible history window (0 = live).
+  const [histOff, setHistOff] = useState(0);
+  // Op of the last action — web/fetch observations collapse to a marker.
+  const lastOp = useRef<string>("");
   const [mode, setMode] = useState<Mode>(() => {
     const m = process.env.VOICE_MODE;
     return m === "voice" ? "voice" : "auto";
@@ -399,6 +405,8 @@ export function App({ seconds = 5, theme = DARK, themeNote = "" }: { seconds?: n
         if (e.event === "action") {
           clearStream();
           const a = (e as { action: Record<string, unknown> }).action ?? {};
+          lastOp.current = String(a["action"] ?? "");
+          setPhase("toolcall …");
           if (String(a["action"]) === "write_todos") {
             const todos = (a["todos"] as unknown as Array<{ content: string; status: string }>) || [];
             if (Array.isArray(todos) && todos.length) {
@@ -409,9 +417,18 @@ export function App({ seconds = 5, theme = DARK, themeNote = "" }: { seconds?: n
           push("act", `▸ ${String(a["action"] ?? "?")}: ${String(a["command"] ?? a["path"] ?? a["pattern"] ?? "")}`);
         } else if (e.event === "observation") {
           clearStream();
-          push("obs", String((e as { observation: string }).observation ?? "").slice(0, 800));
+          const text = String((e as { observation: string }).observation ?? "").slice(0, 800);
+          // Web evidence stays agent-side: the dump floods the screen and
+          // the agent already consumed it. Everything else renders capped.
+          const op = lastOp.current;
+          if (op === "web_search" || op === "searxng" || op === "fetch") {
+            push("obs", `↳ ${op} evidence (${text.length} chars — agent sees it, hidden here)`);
+          } else {
+            push("obs", text);
+          }
         } else if (e.event === "chat") {
           clearStream();
+          setPhase("answering …");
           const reply = String((e as { reply: string }).reply ?? "");
           if (reply.trim()) {
             turnChatCount.current += 1;
@@ -420,7 +437,25 @@ export function App({ seconds = 5, theme = DARK, themeNote = "" }: { seconds?: n
           }
         } else if (e.event === "thinking") {
           const th = String((e as { text: string }).text ?? "").slice(0, 1200);
-          if (th) push("think", th);
+          const append = (e as { append?: boolean }).append === true;
+          if (th) {
+            setPhase("thinking …");
+            if (append) {
+              // Live think lane: grow the last think bubble instead of
+              // spraying one bubble per delta (dozens per step).
+              setMsgs((m) => {
+                const last = m[m.length - 1];
+                if (last && last.who === "think") {
+                  const grown = (last.text + th).slice(-800);
+                  if (grown === last.text) return m;
+                  return [...m.slice(0, -1), { ...last, text: grown }];
+                }
+                const capped = capText("think", th);
+                if (!capped.trim()) return m;
+                return [...m.slice(-199), { id: uid(), who: "think" as const, text: capped }];
+              });
+            } else push("think", th);
+          }
         } else if (e.event === "token") {
           // Live chips accumulate off-render; the tick flushes them to
           // the transient line below. Raw pieces may include think tags
@@ -449,9 +484,11 @@ export function App({ seconds = 5, theme = DARK, themeNote = "" }: { seconds?: n
           }
           clearStream();
           setBusy(false);
+          setPhase("");
           chainNext();
         } else if (e.event === "error") {
           clearStream();
+          setPhase("");
           push("err", `error: ${String((e as { message: string }).message ?? "")}`);
           setBusy(false);
         }
@@ -526,8 +563,9 @@ export function App({ seconds = 5, theme = DARK, themeNote = "" }: { seconds?: n
       setBusy(true);
       turnChatCount.current = 0;
       clearStream();
+      setHistOff(0);
+      setPhase("thinking …");
       push("you", text);
-      push("sys", "⬡ Cooking…");
       sock.current.turn(text, sid, cwd);
     },
     [push, sid, cwd, clearStream]
@@ -771,6 +809,14 @@ export function App({ seconds = 5, theme = DARK, themeNote = "" }: { seconds?: n
   );
 
   useInput((input, key) => {
+    if (key.pageUp) {
+      setHistOff((o) => Math.min(Math.max(0, msgs.length - 1), o + 10));
+      return;
+    }
+    if (key.pageDown) {
+      setHistOff((o) => Math.max(0, o - 10));
+      return;
+    }
     if (key.tab) {
       // Tab cycles modes everywhere (also while typing — Tab never edits).
       setMode((m) => {
@@ -811,10 +857,12 @@ export function App({ seconds = 5, theme = DARK, themeNote = "" }: { seconds?: n
     }
   });
 
-  // History lives in <Static>: appended bubbles scroll into the
-  // terminal scrollback instead of fighting yoga inside a fixed-height
-  // box — that fight is what broke the whole app once chat exceeded
-  // one screen. Per-message caps at push time bound every bubble.
+  // History as a SLICED dynamic list, not <Static>: Static paints
+  // above the root container into terminal scrollback — inside our
+  // fixed-height full-screen box that means every bubble lands above
+  // the visible viewport (invisible; only the transient stream preview
+  // ever flashed). Slice to what fits; per-message caps at push time
+  // bound every bubble. Full text stays in backend session memory.
   // Agent voice as five joined bars: one solid symmetric rectangle per
   // band, driven by five spectrum bands of live mic/agent levels and
   // amplitude-smoothed. Idle = flat equal stubs (no motion without sound).
@@ -872,6 +920,9 @@ export function App({ seconds = 5, theme = DARK, themeNote = "" }: { seconds?: n
   // through the gaps. The growing filler pins the prompt to the bottom
   // AND paints the empty middle.
   const BG = theme.screen;
+  const maxHist = Math.max(1, rows - 16);
+  const histEnd = histOff === 0 ? msgs.length : Math.max(0, msgs.length - histOff);
+  const histVis = msgs.slice(Math.max(0, histEnd - maxHist), histEnd);
   const cols = process.stdout.columns ?? 100;
   const rw = Math.max(10, Math.floor(cols * 0.18) - 2);
   const pad = (s: string) => (s + " ".repeat(rw)).slice(0, rw);
@@ -892,22 +943,38 @@ export function App({ seconds = 5, theme = DARK, themeNote = "" }: { seconds?: n
             {pad(l.text)}
           </Text>
         ))}
+        <Text backgroundColor={theme.panel} color={theme.dim} wrap="wrap">
+          {pad("")}
+        </Text>
+        <Text backgroundColor={theme.panel} color={theme.ink} wrap="wrap">
+          {modelLabel}
+        </Text>
+        <Text backgroundColor={theme.panel} color={theme.dim} wrap="wrap">
+          {`${mode} · ${sid.slice(0, 8)}`}
+        </Text>
+        <Text backgroundColor={theme.panel} color={theme.dim} wrap="wrap">
+          {cwd}
+        </Text>
+        <Text backgroundColor={theme.panel} color={serverOk ? theme.ink : theme.danger} wrap="wrap">
+          {serverOk === null ? "…" : serverOk ? "● bridge" : "○ bridge down"}
+        </Text>
       </Box>
       <Box flexDirection="column" flexGrow={1} flexShrink={1} borderStyle="round" borderColor={theme.border} paddingX={1} height={rows}>
-        <Static items={msgs}>
-          {(m) => (
-            <Text key={m.id} color={colorFor(m.who)} backgroundColor={BG} dimColor={m.who === "think"} wrap="wrap">
-              {labelFor(m.who)}
-              {m.text}
-            </Text>
-          )}
-        </Static>
+        {histVis.map((m) => (
+          <Text key={m.id} color={colorFor(m.who)} backgroundColor={BG} dimColor={m.who === "think"} wrap="wrap">
+            {labelFor(m.who)}
+            {m.text}
+          </Text>
+        ))}
         <Spacer />
         {streamText ? (
           <Text dimColor color={theme.dim} backgroundColor={BG} wrap="wrap">
             {streamText.slice(-400)}▌
           </Text>
         ) : null}
+        <Text color={theme.warn} backgroundColor={BG} wrap="wrap">
+          {phase || " "}
+        </Text>
         <Box borderStyle="single" borderColor={theme.inputBorder}>
           <Text color={theme.ink} backgroundColor={BG}>
             {" "}
@@ -923,9 +990,6 @@ export function App({ seconds = 5, theme = DARK, themeNote = "" }: { seconds?: n
             }
           />
         </Box>
-        <Text color={theme.ink} backgroundColor={BG}>
-          {modelLabel} · {mode} · session {sid.slice(0, 8)} · {cwd} · {serverOk === null ? "…" : serverOk ? "●" : "○ bridge down"} · Tab mode · v voice · {micOn ? "● mic" : "○ mic"}
-        </Text>
         {pending ? (
           <Text color={theme.warn} backgroundColor={BG} wrap="wrap">
             Confirm {String(pending["action"] ?? "?")}: {String(pending["command"] ?? pending["path"] ?? "")} (y/n)

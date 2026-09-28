@@ -13,7 +13,7 @@ export type TurnEvent =
   | { event: "action"; action: Record<string, unknown> }
   | { event: "observation"; observation: string }
   | { event: "chat"; reply: string }
-  | { event: "thinking"; text: string }
+  | { event: "thinking"; text: string; append?: boolean }
   | { event: "token"; piece: string }
   | { event: "audio"; wav_b64: string; sr: number }
   | { event: "confirm"; action: Record<string, unknown> }

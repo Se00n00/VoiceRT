@@ -26,6 +26,14 @@ HF_REPOS = [
 HF_PATTERNS = {
     # repo -> allow_patterns (keep the default-LLM fetch small)
     "openbmb/MiniCPM5-1B-GGUF": ["*Q4_K_M*"],
+    # Ternary Bonsai 2 27B (M1 ingestion leg; filenames verified at M0
+    # fetch — HF repo: prism-ml/Ternary-Bonsai-2-27B-gguf)
+    "unsloth/Qwen3-1.7B-GGUF": ["*Q4_K_M*"],
+    "prism-ml/Ternary-Bonsai-2-27B-gguf": [
+        "*PTQ1_0*",  # 5.93GB small pack (4GB-box default)
+        "*PQ2_0*",  # 7.25GB fast-prefill pack (T4+ default)
+        "*mmproj*",  # vision tower (HQQ 4-bit)
+    ],
 }
 
 SILERO_URL = (

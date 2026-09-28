@@ -92,10 +92,18 @@ class LangChainSessionMemory:
     Drop-in replacement for ``engine.SessionStore``.
     """
 
-    def __init__(self, max_turns=20, max_age_s=1800, max_sessions=1000):
+    def __init__(self, max_turns=20, max_age_s=1800, max_sessions=1000,
+                 max_tokens=0, tokenizer_url=None):
         self.max_turns = int(max_turns)
         self.max_age_s = float(max_age_s)
         self.max_sessions = int(max_sessions)
+        # Token-budget window (0 = disabled, count cap only). When set,
+        # the window holds newest-first messages within max_tokens
+        # (estimate via sidecar /tokenize, else chars/3.5) — short voice
+        # turns pack densely, heavy tool turns prune earlier. The count
+        # cap stays as a backstop; evicted turns feed L2 episodic.
+        self.max_tokens = int(max_tokens or 0)
+        self.tokenizer_url = tokenizer_url
         self._lock = threading.Lock()
         self._data: dict[str, LCSessionHistory] = {}
         self._seq = 0
@@ -122,6 +130,19 @@ class LangChainSessionMemory:
         cap = max(1, self.max_turns) * 2  # user+assistant per turn
         if len(h.messages) > cap:
             del h.messages[:len(h.messages) - cap]
+        if self.max_tokens > 0 and len(h.messages) > 2:
+            from src.agent.budget import estimate_tokens
+            counts = [estimate_tokens(_to_dict(m).get("content", ""),
+                                      self.tokenizer_url)
+                      for m in h.messages]
+            total = sum(counts)
+            i = 0
+            # newest-first fill within budget, always keep last 2 (turn)
+            while total > self.max_tokens and i < len(h.messages) - 2:
+                total -= counts[i]
+                i += 1
+            if i:
+                del h.messages[:i]
 
     # -- LangChain surface ----------------------------------------------
     def lc_history(self, sid) -> LCSessionHistory:

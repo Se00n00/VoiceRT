@@ -40,6 +40,7 @@ __all__ = [
     "compose_raw",
     "to_openai_tools",
     "resolve_gguf",
+    "resolve_small_gguf",
     "resolve_server_bin",
     "mem_available_gb",
 ]
@@ -64,12 +65,21 @@ def mem_available_gb() -> float:
     return 0.0
 
 
-def resolve_gguf(explicit=None):
-    """Find the Q4_K_M file: explicit path, else HF cache download."""
+def resolve_gguf(explicit=None, want_bytes=GGUF_BYTES):
+    """Find the Q4_K_M file: explicit path, else HF cache download.
+
+    ``want_bytes=None`` skips the exact-size completeness check — used
+    for small alternate GGUFs (e.g. FunctionGemma-270M) whose size isn't
+    pinned here. Default keeps the strict check for the 5.3GB file.
+    """
     if explicit and str(explicit) != "auto":
         p = os.path.abspath(os.path.expanduser(str(explicit)))
         if not os.path.isfile(p):
             raise FileNotFoundError(f"gemma gguf not found: {p}")
+        if want_bytes is not None and os.path.getsize(p) != want_bytes:
+            raise ValueError(
+                f"ABORT: {p} is {os.path.getsize(p)} bytes, expected "
+                f"{want_bytes} (incomplete download?). Re-fetch and retry.")
         return p
     from huggingface_hub import snapshot_download
 
@@ -77,6 +87,19 @@ def resolve_gguf(explicit=None):
     p = os.path.join(root, GGUF_FILE)
     if not os.path.isfile(p):
         raise FileNotFoundError(f"gemma gguf missing after download: {p}")
+    return p
+
+
+def resolve_small_gguf(repo_id, filename):
+    """Fetch a small alternate GGUF (no pinned size): FunctionGemma etc."""
+    from huggingface_hub import snapshot_download
+
+    root = snapshot_download(repo_id=repo_id, allow_patterns=[filename])
+    p = os.path.join(root, filename)
+    if not os.path.isfile(p):
+        raise FileNotFoundError(f"small gguf missing after download: {p}")
+    if os.path.getsize(p) == 0:
+        raise ValueError(f"ABORT: {p} is empty. Re-fetch and retry.")
     return p
 
 
@@ -118,12 +141,17 @@ def to_openai_tools(tools):
     return out
 
 
-def compose_raw(content, tool_calls):
-    """Compose parser-target raw text: content + native tool blocks.
+def compose_raw(content, tool_calls, reasoning=""):
+    """Compose parser-target raw text: think block + content + tool blocks.
 
     ``tool_calls`` are OpenAI-style ``{"name":..., "arguments": str|dict}``.
+    Qwen3 legs return thinking in a separate ``reasoning_content`` field —
+    wrapping it in ``<think>`` lets :func:`split_thinking` recover it
+    (else replies look empty: thinking with no content yet).
     """
     parts = []
+    if reasoning and str(reasoning).strip():
+        parts.append(f"<think>{reasoning}</think>")
     if content:
         parts.append(str(content))
     for tc in tool_calls or []:
@@ -145,7 +173,7 @@ class GemmaLlamaCpp:
 
     def __init__(self, gguf_path="auto", host="127.0.0.1", port=8080,
                  n_ctx=4096, threads=0, server_bin="auto",
-                 min_ram_gb=6.0, startup_timeout=180,
+                 min_ram_gb=6.0, startup_timeout=180, expect_bytes=GGUF_BYTES,
                  _post_fn=None, _stream_fn=None, _popen=None):
         self.gguf_path = gguf_path
         self.host = host
@@ -155,6 +183,7 @@ class GemmaLlamaCpp:
         self.server_bin = server_bin
         self.min_ram_gb = float(min_ram_gb)
         self.startup_timeout = float(startup_timeout)
+        self.expect_bytes = expect_bytes
         self._post_fn = _post_fn
         self._stream_fn = _stream_fn
         self._popen = _popen or subprocess.Popen
@@ -190,11 +219,11 @@ class GemmaLlamaCpp:
                 f"ABORT: {free:.1f}GB RAM free, need >={self.min_ram_gb:.0f}GB "
                 f"for the 5.3GB Q4 model + context. Close apps and retry. "
                 f"Refusing swap-death on purpose.")
-        gguf = resolve_gguf(self.gguf_path)
+        gguf = resolve_gguf(self.gguf_path, want_bytes=self.expect_bytes)
         size = os.path.getsize(gguf)
-        if size != GGUF_BYTES:
+        if self.expect_bytes is not None and size != self.expect_bytes:
             raise ValueError(
-                f"ABORT: {gguf} is {size} bytes, expected {GGUF_BYTES} "
+                f"ABORT: {gguf} is {size} bytes, expected {self.expect_bytes} "
                 f"(incomplete download?). Re-fetch and retry.")
         if self._health():
             return self
@@ -284,7 +313,8 @@ class GemmaLlamaCpp:
         n = int(t.get("predicted_n", 0) or 0)
         ms = float(t.get("predicted_ms", 0.0) or 0.0)
         return {
-            "text": compose_raw(msg.get("content"), tcs),
+            "text": compose_raw(msg.get("content"), tcs,
+                                msg.get("reasoning_content", "")),
             "tool_calls": tcs,
             "ttft": float(t.get("prompt_ms", 0.0) or 0.0) / 1000.0,
             "decode_tps": (1000.0 * n / ms) if ms > 0 and n else 0.0,
@@ -312,7 +342,10 @@ class GemmaLlamaCpp:
             delta = (ev.get("choices") or [{}])[0].get("delta", {})
             content = delta.get("content")
             if content:
-                yield str(content)
+                yield ("text", str(content))
+            rc = delta.get("reasoning_content")
+            if rc:
+                yield ("think", str(rc))
             for tc in delta.get("tool_calls") or []:
                 idx = tc.get("index", 0)
                 slot = tcs.setdefault(idx, {"name": "", "arguments": ""})

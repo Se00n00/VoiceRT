@@ -79,6 +79,46 @@ Project structure → [`docs/architecture.md#1-component-map`](docs/architecture
 
 Verbose specs → docs: capacity model, queue, Triton details, API and config.
 
+## Agent — text in, tools out, reply back
+
+```
+text in ──► VoiceAgent.run_text ──► deep-agent loop (≤6 steps, lock+queue per session)
+                                          │ think → toolcall (one action per step)
+                                          ▼
+                                   exec/read/write/edit/list/grep (host backend)
+                                   python_exec/fetch/web_search (MCP stdio)
+                                          │ policy deny/confirm + y/n gate
+                                          ▼
+                                   chat reply (+ thinking + token stream)
+sessions/*.json: 8-turn window + token budget (see Context Engineering)
+```
+
+## Context Engineering — one budget per backend, enforced at assembly
+
+```
+16K window
+├─ system + preamble ......... fixed (~2.5K, never cut)
+├─ tool specs ................ fixed (~1K narrowed, never cut)
+├─ history window ............ elastic (newest-first fill to remainder)
+├─ observations .............. elastic per-call (1500 → 500 → drop)
+└─ generation reserve ........ fixed floor (256/512, never spent by input)
+```
+
+Rule: step floor ≥ think cap + min answer (a think cap above the floor
+truncates mid-thought). Per-backend rows (`src/agent/budget.py:BUDGETS`):
+
+```
+backend    ctx    think cap   floor   history ≈
+bonsai     16K    128         512     ~9K
+qwen17     32K    512         512     ~22K
+gemma270   32K    256         256     ~22K
+gemma      4K     256         256     0 by caps (measured system ~0.5K → ~2K real room)
+```
+
+`pack_prompt` cuts obs → history, never system/facts. L1 window, L2
+episodic (`memory/episodic.db`), L3 facts (`memory/facts.md`) distill
+from packed context — see PLAN.md (local-only).
+
 ## Benchmarks — measured on RTX 3050 Laptop 4GB (CUDA 12, torch 2.5.1)
 
 All commands assume `PYTHONPATH=.` from inside `voice-pipeline/`.
@@ -200,10 +240,28 @@ All plots in `benchmarks/results/plots_fused/` · engine bench in `benchmarks/en
 
 ## References
 
-- [Aleksa Gordić — transformer from scratch](https://www.aleksagordic.com/blog/transformer)
-- [Umar Jamil — transformer playlist](https://www.youtube.com/playlist?list=PLqO45Dg1pMhlDBZTMqVL2GU-14xYip2y2)
-- [learn-inference.com](https://learn-inference.com/)
-- [OpenAI Triton](https://triton-lang.org/)
+### Transformers
+
+- [1]: https://www.aleksagordic.com/blog/transformer | Transformer from scratch - by Aleksa Gordić
+- [2]: https://www.youtube.com/playlist?list=PLqO45Dg1pMhlDBZTMqVL2GU-14xYip2y2 | Transformer playlist - by Umar Jamil
+
+### Inference
+
+- [3]: https://learn-inference.com/ | learn-inference.com - by learn-inference.com
+
+### Kernels
+
+- [4]: https://triton-lang.org/ | OpenAI Triton - by OpenAI
+
+### Harness
+
+- [5]: https://martinfowler.com/articles/harness-engineering.html | Harness engineering for coding agent users - by Birgitta Böckeler
+- [6]: https://youtu.be/C_GG5g38vLU?si=RaptRWbS-27f7r78 | Harnesses in AI: A Deep Dive - by Tejas Kumar (IBM)
+- [7]: https://youtu.be/tYchws8hpd8?si=pcI1PIS1qqmmSLIX | AI Harness Engineering - Forward Deployed Engineering Tutorial - by YouTube
+
+### Agentic Design
+
+- [8]: https://github.com/ombharatiya/ai-system-design-guide/tree/main | AI system design guide - by Om Bharatiya
 
 More: [`docs/architecture.md`](docs/architecture.md) startup + WS flow, [`docs/inference_engine.md`](docs/inference_engine.md) scheduling/batching/KV/memory, [`docs/capacity.md`](docs/capacity.md) VRAM math, plots in `benchmarks/results/plots_fused/`.
 
