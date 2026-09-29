@@ -5,9 +5,9 @@
 ```
 ─── 01 / HIGH LEVEL ARCHITECTURE ───────────────────────────────────────────────────────────
 
-      ┌──────────────┐       ┌─────────────────────┐      ┌─────────────────┐      ┌───────────────┐
-wav |>  | Silero VAD |  ---|> | Tiny Whisper (STT) | ---|> | Mini CPM (LLM) | ---|> | Kokoro (TTS) | |> wav
-      └──────────────┘       └─────────────────────┘      └─────────────────┘      └───────────────┘
+      ┌──────────────┐    ┌─────────────────────┐   ┌─────────────────┐   ┌───────────────┐
+wav |>  | Silero VAD |  |> | Tiny Whisper (STT) | |> | Mini CPM (LLM) | |> | Kokoro (TTS) | |> wav
+      └──────────────┘    └─────────────────────┘   └─────────────────┘   └───────────────┘
 ```
 
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
@@ -262,6 +262,11 @@ All plots in `benchmarks/results/plots_fused/` · engine bench in `benchmarks/en
 ### Agentic Design
 
 - [8]: https://github.com/ombharatiya/ai-system-design-guide/tree/main | AI system design guide - by Om Bharatiya
+
+### Context Engineering
+
+- [9]: https://www.langchain.com/blog/context-engineering-for-agents | Context Engineering for Agents - by LangChain
+- [10]: https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents | Effective context engineering for AI agents - by Anthropic (Applied AI team)
 
 More: [`docs/architecture.md`](docs/architecture.md) startup + WS flow, [`docs/inference_engine.md`](docs/inference_engine.md) scheduling/batching/KV/memory, [`docs/capacity.md`](docs/capacity.md) VRAM math, plots in `benchmarks/results/plots_fused/`.
 

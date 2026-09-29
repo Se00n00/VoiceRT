@@ -30,7 +30,7 @@ from langchain_core.messages import (
 from langchain_core.outputs import ChatGeneration, ChatResult
 
 from src.models.llm import LlmModel, split_thinking
-from src.tools.terminal import TERMINAL_TOOLS, is_degenerate, is_echo, parse_bare_tail, parse_functiongemma_action, parse_gemma_action, parse_terminal_action, parse_xml_action
+from src.tools.terminal import TERMINAL_TOOLS, is_degenerate, is_echo, parse_bare_tail, parse_functiongemma_action, parse_gemma_action, parse_terminal_action, parse_toolcall_dict, parse_xml_action
 
 # Read-only ops: repeating one with identical args can never add
 # information (the observation is already in context). Side-effecting
@@ -155,6 +155,9 @@ class LocalChatModel(BaseChatModel):
             # FunctionGemma-270M native envelope (270M context-lab leg).
             action = parse_functiongemma_action(answer)
         if action is None and answer.strip():
+            # Bare OpenAI/LangChain tool-call dicts as text (Qwen subtasks).
+            action = parse_toolcall_dict(answer)
+        if action is None and answer.strip():
             action = parse_terminal_action(answer)
         if action is None and answer.strip():
             action = parse_xml_action(answer)
@@ -162,6 +165,8 @@ class LocalChatModel(BaseChatModel):
             action = parse_gemma_action(raw)
         if action is None:
             action = parse_functiongemma_action(raw)
+        if action is None:
+            action = parse_toolcall_dict(raw)
         if action is None:
             action = parse_terminal_action(raw)
         if action is None:
@@ -216,9 +221,13 @@ class LocalChatModel(BaseChatModel):
     def _looks_like_call(raw: str) -> bool:
         """Unparsed text that still smells like a tool attempt."""
         t = str(raw or "")
-        return ("<|tool_call>" in t or "<function" in t
+        if ("<|tool_call>" in t or "<function" in t
                 or "<start_function_call>" in t
-                or '"action"' in t or "'action'" in t)
+                or '"action"' in t or "'action'" in t):
+            return True
+        # Bare OpenAI/LangChain dicts (incl. invented tools like "count"):
+        # retry as a parse nudge rather than ending the turn as chat.
+        return '"name"' in t and '"arguments"' in t
 
     def _needs_retry(self, raw: str, thinking: str, answer: str,
                      action=None) -> str | None:
