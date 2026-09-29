@@ -166,6 +166,70 @@ def _free_llm_gpu():
         pass
 
 
+# Sessions that ran turns in this process (compaction candidates).
+_seen_sids: set = set()
+# sid -> model name it was compacted for (skip repeat work per target).
+_compacted_for: dict = {}
+
+SUMMARIZE_PROMPT = (
+    "Summarize this conversation in at most 150 words: keep facts, "
+    "decisions, file paths touched, and errors seen. Reply with the "
+    "summary only, no preamble. Conversation:\n")
+
+
+async def _compact_sessions(agent, target: str,
+                            max_summary_chars: int = 2000) -> str:
+    """Compact active sessions for a model switch (never raises)."""
+    old_llm = getattr(agent, "llm", None)
+    sessions = getattr(agent, "sessions", None)
+    generate = getattr(old_llm, "generate", None)
+    if not callable(generate) or sessions is None:
+        return ""
+    history = getattr(sessions, "history", None)
+    reset = getattr(sessions, "reset", None)
+    append = getattr(sessions, "append", None)
+    if not all(callable(f) for f in (history, reset, append)):
+        return ""
+    done = 0
+    for sid in sorted(_seen_sids):
+        if _compacted_for.get(sid) == target:
+            continue
+        try:
+            hist = history(sid) or []
+        except Exception:
+            continue
+        if len(hist) <= 2:
+            _compacted_for[sid] = target
+            continue
+        chunk = "\n".join(
+            "%s: %s" % (m.get("role", "?"), m.get("content", ""))
+            for m in hist[:-2])[:6000]
+        try:
+            res = await generate(
+                [{"role": "user",
+                  "content": SUMMARIZE_PROMPT + chunk}],
+                max_tokens=256)
+            summary = str(getattr(res, "text", "") or "").strip()
+        except Exception:
+            continue
+        if not summary:
+            continue
+        try:
+            reset(sid)
+            append(sid, "user",
+                   "[Earlier summary] " + summary[:max_summary_chars])
+            for m in hist[-2:]:
+                append(sid, str(m.get("role", "user") or "user"),
+                       str(m.get("content", "") or ""))
+        except Exception:
+            continue
+        _compacted_for[sid] = target
+        done += 1
+    if done:
+        return "compacted %d session%s" % (done, "" if done == 1 else "s")
+    return ""
+
+
 async def switch_model(name: str) -> dict:
     """Hot-swap the LLM leg. Keeps sessions/TTS/STT/VAD. Never raises."""
     name = str(name or "").strip().lower()
@@ -198,6 +262,10 @@ async def switch_model(name: str) -> dict:
                 await new_llm.encode([{"role": "user", "content": "ok"}])
         except Exception as exc:
             return {"kind": "error", "message": f"new leg failed smoke: {exc}"[:200]}
+        try:
+            compact_note = await _compact_sessions(agent, name)
+        except Exception:
+            compact_note = ""
         old = getattr(agent, "llm", None)
         try:
             # Sidecar legs own a server subprocess (llama-server on :8080 /
@@ -221,7 +289,10 @@ async def switch_model(name: str) -> dict:
         except Exception:
             pass
         _current_model["name"] = name
-        return {"kind": "ok", "current": name, "label": profile["label"]}
+        out = {"kind": "ok", "current": name, "label": profile["label"]}
+        if compact_note:
+            out["compacted"] = compact_note
+        return out
 
 
 def get_agent():
@@ -414,6 +485,8 @@ def create_app(agent=None):
                     except Exception:
                         pass
                     continue
+                if msg.get("session_id"):
+                    _seen_sids.add(str(msg.get("session_id")))
                 turn_task["task"] = asyncio.create_task(
                     run_one(text, msg.get("session_id"), msg.get("cwd") or "."))
 
@@ -473,7 +546,9 @@ def create_app(agent=None):
                 except Exception:
                     pass
                 continue
-            turn_task["task"] = asyncio.create_task(run_one(text, msg.get("session_id"), msg.get("cwd") or "."))
+                if msg.get("session_id"):
+                    _seen_sids.add(str(msg.get("session_id")))
+                turn_task["task"] = asyncio.create_task(run_one(text, msg.get("session_id"), msg.get("cwd") or "."))
 
         closed["done"] = True
         if turn_task["task"] is not None:

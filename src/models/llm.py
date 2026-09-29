@@ -217,6 +217,8 @@ class LlmModel:
         self._leg = None
         self._tok = None
         self._paged_engine_inst = None
+        # Per-run preamble override (Sim-Agent subtasks). None = default.
+        self.terminal_preamble = None
 
     def _backend(self):
         if self._leg is None:
@@ -470,7 +472,8 @@ class LlmModel:
         """
         from src.agent.prompts import TERMINAL_PREAMBLE
 
-        system = self.config.system_prompt + " " + TERMINAL_PREAMBLE
+        preamble = getattr(self, "terminal_preamble", None) or TERMINAL_PREAMBLE
+        system = self.config.system_prompt + " " + preamble
         msgs = [{"role": "system", "content": system}]
         msgs.extend(history or [])
         body = str(text or "")[:500]

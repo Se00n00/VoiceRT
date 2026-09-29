@@ -70,7 +70,7 @@ async def raw_loop(llm: LlmModel, max_tokens: int) -> None:
 
 
 async def harness_loop(llm: LlmModel, cwd: str, logf=None,
-                     sandbox=None) -> None:
+                     sandbox=None, sim: bool = False) -> None:
     def log(*parts):
         if logf is not None:
             print(*parts, file=logf, flush=True)
@@ -80,6 +80,12 @@ async def harness_loop(llm: LlmModel, cwd: str, logf=None,
     from src.agent.chat_model import LocalChatModel
 
     agent.chat_model = LocalChatModel(llm=llm)
+    sim_agent = None
+    if sim:
+        from src.agent.simtask import SimAgent
+
+        sim_agent = SimAgent(agent)
+        print("sim-agent on: complex turns decompose (depth 1, stash persists).")
     sid = uuid.uuid4().hex[:8]
     print(f"harness mode - session {sid}, cwd {cwd}. /quit to exit, /new for new session.")
     while True:
@@ -112,8 +118,12 @@ async def harness_loop(llm: LlmModel, cwd: str, logf=None,
         last_think = ""
         log(f"=== turn: {text!r} sid={sid} cwd={cwd}")
         try:
-            async for ev in agent.run_text(text, session_id=sid, cwd=cwd,
-                                           confirm_fn=confirm):
+            turns = (sim_agent.run_task(text, sid=sid, cwd=cwd,
+                                        confirm_fn=confirm)
+                     if sim_agent is not None
+                     else agent.run_text(text, session_id=sid, cwd=cwd,
+                                         confirm_fn=confirm))
+            async for ev in turns:
                 d = ev.data or {}
                 if ev.kind == "token":
                     piece = str(d.get("piece", "") or "")
@@ -182,6 +192,8 @@ async def main() -> None:
     ap.add_argument("--log", default="", help="log step raw outputs + events to FILE for debugging")
     ap.add_argument("--sandbox", action="store_true",
                     help="run exec tools inside a per-turn docker container (needs docker group)")
+    ap.add_argument("--sim", action="store_true",
+                    help="Sim-Agent: decompose complex turns into subtasks (depth 1)")
     args = ap.parse_args()
 
     llm = LlmModel(LlmConfig(model=args.model, backend=args.backend))
@@ -206,7 +218,8 @@ async def main() -> None:
         if args.no_tools:
             await raw_loop(llm, args.max_tokens)
         else:
-            await harness_loop(llm, args.cwd, logf=logf, sandbox=sandbox)
+            await harness_loop(llm, args.cwd, logf=logf, sandbox=sandbox,
+                               sim=args.sim)
     finally:
         if logf is not None:
             logf.close()

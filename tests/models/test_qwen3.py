@@ -131,14 +131,14 @@ class TestThinking(unittest.TestCase):
         from src.models.llm import LlmConfig
 
         self.assertFalse(LlmConfig().thinking)
-        self.assertEqual(LlmConfig().model, "openbmb/MiniCPM5-1B")
+        self.assertEqual(LlmConfig().model, "prism-ml/Ternary-Bonsai-2-27B")
 
 
 class TestQwen3Defaults(unittest.TestCase):
     def test_agent_default(self):
         from src.main import VoiceAgentConfig
 
-        self.assertEqual(VoiceAgentConfig().llm.model, "openbmb/MiniCPM5-1B")
+        self.assertEqual(VoiceAgentConfig().llm.model, "prism-ml/Ternary-Bonsai-2-27B")
 
     def test_no_yaml_configs_dir(self):
         import os

@@ -395,5 +395,64 @@ class TestVoiceAgent(unittest.TestCase):
         self.assertEqual(len(ag.sessions.history("s9")), 4)
 
 
+class TestSummarizationIntegration(unittest.TestCase):
+    def _agent(self, backend="bonsai"):
+        import tempfile
+        from types import SimpleNamespace
+
+        from src.main import VoiceAgent, VoiceAgentConfig
+
+        cfg = VoiceAgentConfig(
+            sessions_dir=tempfile.mkdtemp(prefix="vsumm-"),
+            llm=SimpleNamespace(backend=backend, max_tokens=48,
+                                model="m"))
+        return VoiceAgent(cfg)
+
+    def test_no_tools_flag_strips_specs(self):
+        from types import SimpleNamespace
+
+        from src.agent.chat_model import LocalChatModel
+
+        llm = SimpleNamespace(config=SimpleNamespace(backend="bonsai"))
+        cm = LocalChatModel(llm=llm, no_tools=True)
+        self.assertIsNone(cm._prompt_tools("list files", ""))
+        cm2 = LocalChatModel(llm=llm)
+        self.assertIsNotNone(cm2._prompt_tools("list files", ""))
+
+    def test_count_messages_mixed(self):
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        from src.agent.budget import count_messages
+
+        n = count_messages([HumanMessage(content="hello world this is a test"),
+                            AIMessage(content="")])
+        self.assertGreater(n, 0)
+        self.assertEqual(count_messages([]), 0)
+        self.assertEqual(count_messages(["x" * 350]),
+                         count_messages([{"content": "x" * 350}]))
+
+    def test_helper_builds_backend_aware_middleware(self):
+        from deepagents.middleware.summarization import (
+            SummarizationMiddleware)
+
+        ag = self._agent("bonsai")
+        mw = ag._summarization_middleware(ag.backend)
+        self.assertIsInstance(mw, SummarizationMiddleware)
+        # 16384 * 0.9 = 14745 trigger; recent-6 keep; our counter
+        from src.agent.budget import count_messages
+
+        self.assertIs(mw.token_counter, count_messages)
+        self.assertTrue(mw.model.no_tools)
+        ag2 = self._agent("gemma270")
+        mw2 = ag2._summarization_middleware(ag2.backend)
+        self.assertIsInstance(mw2, SummarizationMiddleware)
+
+    def test_graph_builds_with_summarizer(self):
+        # full _build_agent incl. the new middleware must not break turns
+        ag = self._agent("bonsai")
+        self.assertIsNotNone(ag.agent)
+
+
+
 if __name__ == "__main__":
     unittest.main()

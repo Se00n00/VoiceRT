@@ -28,6 +28,7 @@ __all__ = [
     "parse_bare_tail",
     "parse_gemma_action",
     "parse_functiongemma_action",
+    "parse_toolcall_dict",
     "check_policy",
     "is_denied",
     "needs_confirm",
@@ -256,6 +257,10 @@ def _from_obj(obj: dict, strict: bool) -> TerminalAction | None:
     if op == "python_exec":
         body = _payload(obj, "code", "text", "script", limit=20000)
     reply = _payload(obj, "reply", "message", "answer", limit=2000)
+    if op == "done" and not reply:
+        # Model-invented answer vehicle: {"name": "answer",
+        # "arguments": {"text": "..."}} — the payload key is "text".
+        reply = _payload(obj, "text", limit=2000)
     anchor = _payload(obj, "anchor", "old", "before", "search", limit=10000) if op == "edit" else ""
     pattern = _payload(obj, "pattern", "regex", "query", limit=500) if op in ("grep", "searxng") else ""
     if op == "list" and command and not path:
@@ -560,6 +565,66 @@ def _funcgemma_args(op: str, span: str) -> dict:
     if key:
         return {key: t.strip('" {}')}
     return {}
+
+
+def parse_toolcall_dict(text: str) -> TerminalAction | None:
+    """Parse LangChain/OpenAI tool-call dicts emitted as plain text.
+
+    Measured 2026-09-28 (Qwen3-1.7B subtasks): the model sometimes emits
+    the call it just made (or wants to make) as bare JSON
+    ``{"name": "list", "arguments": {"path": "."}}`` instead of any
+    envelope. Without this the text falls through to chat and the turn
+    ends with call-shaped garbage as its reply. Never raises.
+    """
+    if not text or '"name"' not in text:
+        return None
+    try:
+        start = text.index('{"name"')
+    except ValueError:
+        try:
+            start = text.index("{\"name\"")
+        except ValueError:
+            return None
+    # balanced-brace scan from the first {"name" occurrence
+    depth, instr, esc = 0, False, False
+    end = -1
+    for i in range(start, len(text)):
+        ch = text[i]
+        if instr:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                instr = False
+            continue
+        if ch == '"':
+            instr = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    if end <= start:
+        return None
+    try:
+        obj = json.loads(text[start:end])
+    except Exception:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    name = str(obj.get("name", "") or "")
+    args = obj.get("arguments", {})
+    if not isinstance(args, dict):
+        return None
+    op = _norm_op(name)
+    if not op:
+        return None
+    merged = {"action": op}
+    merged.update({str(k): v for k, v in args.items()})
+    return _from_obj(merged, strict=False)
 
 
 def parse_functiongemma_action(text: str) -> TerminalAction | None:
