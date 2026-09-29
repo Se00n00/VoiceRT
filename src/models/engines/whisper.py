@@ -219,24 +219,40 @@ def log_mel_spectrogram(wav, sr=SAMPLE_RATE, n_mels=N_MELS):
     <|nospeech|> on loud, VAD-confirmed speech.
     """
     from src.models.runtime.tensor import to_host_numpy
-    x = to_host_numpy(wav).astype(np.float32)
+    # Flatten: callers may hand a mel-shaped/batched array where a 1-D
+    # waveform is expected (a 2-D input would otherwise explode the STFT
+    # frame index into a multi-GB allocation instead of failing fast).
+    x = to_host_numpy(wav).astype(np.float32).ravel()
     if sr != SAMPLE_RATE:
         dur = len(x) / float(sr)
         n_out = int(round(dur * SAMPLE_RATE))
         old = np.linspace(0.0, 1.0, num=len(x))
         new = np.linspace(0.0, 1.0, num=max(n_out, 1))
         x = np.interp(new, old, x).astype(np.float32)
-    # HF parity: pad/trim the WAVEFORM to 30 s first (silence zeros), so the
-    # frame count is exact and padded regions read as true silence.
     if len(x) > N_SAMPLES:
         x = x[:N_SAMPLES]
-    elif len(x) < N_SAMPLES:
-        x = np.pad(x, (0, N_SAMPLES - len(x)))
+        power = _stft_power(x)
+        mel = power @ _filters().T
+        log_spec = np.log10(np.maximum(mel, 1e-10))
+        log_spec = np.maximum(log_spec, log_spec.max() - 8.0)
+        log_spec = (log_spec + 4.0) / 4.0
+        return log_spec.T.astype(np.float32)
+    # Short utterance: STFT the real frames only (a 2 s turn is 15x
+    # shorter than the 30 s window), then extend the mel to N_FRAMES with
+    # the exact silence value the full-window path produces for zero
+    # regions — max(-10, peak-8) scaled — not zeros (zeros read as loud
+    # mid-grey to the encoder, true silence reads as the floor).
     power = _stft_power(x)
     mel = power @ _filters().T
     log_spec = np.log10(np.maximum(mel, 1e-10))
-    log_spec = np.maximum(log_spec, log_spec.max() - 8.0)
+    peak = log_spec.max()
+    log_spec = np.maximum(log_spec, peak - 8.0)
     log_spec = (log_spec + 4.0) / 4.0
+    silence_val = (max(-10.0, peak - 8.0) + 4.0) / 4.0
+    if log_spec.shape[0] < N_FRAMES:
+        pad = np.full((N_FRAMES - log_spec.shape[0], log_spec.shape[1]),
+                      silence_val, dtype=np.float32)
+        log_spec = np.concatenate([log_spec, pad], axis=0)
     return log_spec.T.astype(np.float32)
 
 

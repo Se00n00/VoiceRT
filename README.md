@@ -5,9 +5,55 @@
 ```
 ─── 01 / HIGH LEVEL ARCHITECTURE ───────────────────────────────────────────────────────────
 
-      ┌──────────────┐    ┌─────────────────────┐   ┌─────────────────┐   ┌───────────────┐
-wav |>  | Silero VAD |  |> | Tiny Whisper (STT) | |> | Mini CPM (LLM) | |> | Kokoro (TTS) | |> wav
-      └──────────────┘    └─────────────────────┘   └─────────────────┘   └───────────────┘
+      ┌──────────────┐   ┌─────────────────────┐   ┌─────────────────┐   ┌───────────────┐
+wav |>  | Silero VAD | |> | Tiny Whisper (STT) | |> | Mini CPM (LLM) | |> | Kokoro (TTS) | |> wav
+      └──────────────┘   └─────────────────────┘   └─────────────────┘   └───────────────┘
+      
+─── 01 ~ 1 / CONTEXT & MEMORY ───────────────────────────────────────────────────────────────────────
+
+  BUDGET 16K - pack_prompt cuts obs → hist, never system/facts
+  ┌────────────┬───────────┬──────────────────────┬───────────────┬────────────┐
+  │ system +   │ tool      │ history              │ observations  │ reserve    │
+  │ preamble   │ specs     │ elastic - newest-    │ 1500 → 500    │ 256 / 512  │
+  │ ~2.5K      │ ~1K       │ first fill           │ → drop        │ floor      │
+  │ FIXED      │ FIXED     │ ELASTIC              │ ELASTIC       │ FIXED      │
+  └────────────┴───────────┴──────────────────────┴───────────────┴────────────┘
+  count: /tokenize exact, else chars/3.5 - per-backend rows in budget.py:BUDGETS
+
+  MEMORY - L1 evict -> L2 store - L2/L3 recall -> prompt (every turn)
+  ┌────────────────────┐
+  │ L1 WORKING         │
+  │ sessions/*.json    │
+  │ window+tok-TTL-LRU │
+  └─────────┬──────────┘
+            │ evict → summarize_turns → store()
+            ▼
+  ┌────────────────────┐                 ┌──────────────────────┐
+  │ L2 EPISODIC bge    │ ──────────────▶ │ ASSEMBLED PROMPT     │
+  └────────────────────┘ [Past episodes] │ facts → episodes →   │
+  ┌────────────────────┐                 │ hist newest-first    │
+  │ L3 FACTS s-P-o     │ ──────────────▶ │ + CWD trailer        │
+  └────────────────────┘ [User facts]    └──────────────────────┘
+  L2 = memory/episodic.db (bge-small cos+kw+rec) - L3 = memory/facts.md (newer wins)
+
+  TURNS - middleware in order, then pack
+  ┌──────────┐    ┌────────────┐    ┌────────────┐    ┌─────────────┐
+  │ write_   │───▶│ TrimObs    │───▶│ InjectTool │───▶│ Summarizer  │──▶ pack_prompt
+  │ todos    │    │ head 1500  │    │ sem top-k  │    │ trg .9xctx  │
+  │ (plan)   │    │ + omitted  │    │ ~1K specs  │    │ keep 6      │
+  └──────────┘    └────────────┘    └────────────┘    └─────────────┘
+
+  COMPACTION - cross-turn
+  ┌───────────────┐                     ┌────────────────┐
+  │ model-switch  │ ──────────────────▶ │ compacted sess │
+  │ (bridge)      │  <=150w + last 2    │ summary + 2    │
+  └───────────────┘  per-target skip    └────────────────┘
+  ┌──────────────┐    ┌────────────────┐    ┌──────────────────┐    ┌───────────┐
+  │ plan         │───▶│ stash frame    │───▶│ lean subtask x N │───▶│ envelope  │
+  │ 1 cheap call │    │ sim_<sid>.json │    │ sliver+preamble  │    │ > parent  │
+  │ numbered     │    │                │    │ scratch session  │    │ + restore │
+  └──────────────┘    └────────────────┘    └──────────────────┘    └───────────┘
+
 ```
 
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
@@ -44,12 +90,12 @@ Project structure → [`docs/architecture.md#1-component-map`](docs/architecture
   mic/wav ──► VAD ──┤  Silero ONNX (CPU, RTF 0.01)            │
               │     │       │                                 │
               │     │       ▼                                 │
-              │     │  STT  Whisper-base ─┐                  │
-              │     │  fused decoder x6  │ fused Triton      │
-              │     │  batched B=1..8    │ + torch fallback  │
-              │     │       │            │ parity-tested     │
-              │     │       ▼            │                   │
-              │     │  LLM  Qwen3-0.6B ──┤                   │
+              │     │  STT  Whisper-base ─┐                   │
+              │     │  fused decoder x6   │ fused Triton      │
+              │     │  batched B=1..8     │ + torch fallback  │
+              │     │       │             │ parity-tested     │
+              │     │       ▼             │                   │
+              │     │  LLM  Qwen3-0.6B  ──┤                   │
               │     │  ┌────────────────┴──────────────────┐  │
               │     │  │      Inference Engine (paged)     │  │
               │     │  │  scheduling  ContinuousScheduler  │  │
@@ -210,6 +256,7 @@ Concurrency doubles token throughput (26 → 66 tok/s at genlen 16) while per-re
 
 | | TTFA | E2E | VRAM |
 |---|---|---|---|
+| Fast path `--fast` (Qwen3-0.6B, VAD→STT→1 LLM call→TTS) | 329 ms | 336 ms | 3034 MB |
 | Round-trip (synthetic speech in) | 308 ms | 827 ms | 1957 MB |
 | Earlier live turn | 438 ms | 640 ms | 1941 MB |
 | LibriSpeech samples (previous) | 531–858 ms | 1321–2590 ms | 1937 MB |

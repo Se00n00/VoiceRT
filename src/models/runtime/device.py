@@ -1,4 +1,7 @@
 """Device selection, sync, and VRAM counters with CPU fallback."""
+import contextlib
+import threading
+
 import torch
 
 
@@ -110,3 +113,67 @@ def vram_stats(device=None):
     else:
         stats["name"] = "cpu"
     return stats
+
+
+def keepalive_start(interval_s: float = 0.002):
+    """Hold GPU clocks up across one bursty turn; returns stop().
+
+    Laptop GPUs collapse to idle clocks (~210 MHz here) within tens of ms
+    of no work, and every leg of a voice turn (STT burst, LLM prefill,
+    TTS burst) would re-pay the ramp. A daemon thread running one tiny
+    kernel per ``interval_s`` keeps the clocks hot for the turn's
+    duration only — no root, no persistent power burn. stop() is
+    idempotent and never raises; on CPU-only hosts both are no-ops.
+    ``VOICE_KEEP_MS`` env overrides the interval (0 disables).
+    """
+    import os as _os
+
+    try:
+        interval_s = float(_os.environ.get("VOICE_KEEP_MS", "2")) / 1000.0
+    except Exception:
+        pass
+    if not torch.cuda.is_available() or interval_s <= 0:
+        return lambda: None
+    stop = threading.Event()
+
+    def _spin():
+        try:
+            a = torch.zeros(64, 64, device="cuda")
+            while not stop.wait(interval_s):
+                a.add_(1)
+        except Exception:
+            pass
+
+    t = threading.Thread(target=_spin, daemon=True)
+    t.start()
+
+    def _stop():
+        try:
+            stop.set()
+        except Exception:
+            pass
+
+    return _stop
+
+
+def gpu_rev(iters: int = 4, size: int = 512) -> float:
+    """Synchronous clock rev: a short matmul burst forcing P-state up.
+
+    Call once right before a latency-critical GPU phase after idle — the
+    ~3-5 ms spent here buys back 10-100 ms of ramp penalty inside the
+    phase itself. Returns seconds spent. Never raises; no-op without CUDA.
+    """
+    import time as _t
+
+    t0 = _t.perf_counter()
+    try:
+        if not torch.cuda.is_available():
+            return 0.0
+        a = torch.randn(size, size, device="cuda")
+        b = torch.randn(size, size, device="cuda")
+        for _ in range(max(1, int(iters))):
+            a = b @ a
+        torch.cuda.synchronize()
+    except Exception:
+        pass
+    return _t.perf_counter() - t0

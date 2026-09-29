@@ -36,6 +36,9 @@ __all__ = ["VoiceAgentConfig", "VoiceAgent"]
 # suffix appended to the shared tool preamble per modality. Voice replies
 # must stay short enough to speak; text turns work until done.
 _VOICE_SUFFIX = "\n\n" + SYSTEM_PROMPT
+_VOICE_FAST_SYSTEM = ("You are a voice assistant. Reply in one very short "
+                      "sentence, under 10 words. Plain text only — no tools, "
+                      "no preamble, just the reply.")
 _TEXT_SUFFIX = ("\n\nWork until done: use tools step by step, then give one "
                 "short final reply.")
 
@@ -93,6 +96,12 @@ class VoiceAgentConfig:
     # no red OOM blob next to a perfectly good reply. Voice turns and
     # /term/say are unaffected. Bridge sets it from VOICE_TEXT_ONLY=1.
     speak_text_turns: bool = True
+    # Fast voice turns: VAD -> STT -> ONE direct LLM generate -> TTS,
+    # bypassing the deep-agent loop (graph rebuild + tool router + up to 6
+    # steps). Same four legs attached, same events out. The full agent
+    # path stays for tool-using turns; fast is the latency play (~400ms
+    # E2E budget) for conversational voice.
+    fast_voice: bool = False
     # legacy text-queue knob (kept for API compat, unused by voice turns).
     max_queue: int = 16
     sandbox: object = None
@@ -209,6 +218,10 @@ class VoiceAgent:
             max_sessions=cfg.max_sessions,
             max_tokens=getattr(cfg, "memory_tokens", 0) or 0,
         )
+        # Shared semantic tool router: one bge-small load per process, not
+        # one per turn (_build_agent used to construct a fresh router each
+        # turn, re-reading 199 weight tensors from disk every time).
+        self._router = None
         self._episodic = None  # lazy EpisodicStore (memory_store/recall)
         try:
             from src.models.runtime import FIFOScheduler
@@ -278,7 +291,11 @@ class VoiceAgent:
             try:
                 from src.agent.tool_router import InjectToolMiddleware
 
-                middleware.append(InjectToolMiddleware())
+                if self._router is None:
+                    from src.agent.tool_router import SemanticRouter
+
+                    self._router = SemanticRouter()
+                middleware.append(InjectToolMiddleware(router=self._router))
             except Exception:
                 pass
         if self.backend is not None:
@@ -769,6 +786,9 @@ class VoiceAgent:
         if isinstance(audio_or_text, str):
             return self._text_reply(str(audio_or_text),
                                     session_id=session_id)
+        if bool(getattr(self.config, "fast_voice", False)):
+            return self._voice_fast(audio_or_text, sr=sr,
+                                    session_id=session_id)
         return self._voice_turns(audio_or_text, sr=sr,
                                  session_id=session_id)
 
@@ -819,6 +839,168 @@ class VoiceAgent:
         return reply
 
     # -- voice turns (server /talk) ---------------------------------------
+    async def _voice_fast(self, audio, sr: int = 16000,
+                          session_id: str | None = None):
+        """Latency fast path: VAD -> STT -> ONE llm.generate -> TTS.
+
+        Same four legs, same event shapes as :meth:`_voice_turns`, but no
+        deep-agent loop: no graph rebuild, no tool router, no multi-step
+        iterations. Prompt is a small system line + capped history + the
+        utterance, so prefill stays tiny and the reply ends at EOS within
+        a few dozen tokens.
+        """
+        try:
+            from src.models.runtime import check_budget
+        except Exception:
+            check_budget = None
+        wav = np.asarray(audio, dtype=np.float32).ravel()
+        if wav.size == 0:
+            raise ValueError("empty audio")
+        dur_s = len(wav) / float(sr)
+        if dur_s > self.config.max_audio_s:
+            raise ValueError(
+                f"audio {dur_s:.1f}s exceeds {self.config.max_audio_s:.0f}s cap")
+        if check_budget is not None:
+            check_budget(self.config.per_turn_mb, self.config.vram_budget_mb,
+                         what="voice turn")
+
+        from src.models.runtime.device import keepalive_start
+        ticket = await self._admit()
+        stop_keep = lambda: None  # noqa: E731 - rebound below; finally-safe
+        try:
+            try:
+                from engine import new_session_id
+            except Exception:
+                import uuid as _uuid
+
+                def new_session_id():  # type: ignore
+                    return _uuid.uuid4().hex
+            sid = session_id or new_session_id()
+            remember = bool(session_id)
+            eff_sid = sid if remember else None
+            t0 = time.perf_counter()
+            node_s: dict = {}
+            stop_keep = keepalive_start()
+            # Rev CPU+GPU clocks once per turn: after idle both sit at
+            # minimum frequency and every phase re-pays ramp (~50-100 ms
+            # each). One ~5 ms burst up front + the keepalive thread holds
+            # P-state for the rest of the turn.
+            try:
+                from src.models.runtime.device import gpu_rev
+
+                node_s["rev"] = float(gpu_rev())
+                _rev_a = np.matmul(np.zeros((128, 128), dtype=np.float32),
+                                   np.zeros((128, 128), dtype=np.float32))
+            except Exception:
+                pass
+
+            # -- VAD: speech spans (+ STT-window trim) -------------------
+            t_vad = time.perf_counter()
+            try:
+                segs = await self.vad.segments(wav, int(sr))
+            finally:
+                node_s["vad"] = node_s.get("vad", 0.0) + time.perf_counter() - t_vad
+            segments = [[float(a), float(b)] for a, b in segs.segments]
+            audio_wav = (wav if not segments
+                         else _trim(wav, sr, segments, self.config.trim_pad_s))
+            yield AgentEvent(node="vad", kind="segments", data={
+                "segments": segments,
+                "audio_dur_s": float(getattr(segs, "audio_dur_s", dur_s)),
+                "speech_s": float(getattr(segs, "speech_s", 0.0) or 0.0),
+            })
+            if not segments:
+                yield AgentEvent(node="stt", kind="text",
+                                 data={"text": "", "silent": True})
+                total = time.perf_counter() - t0
+                yield AgentEvent(node="turn", kind="summary", data={
+                    "text": "", "reply": "", "segments": segments,
+                    "node_s": dict(node_s), "ttfa_s": total, "total_s": total,
+                    "vram_mb": _vram_mb(), "session_id": sid})
+                return
+
+            # -- STT ------------------------------------------------------
+            t_stt = time.perf_counter()
+            try:
+                res = await self.stt.transcribe(audio_wav, int(sr))
+            finally:
+                node_s["stt"] = node_s.get("stt", 0.0) + time.perf_counter() - t_stt
+            text = str(res.text)
+            yield AgentEvent(node="stt", kind="text", data={
+                "text": text, "rtf": float(res.rtf),
+                "ttfs": float(res.ttfs), "dur_s": float(res.dur_s),
+            })
+            if not text.strip():
+                total = time.perf_counter() - t0
+                yield AgentEvent(node="turn", kind="summary", data={
+                    "text": text, "reply": "", "segments": segments,
+                    "node_s": dict(node_s), "ttfa_s": total, "total_s": total,
+                    "vram_mb": _vram_mb(), "session_id": sid})
+                return
+
+            # -- LLM: one direct generate (no agent loop) -----------------
+            t_llm = time.perf_counter()
+            try:
+                hist = []
+                if eff_sid:
+                    try:
+                        for m in self.sessions.history(eff_sid)[-2:]:
+                            hist.append({
+                                "role": str(m.get("role", "user")),
+                                "content": str(m.get("content", ""))[:200],
+                            })
+                    except Exception:
+                        hist = []
+                msgs = ([{"role": "system", "content": _VOICE_FAST_SYSTEM}]
+                        + hist
+                        + [{"role": "user", "content": text}])
+                gen = await self.llm.generate(msgs)
+                thinking, reply = split_thinking(str(gen.text or ""))
+                reply = str(reply or "").strip()
+            finally:
+                node_s["llm"] = node_s.get("llm", 0.0) + time.perf_counter() - t_llm
+            if reply:
+                try:
+                    n_ids = len(getattr(gen, "output_ids", ()) or ())
+                except Exception:
+                    n_ids = 0
+                yield AgentEvent(node="llm", kind="done",
+                                 data={"text": reply, "ids": n_ids})
+            if eff_sid and (text or reply):
+                try:
+                    self.sessions.remember_turn(eff_sid, str(text), reply)
+                except Exception:
+                    pass
+
+            # -- TTS: single speak of the short reply ---------------------
+            first_audio_at = None
+            if (reply or "").strip():
+                t_tts = time.perf_counter()
+                try:
+                    out = await self.tts.speak(reply)
+                finally:
+                    node_s["tts"] = (node_s.get("tts", 0.0)
+                                     + time.perf_counter() - t_tts)
+                first_audio_at = time.perf_counter() - t0
+                yield AgentEvent(node="tts", kind="audio", data={
+                    "wav": np.asarray(out.wav, dtype=np.float32),
+                    "sr": int(out.sample_rate),
+                    "sentence": str(out.sentence or reply),
+                    "synth_s": float(out.synth_s),
+                })
+
+            total = time.perf_counter() - t0
+            yield AgentEvent(node="turn", kind="summary", data={
+                "text": text, "reply": reply, "segments": segments,
+                "node_s": dict(node_s),
+                "ttfa_s": first_audio_at if first_audio_at is not None else total,
+                "total_s": total, "vram_mb": _vram_mb(), "session_id": sid})
+        finally:
+            try:
+                stop_keep()
+            except Exception:
+                pass
+            self._release(ticket)
+
     async def _voice_turns(self, audio, sr: int = 16000,
                            session_id: str | None = None):
         """Run one voice turn, yielding vad/stt/llm/tts/term events + summary."""

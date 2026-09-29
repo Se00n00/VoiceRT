@@ -18,7 +18,7 @@ def split_sentences(text):
     return [s.strip() for s in SPLIT.split(str(text)) if s.strip()]
 
 class KokoroFused(torch.nn.Module):
-    def __init__(self, lang_code="a", voice="af_heart", device=None, sample_rate=SAMPLE_RATE, enhance=False, batch_size=4, **_):
+    def __init__(self, lang_code="a", voice="af_heart", device=None, sample_rate=SAMPLE_RATE, enhance=False, batch_size=4, speed=1.0, **_):
         super().__init__()
         if device is None:
             device="cuda" if torch.cuda.is_available() else "cpu"
@@ -28,8 +28,11 @@ class KokoroFused(torch.nn.Module):
         self.lang_code=lang_code
         self.enhance=bool(enhance)
         self.batch_size=int(batch_size)
+        # speaking-rate multiplier (KPipeline native): >1 shortens audio
+        # (and vocoder work) proportionally. 1.0 = natural.
+        self.speed=float(speed or 1.0)
         self._pipeline=None
-        print(f"[KokoroFused] device={device} batch={batch_size} enhance={enhance}", flush=True)
+        print(f"[KokoroFused] device={device} batch={batch_size} enhance={enhance} speed={self.speed}", flush=True)
 
     def _ensure_pipeline(self):
         if self._pipeline is not None:
@@ -69,7 +72,8 @@ class KokoroFused(torch.nn.Module):
                     if not sent.strip():
                         continue
                     # kokoro pipeline per sentence (still eager)
-                    chunks=[a for _,_,a in pipe(sent, voice=self.voice)]
+                    chunks=[a for _,_,a in pipe(sent, voice=self.voice,
+                                                speed=self.speed)]
                     if not chunks:
                         continue
                     arr=[np.asarray(c, dtype=np.float32).ravel() for c in chunks]

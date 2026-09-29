@@ -56,6 +56,7 @@ class TtsModel:
                 sample_rate=self.config.sample_rate,
                 enhance=False,
                 batch_size=4,
+                speed=self.config.speed,
             )
         return self._leg
 

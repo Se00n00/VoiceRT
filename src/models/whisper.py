@@ -18,7 +18,7 @@ D,H,DH,FF,XN = 512,8,64,2048,1500
 MAXN=448; SCALE=0.125
 MODEL_ID="openai/whisper-base"
 
-def load_weights(weights_path, device="cuda:0"):
+def load_weights(weights_path, device="cuda:0", dtype=None):
     from safetensors.torch import load_file
     if os.path.isdir(weights_path):
         files=sorted(glob.glob(os.path.join(weights_path,"*.safetensors")))
@@ -27,12 +27,16 @@ def load_weights(weights_path, device="cuda:0"):
             sd.update(load_file(f, device=device))
     else:
         sd=load_file(weights_path, device=device)
+    if dtype is None:
+        # fp16 on CUDA (halves encoder/decoder memory traffic; the fused
+        # kernels are parity-tested in fp16), fp32 on CPU (no hw fp16).
+        dtype = torch.float16 if str(device).startswith("cuda") else torch.float32
     out={}
     for k,v in sd.items():
         kk = "model."+k if k.startswith("encoder.") or k.startswith("decoder.") else k
         if not kk.startswith("model."):
             kk="model."+kk if not kk.startswith("model.") else kk
-        out[kk]=v.float() if hasattr(v,"float") else v
+        out[kk]=v.to(dtype) if hasattr(v,"to") else v
     return out
 
 def snapshot_path(repo_id=MODEL_ID):
@@ -56,6 +60,9 @@ class WhisperFused(torch.nn.Module):
         # mel [B,80,3000] -> memory [B,1500,512]
         if B is None:
             B=mel.shape[0]
+        wdt = self.w["model.encoder.conv1.weight"].dtype
+        if mel.dtype != wdt:
+            mel = mel.to(wdt)
         h = F.conv1d(mel, self.w["model.encoder.conv1.weight"], self.w["model.encoder.conv1.bias"], padding=1)
         h=F.gelu(h)
         h=F.conv1d(h, self.w["model.encoder.conv2.weight"], self.w["model.encoder.conv2.bias"], stride=2, padding=1)
@@ -94,9 +101,10 @@ class WhisperFused(torch.nn.Module):
         memory = self.encode(mel_t)
         cross = self.cross_kv(memory)
         B=len(wav_batch)
-        # decoder KV cache batched [B,H,MAXN,64]
-        sk = [torch.empty(B, H, MAXN, 64, device=self.device, dtype=torch.float32) for _ in range(6)]
-        sv = [torch.empty(B, H, MAXN, 64, device=self.device, dtype=torch.float32) for _ in range(6)]
+        # decoder KV cache batched [B,H,MAXN,64] (weight dtype: fp16 on CUDA)
+        wdt = self.w["model.decoder.embed_tokens.weight"].dtype
+        sk = [torch.empty(B, H, MAXN, 64, device=self.device, dtype=wdt) for _ in range(6)]
+        sv = [torch.empty(B, H, MAXN, 64, device=self.device, dtype=wdt) for _ in range(6)]
         Kx_batched = [c[0] for c in cross]; Vx_batched = [c[1] for c in cross]
         # greedy decode batched
         sot=50258; eot=50257
