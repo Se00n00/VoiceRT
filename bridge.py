@@ -23,7 +23,11 @@ Endpoints:
     server -> client: {"event": "confirm", "action": {...}}
     server -> client: {"event": "stuck", "reason": ...}
     server -> client: {"event": "summary", "reply": ..., "session_id": ...}
+    server -> client: {"event": "title", "title": ...}  (once, after turn 1)
     server -> client: {"event": "error", "message": ...}
+
+- ``GET /term/title?sid=`` — {title, ...} for a resumed session (no model
+  call; reads the persisted name).
 """
 import asyncio
 import base64
@@ -56,11 +60,21 @@ def _lock():
 
 
 # Model profiles the user can switch between with `/model`.
-# Default is the Bonsai 27B-ternary sidecar (ngl auto: partial offload on
-# 4GB, full on T4+): STT/TTS keep the GPU, the LLM offloads by availability.
-# Gemma stays as the 0-VRAM CPU fallback. MiniCPM/Qwen stay as
+# Default is qwen (0.6B fused): same weights the two-brain front leg already
+# loads, so `/model` starting there adds no download and no VRAM. Switch to
+# bonsai for the 27B tool harness — that is the leg delegation escalates to,
+# and it is what a bare `LlmConfig()` caller wants for agentic work.
+# Gemma stays as the 0-VRAM CPU fallback; MiniCPM variants stay as
 # GPU-weight switches (M3 deletion pending).
 MODEL_PROFILES = {
+    "qwen": {
+        "name": "qwen",
+        "label": "qwen3-0.6B",
+        "model": "Qwen/Qwen3-0.6B",
+        "backend": "qwen",
+        "desc": "0.6B fused on CUDA — DEFAULT: same weights as the two-brain front leg, chat/routing only",
+        "ready": True,
+    },
     "gemma": {
         "name": "gemma",
         "label": "gemma-4-E4B-it-Q4_K_M",
@@ -101,14 +115,6 @@ MODEL_PROFILES = {
         "desc": "Q8_0 (773MB, 8.5bpw, near-BF16, needs Q8 kernel — lands next)",
         "ready": False,
     },
-    "qwen": {
-        "name": "qwen",
-        "label": "qwen3-0.6B",
-        "model": "Qwen/Qwen3-0.6B",
-        "backend": "qwen",
-        "desc": "fused voice model fallback",
-        "ready": True,
-    },
     "bonsai": {
         "name": "bonsai",
         "label": "bonsai-2-27b-ptq1_0",
@@ -135,7 +141,10 @@ MODEL_PROFILES = {
     },
 }
 
-_current_model = {"name": "bonsai"}
+# Which LLM leg starts active. qwen (0.6B fused) matches the new LlmConfig
+# default and the front leg two-brain routing already uses; /model switch
+# moves to bonsai for the 27B tool harness.
+_current_model = {"name": "qwen"}
 
 
 def _build_llm(profile: dict):
@@ -170,6 +179,49 @@ def _free_llm_gpu():
 _seen_sids: set = set()
 # sid -> model name it was compacted for (skip repeat work per target).
 _compacted_for: dict = {}
+# sids that already have (or were offered) a session name. Guards the
+# one-shot title call: a session is named once, on its first turn.
+_titled_sids: set = set()
+
+
+async def _maybe_title(agent, sid, text, ws) -> None:
+    """Name the session from its opening utterance, once. Never raises.
+
+    Fired as a background task *after* the first turn finishes rather than
+    concurrently with it (opencode forks this at step 1): the front leg is
+    fused on the same CUDA device as the worker here, so a concurrent call
+    queues behind the real turn and taxes the user's slowest one.
+
+    Everything about this is best-effort — a name is decoration on an exit
+    card, and the TUI falls back to an offline name when it never arrives.
+    """
+    try:
+        if not sid or sid in _titled_sids:
+            return
+        _titled_sids.add(sid)
+        sessions = getattr(agent, "sessions", None)
+        # Resumed session: a name is already on disk, so never spend a call.
+        if sessions is not None:
+            try:
+                if sessions.get_title(sid):
+                    return
+            except Exception:
+                pass
+        from src.agent.title import generate_title
+
+        title, _reason = await generate_title(
+            getattr(agent, "front_llm", None), text)
+        if not title:
+            return
+        if sessions is not None:
+            try:
+                sessions.set_title(sid, title)
+            except Exception:
+                pass
+        await ws.send_json({"event": "title", "title": title,
+                            "session_id": sid})
+    except Exception:
+        pass
 
 SUMMARIZE_PROMPT = (
     "Summarize this conversation in at most 150 words: keep facts, "
@@ -298,6 +350,12 @@ async def switch_model(name: str) -> dict:
 def get_agent():
     """Process-wide VoiceAgent, built on first use.
 
+    Two-brain delegation is ON here (and in server.py): a small front model
+    talks to the user and is given no tools — it answers one yes/no question
+    per turn, and a YES hands the raw user text to the worker leg with the
+    full harness. Off with ``VOICE_DELEGATE=0`` for the old single-brain
+    behaviour.
+
     VOICE_TEXT_ONLY=1 skips the TTS leg (warm + per-turn speak): text
     turns stay VRAM-clean on 4GB cards next to a 27B LLM. Voice turns
     and /term/say still fail loudly if called — this flag declares a
@@ -307,12 +365,18 @@ def get_agent():
     if _agent is None:
         import os
 
+        from dataclasses import replace
+
         from src.main import VoiceAgent, VoiceAgentConfig
 
-        if os.environ.get("VOICE_TEXT_ONLY", "").strip() == "1":
-            _agent = VoiceAgent(VoiceAgentConfig(speak_text_turns=False))
-        else:
-            _agent = VoiceAgent()
+        text_only = os.environ.get("VOICE_TEXT_ONLY", "").strip() == "1"
+        delegate = os.environ.get("VOICE_DELEGATE", "").strip()
+        cfg = VoiceAgentConfig(speak_text_turns=not text_only,
+                               delegate=delegate not in ("0", "false", "no"))
+        dpath = os.environ.get("VOICE_DELEGATE_CONFIG", "").strip()
+        if dpath:
+            cfg = replace(cfg, delegate_config=dpath)
+        _agent = VoiceAgent(cfg)
     return _agent
 
 
@@ -359,6 +423,23 @@ def create_app(agent=None):
     @app.post("/model/switch")
     async def model_switch(payload: dict):
         return await switch_model((payload or {}).get("name", ""))
+
+    @app.get("/term/title")
+    def term_title(sid: str = ""):
+        """Persisted name for a session, so a resume keeps it.
+
+        Read-only and model-free on purpose: the TUI calls this once on
+        mount, and ``voicert -s <id>`` followed by an immediate quit never
+        runs a turn, so there is nothing to generate a title from.
+        """
+        sid = str(sid or "").strip()
+        if not sid:
+            return {"title": "", "session_id": ""}
+        try:
+            title = get_agent().sessions.get_title(sid)
+        except Exception:
+            title = ""
+        return {"title": title or "", "session_id": sid}
 
     @app.post("/term/stt")
     async def term_stt(payload: dict):
@@ -445,13 +526,21 @@ def create_app(agent=None):
                         await ws.send_json({"event": event.kind, **d})
                     except Exception:
                         break
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - surface, never crash
                 try:
                     await ws.send_json({"event": "error", "message": str(exc)[:300]})
                 except Exception:
                     pass
             finally:
                 turn_task["task"] = None
+                # Name the session once the turn is over, so the title call
+                # never competes with it for the GPU.
+                if sid and not closed["done"]:
+                    try:
+                        asyncio.create_task(
+                            _maybe_title(harness, str(sid), text, ws))
+                    except RuntimeError:
+                        pass  # loop already closing
 
         async def reader():
             while not closed["done"]:

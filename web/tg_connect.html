@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VoiceAgent — link Telegram</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #101418; color: #e8eef4;
+         display: flex; justify-content: center; padding: 48px 16px; }
+  .card { background: #182028; border-radius: 12px; padding: 28px 32px;
+          max-width: 460px; text-align: center; }
+  h1 { font-size: 20px; margin: 0 0 8px; }
+  p { color: #9fb0c3; font-size: 14px; }
+  #state { font-size: 15px; margin-top: 12px; }
+  .ok { color: #7ee2a8; } .wait { color: #e2c07e; } .err { color: #e27e7e; }
+  ol { text-align: left; color: #9fb0c3; font-size: 14px; }
+  code { background: #0c1015; padding: 1px 6px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>✈️ Link Telegram</h1>
+  <p>Paste the token once, scan the code, press <code>/start</code> — then the
+     agent messages you here, sends voice notes, and hears your replies.
+     No second SIM needed.</p>
+  <div id="tokenbox">
+    <p>1 · In Telegram open <b>@BotFather</b> → <code>/newbot</code> → paste the token:</p>
+    <input id="token" type="password" placeholder="123456789:AA…" size="40"
+           style="padding:8px;border-radius:6px;border:1px solid #33404e;background:#0c1015;color:#e8eef4">
+    <button id="save" style="padding:8px 14px;border-radius:6px;border:0;background:#2f81f7;color:#fff">Save</button>
+    <div id="tokmsg" style="font-size:13px;margin-top:6px;"></div>
+  </div>
+  <div id="qrbox" style="display:none">
+    <p>2 · Scan with your phone camera → opens the bot chat → press <code>/start</code>:</p>
+    <img id="qr" alt="bot deep-link QR" style="width:260px;height:260px;background:#fff;border-radius:8px">
+  </div>
+  <hr style="border:0;border-top:1px solid #2a3440;margin:20px 0">
+  <div id="guidebox">
+    <p><b>Guided setup (recommended)</b> — one Creator Bot chat walks you
+       through naming + BotFather + token, no pasting here:</p>
+    <div id="creatordone" style="display:none">
+      <button id="pairbtn" style="padding:8px 14px;border-radius:6px;border:0;background:#238636;color:#fff">New guided pairing</button>
+    </div>
+    <div id="creatorsetup">
+      <p style="font-size:13px">One-time: create the Creator Bot via <b>@BotFather</b> → <code>/newbot</code> → paste its token:</p>
+      <input id="ctoken" type="password" placeholder="creator token…" size="40"
+             style="padding:8px;border-radius:6px;border:1px solid #33404e;background:#0c1015;color:#e8eef4">
+      <button id="csave" style="padding:8px 14px;border-radius:6px;border:0;background:#2f81f7;color:#fff">Save</button>
+      <div id="ctokmsg" style="font-size:13px;margin-top:6px;"></div>
+    </div>
+    <img id="pqr" alt="creator pairing QR" style="display:none;width:260px;height:260px;background:#fff;border-radius:8px;margin:12px auto">
+    <div id="pstate" style="font-size:14px;"></div>
+  </div>
+  <div id="state" class="wait">checking…</div>
+</div>
+<script>
+const st = document.getElementById("state");
+const qr = document.getElementById("qr");
+const qrbox = document.getElementById("qrbox");
+const tokmsg = document.getElementById("tokmsg");
+document.getElementById("save").onclick = async () => {
+  const token = document.getElementById("token").value.trim();
+  tokmsg.textContent = "checking…";
+  try {
+    const r = await fetch("/tg/token", { method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token }) });
+    const j = await r.json();
+    tokmsg.textContent = j.ok ? ("✅ saved " + (j.bot || "")) : ("❌ " + (j.error || "rejected"));
+    tokmsg.style.color = j.ok ? "#7ee2a8" : "#e27e7e";
+  } catch (e) { tokmsg.textContent = "⚠️ " + e; tokmsg.style.color = "#e27e7e"; }
+};
+document.getElementById("csave").onclick = async () => {
+  const token = document.getElementById("ctoken").value.trim();
+  const m = document.getElementById("ctokmsg");
+  m.textContent = "checking…";
+  try {
+    const r = await fetch("/tg/creator-token", { method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token }) });
+    const j = await r.json();
+    m.textContent = j.ok ? ("✅ creator saved " + (j.bot || "")) : ("❌ " + (j.error || "rejected"));
+    m.style.color = j.ok ? "#7ee2a8" : "#e27e7e";
+    if (j.ok) refreshCreator();
+  } catch (e) { m.textContent = "⚠️ " + e; m.style.color = "#e27e7e"; }
+};
+let pairKey = "";
+document.getElementById("pairbtn").onclick = async () => {
+  const ps = document.getElementById("pstate");
+  ps.textContent = "minting pairing…";
+  try {
+    const r = await fetch("/tg/pairing/new", { method: "POST",
+      headers: { "content-type": "application/json" }, body: "{}" });
+    const j = await r.json();
+    if (!j.ok) { ps.textContent = "❌ " + (j.error || "failed"); return; }
+    pairKey = j.pairing_key;
+    const img = document.getElementById("pqr");
+    img.src = j.qr_data_url; img.style.display = "block";
+    pollPair();
+  } catch (e) { ps.textContent = "⚠️ " + e; }
+};
+async function pollPair() {
+  const ps = document.getElementById("pstate");
+  if (!pairKey) return;
+  try {
+    const j = await (await fetch("/tg/pairing/status?key=" + encodeURIComponent(pairKey), { cache: "no-store" })).json();
+    if (!j.ok || !j.live) { ps.textContent = "⌛ pairing expired — mint a fresh one."; return; }
+    const steps = { new: "scan the QR with your phone camera…",
+      started: "paired! now answer the bot: pick a name…",
+      named: "name saved — follow the BotFather guide in chat…" };
+    ps.textContent = "⏳ " + (steps[j.status] || j.status);
+    if (j.status === "done") { ps.textContent = "✅ agent wired!"; pairKey = ""; return; }
+  } catch (e) { ps.textContent = "⚠️ " + e; return; }
+  setTimeout(pollPair, 3000);
+}
+async function refreshCreator() {
+  try {
+    const j = await (await fetch("/tg/status", { cache: "no-store" })).json();
+    const linked = j.creator && j.creator.linked;
+    document.getElementById("creatordone").style.display = linked ? "block" : "none";
+    document.getElementById("creatorsetup").style.display = linked ? "none" : "block";
+  } catch {}
+}
+refreshCreator();
+async function poll() {
+  try {
+    const r = await fetch("/tg/status", { cache: "no-store" });
+    const j = await r.json();
+    if (j.linked) {
+      qrbox.style.display = "none";
+      st.className = "ok";
+      st.textContent = "✅ Linked" + (j.bot ? (" (@" + j.bot + ")") : "") + " — you can close this.";
+      return;
+    }
+    st.className = "wait";
+    st.textContent = "⏳ " + (j.err || "waiting…");
+    if (!j.err || !/TELEGRAM_BOT_TOKEN|token/i.test(j.err)) {
+      try {
+        const q = await (await fetch("/tg/qr", { cache: "no-store" })).json();
+        if (q.qr_data_url) {
+          qr.src = q.qr_data_url; qrbox.style.display = "block";
+        }
+      } catch {}
+    }
+  } catch (e) {
+    st.className = "err"; st.textContent = "⚠️ server unreachable: " + e;
+  }
+  setTimeout(poll, 3000);
+}
+poll();
+</script>
+</body>
+</html>

@@ -296,7 +296,16 @@ class VoiceTermApp(App):
                 if event.node != "term":
                     continue
                 d = event.data or {}
-                if event.kind == "action":
+                if event.kind == "route":
+                    # Two-brain delegation: front answers chat, worker does
+                    # the work. Worth showing — a chat turn that reaches
+                    # the worker means routing misfired.
+                    brain = d.get("brain", "?")
+                    why = d.get("reason", "")
+                    tail = f" ({why})" if d.get("forced") and why else ""
+                    self.conv.write(
+                        f"[dim]→ {brain}{tail}[/dim]")
+                elif event.kind == "action":
                     self._stream_clear()
                     a = d.get("action", {})
                     self.conv.write(f"[dim]▸ {a.get('action')}: "

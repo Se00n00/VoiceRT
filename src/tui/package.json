@@ -1,0 +1,32 @@
+{
+  "name": "voice-term-tui",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenTUI (Solid) full-screen TUI for the local voice-terminal agent. Talks to bridge.py on :8004.",
+  "type": "module",
+  "bin": {
+    "voicert": "./bin/voice-term.js",
+    "voice-term": "./bin/voice-term.js"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "node scripts/build.mjs && node dist/index.js",
+    "dev:watch": "node scripts/build.mjs --watch",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/build.mjs && node scripts/test-keys.mjs"
+  },
+  "dependencies": {
+    "@opentui/core": "0.5.14",
+    "@opentui/solid": "0.5.14",
+    "solid-js": "1.9.12"
+  },
+  "devDependencies": {
+    "@babel/core": "7.28.0",
+    "@babel/preset-typescript": "7.27.1",
+    "babel-plugin-module-resolver": "5.0.2",
+    "babel-preset-solid": "1.9.12",
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.0"
+  }
+}

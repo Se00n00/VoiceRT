@@ -1,8 +1,9 @@
-// Live terminal mirror: runs tui-ink in a pty, streams it to xterm.js.
+// Live terminal mirror: runs src/tui in a pty, streams it to xterm.js.
 // Dev-only. Usage: npm install && npm start  (then open http://127.0.0.1:8090)
-// Edit tui-ink/src/* -> this server kills + respawns the pty and tells the
+// Edit src/tui/src/* -> this server kills + respawns the pty and tells the
 // page to clear, so you never see stacked ghost screens. Restart ownership
-// lives HERE (plain `tsx`, not `tsx watch`) so every reboot is announced.
+// lives HERE (a plain `npm run dev`, not a watcher) so every reboot is
+// announced.
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
@@ -11,7 +12,7 @@ import pty from "node-pty";
 import { WebSocketServer } from "ws";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const TUI_DIR = path.resolve(__dirname, "..", "tui-ink");
+const TUI_DIR = path.resolve(__dirname, "..", "src", "tui");
 const SRC_DIR = path.join(TUI_DIR, "src");
 const PORT = Number(process.env.PREVIEW_PORT ?? 8090);
 // Override for smoke tests, e.g. PREVIEW_CMD="node ticker.mjs".
@@ -183,5 +184,5 @@ process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
 server.listen(PORT, "127.0.0.1", () => {
-  console.log(`terminal mirror at http://127.0.0.1:${PORT}/  (pty: tui-ink, server-owned restarts)`);
+  console.log(`terminal mirror at http://127.0.0.1:${PORT}/  (pty: src/tui, server-owned restarts)`);
 });

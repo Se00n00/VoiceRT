@@ -53,6 +53,8 @@ __all__ = [
     "resolve_ngl",
     "ngl_attempts",
     "kv_mb_est",
+    "ram_required_gb",
+    "cached_gguf_bytes",
     "mem_available_gb",
     "vram_free_mb",
 ]
@@ -81,6 +83,9 @@ CUDA_CTX_RESERVE_MB = 450.0
 # ~100 tok/s linear to 13.5K true tokens; decode ~1.1 tok/s at ngl=6
 # (CPU-bound: 58/64 layers on CPU + disabled fused FA/GDN).
 COMPUTE_OVERHEAD_MB = 1600.0
+# Non-weight CPU-side headroom for the compute buffers that sit outside the
+# KV estimate. ~1GB measured slack over the weights+KV sum.
+RAM_OVERHEAD_GB = 1.0
 
 TOOL_OPEN = "<|tool_call>call:"
 TOOL_CLOSE = "<tool_call|>"
@@ -182,6 +187,48 @@ def _snapshot(*files):
     from huggingface_hub import snapshot_download
 
     return snapshot_download(repo_id=REPO_ID, allow_patterns=list(files))
+
+
+def cached_gguf_bytes(explicit=None, packing="ptq1_0"):
+    """Byte size of the GGUF if it is already on disk, else ``None``.
+
+    Never downloads. :func:`warm` uses this to check RAM precisely when the
+    weights are already here, and to fall back to a flat pre-download
+    rail when they are not — so a 6GB fetch is never spent on a box that
+    cannot run the result.
+    """
+    try:
+        if explicit and str(explicit) != "auto":
+            p = os.path.abspath(os.path.expanduser(str(explicit)))
+            return os.path.getsize(p) if os.path.isfile(p) else None
+        from huggingface_hub import try_to_load_from_cache
+
+        fname, _want = GGUF_FILES[str(packing)]
+        p = try_to_load_from_cache(REPO_ID, fname)
+        if not p or not os.path.isfile(p):
+            return None
+        return os.path.getsize(p)
+    except Exception:
+        return None
+
+
+def ram_required_gb(gguf_bytes, n_ctx=N_CTX_DEFAULT, kv_type=KV_TYPE_DEFAULT,
+                    n_gpu_layers="auto", n_layers=N_LANG_LAYERS,
+                    overhead_gb=RAM_OVERHEAD_GB) -> float:
+    """CPU-resident RAM this sidecar needs, in GB.
+
+    Derived rather than flat, because a constant is wrong in both
+    directions for these weights: the PTQ1_0 GGUF is ~6GB, not the ~15GB a
+    dense 27B Q4 would be, so a flat 8GB rail refuses setups that fit with
+    room to spare. What lands on the CPU depends on how many layers fit in
+    VRAM, so this tracks :func:`resolve_ngl` — more layers on the card,
+    less RAM here.
+    """
+    ngl = resolve_ngl(n_gpu_layers, gguf_bytes=gguf_bytes, n_ctx=n_ctx,
+                      kv_type=kv_type, n_layers=n_layers)
+    cpu_weights = float(gguf_bytes) * max(0.0, 1.0 - ngl / max(1, n_layers))
+    kv = kv_mb_est(n_ctx, kv_type) * 1e6
+    return (cpu_weights + kv + float(overhead_gb) * 1e9) / 1e9
 
 
 def resolve_gguf(explicit=None, packing="ptq1_0"):
@@ -377,16 +424,45 @@ class BonsaiLlamaCpp:
         except Exception:
             return False
 
+    def _check_ram(self):
+        """Refuse to boot when the CPU side genuinely does not fit.
+
+        Two tiers, because the honest number depends on whether we know the
+        weights yet. Cached: compute the real requirement from the actual
+        GGUF size, the KV context and how many layers fit on the card, and
+        compare that. Not cached: fall back to the flat ``min_ram_gb``
+        pre-download rail rather than spend a 6GB fetch on a box that
+        cannot run the result.
+
+        Both tiers refuse; they differ only in how precisely they know. The
+        point of the precise tier is that a flat constant is *wrong* for
+        these ternary weights (~6GB, not a dense 27B's ~15GB) and was
+        refusing configurations that fit with over a gigabyte to spare.
+        """
+        free = mem_available_gb()
+        cached = cached_gguf_bytes(self.gguf_path, self.packing)
+        if cached:
+            need = ram_required_gb(cached, self.n_ctx, self.cache_type_k,
+                                   self.n_gpu_layers)
+            if 0.0 < free < need:
+                raise MemoryError(
+                    f"ABORT: {free:.1f}GB RAM available, need {need:.1f}GB "
+                    f"for the CPU-resident layers + context at n_ctx="
+                    f"{self.n_ctx}. Close apps, or lower the worker's "
+                    f"n_ctx, and retry. Refusing swap-death on purpose.")
+            return
+        if 0.0 < free < self.min_ram_gb:
+            raise MemoryError(
+                f"ABORT: {free:.1f}GB RAM available, need >="
+                f"{self.min_ram_gb:.0f}GB before downloading {self.packing} "
+                f"weights. Close apps and retry. Refusing swap-death on "
+                f"purpose.")
+
     def warm(self):
         """Attach to a healthy server or spawn one. Raises on failure."""
         if self._health():
             return self
-        free = mem_available_gb()
-        if 0.0 < free < self.min_ram_gb:
-            raise MemoryError(
-                f"ABORT: {free:.1f}GB RAM free, need >={self.min_ram_gb:.0f}GB "
-                f"for CPU-resident layers + context. Close apps and retry. "
-                f"Refusing swap-death on purpose.")
+        self._check_ram()
         gguf = resolve_gguf(self.gguf_path, self.packing)
         size = os.path.getsize(gguf)
         auto = self.n_gpu_layers is None or str(self.n_gpu_layers) == "auto"

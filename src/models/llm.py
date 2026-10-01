@@ -5,9 +5,15 @@ from dataclasses import dataclass, field
 
 __all__ = ["LlmConfig", "LlmResult", "LlmToken", "LlmModel", "SYSTEM_PROMPT",
            "split_thinking", "leg_device", "assert_cuda_leg",
-           "assert_ready_leg"]
+           "assert_ready_leg", "SIDECAR_BACKENDS", "to_openai_tools"]
 
 SYSTEM_PROMPT = "You are a voice assistant. Reply in one short spoken sentence."
+
+# Backends served by a llama-server sidecar process instead of in-process
+# weights. They own their own inference, so they need no local tokenizer,
+# hold no VRAM we manage, and are incompatible with the paged GPU engine.
+# Single source of truth: adding a sidecar backend means adding it HERE.
+SIDECAR_BACKENDS = ("gemma", "bonsai", "gemma270", "qwen17", "qwen06")
 
 _THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE)
 _THINK_OPEN_RE = re.compile(r"<think\s*>", re.IGNORECASE)
@@ -91,7 +97,7 @@ def assert_ready_leg(llm, what: str = "model") -> str:
     CUDA assert would wrongly abort them.
     """
     backend = str(getattr(getattr(llm, "config", None), "backend", ""))
-    if backend in ("gemma", "bonsai", "gemma270", "qwen17"):
+    if backend in SIDECAR_BACKENDS:
         leg = llm._backend()
         url = getattr(leg, "base_url", "?")
         if not leg._health():
@@ -102,15 +108,53 @@ def assert_ready_leg(llm, what: str = "model") -> str:
     return assert_cuda_leg(llm, what)
 
 
+def to_openai_tools(tools) -> list:
+    """House tool specs -> OpenAI ``{type, function}`` shape, idempotently.
+
+    Every caller in this repo speaks the flat house shape
+    (``{"name", "description", "parameters"}`` — see
+    ``src.tools.terminal.TERMINAL_TOOLS``) because the sidecar legs convert
+    it themselves on the way to ``/v1/chat/completions``. HF chat
+    templates want the OpenAI shape instead, so the fused legs need this
+    hop too. Already-converted specs pass through untouched, which lets
+    callers hand us either form.
+    """
+    out = []
+    for t in tools or []:
+        if not isinstance(t, dict):
+            continue
+        fn = t.get("function")
+        if isinstance(fn, dict) and "name" in fn:
+            out.append(t)  # already OpenAI-shaped: no top-level name
+            continue
+        if "name" not in t:
+            continue
+        out.append({
+            "type": "function",
+            "function": {
+                "name": t["name"],
+                "description": t.get("description", ""),
+                "parameters": t.get("parameters", {"type": "object"}),
+            },
+        })
+    return out
+
+
 @dataclass(frozen=True)
 class LlmConfig:
     """No YAML: construct (or override fields) in code."""
 
-    model: str = "prism-ml/Ternary-Bonsai-2-27B"
+    model: str = "Qwen/Qwen3-0.6B"
     # Backend switch.
+    #  - "qwen" = fused Qwen3 path — DEFAULT: 0.6B fused on CUDA, ~1.4GB
+    #    VRAM, no extra download on a box that already has the weights as
+    #    the front leg. This is the same instance delegation routes chat to,
+    #    so a bare library caller and the two-brain path agree on what the
+    #    small model is. NOTE: a 0.6B is a chat/routing brain, not a tool
+    #    harness — the agentic leg wants "bonsai" below.
     #  - "bonsai" = Ternary Bonsai 2 27B via Prism-fork llama.cpp sidecar
-    #    (-ngl auto from free VRAM, 16K ctx) — DEFAULT: 27B ternary brain,
-    #    STT/TTS keep the GPU, the rest offloads by availability.
+    #    (-ngl auto from free VRAM, 16K ctx) — the WORKER brain for the
+    #    full tool harness; STT/TTS keep the GPU, the rest offloads.
     #  - "gemma" = Gemma-4-E4B-it Q4_K_M via local llama.cpp sidecar
     #    (CPU-only, no VRAM) — fallback: big brain on CPU, fast hands stay
     #    available via the switches below.
@@ -118,8 +162,7 @@ class LlmConfig:
     #    option while mixed-quant (4-bit bulk + BF16 important layers) is
     #    trialled.
     #  - "minicpm_q4k" = Q4_K_M GGUF via src/models/minicpm.py (packed, fused).
-    #  - "qwen" = fused Qwen3 path (set model="Qwen/Qwen3-0.6B" with it).
-    backend: str = "bonsai"
+    backend: str = "qwen"
     # GGUF file/dir for the q4k backend ("auto" = HF cache download).
     gguf_path: str = "auto"
     max_tokens: int = 48
@@ -155,6 +198,17 @@ class LlmConfig:
     qwen17_ctx: int = 32768
     qwen17_threads: int = 0
     qwen17_bin: str = "auto"
+    # Qwen3-0.6B CPU sidecar: the two-brain FRONT model. ~0.4GB Q4_K_M,
+    # 0 VRAM — freeing the whole 4GB card for the Bonsai worker's
+    # -ngl auto. Select with backend="qwen06". Same generic sidecar as
+    # qwen17 (standard GGUF, stock llama-server fine).
+    qwen06_gguf: str = "auto"
+    qwen06_repo: str = "Qwen/Qwen3-0.6B-GGUF"
+    qwen06_file: str = "Qwen3-0.6B-Q4_K_M.gguf"
+    qwen06_port: int = 8085
+    qwen06_ctx: int = 8192
+    qwen06_threads: int = 0
+    qwen06_bin: str = "auto"
     # Ternary Bonsai 2 27B via Prism-fork llama.cpp sidecar (OFFLOAD:
     # -ngl auto from free VRAM — partial on 4GB, full on T4+).
     # Select with backend="bonsai" (Gemma stays the fallback until the
@@ -282,7 +336,32 @@ class LlmModel:
                     server_bin=getattr(self.config, "qwen17_bin", "auto"),
                 )
                 return self._leg
+            if backend == "qwen06":
+                # Two-brain FRONT leg: Qwen3-0.6B as a 0-VRAM CPU sidecar so
+                # the whole 4GB card stays available for the Bonsai worker's
+                # -ngl auto. Same generic sidecar as qwen17.
+                from src.models.gemma_llamacpp import (
+                    GemmaLlamaCpp, resolve_small_gguf)
+
+                gguf = getattr(self.config, "qwen06_gguf", "auto")
+                if gguf == "auto":
+                    gguf = resolve_small_gguf(
+                        getattr(self.config, "qwen06_repo",
+                                "Qwen/Qwen3-0.6B-GGUF"),
+                        getattr(self.config, "qwen06_file",
+                                "Qwen3-0.6B-Q4_K_M.gguf"))
+                self._leg = GemmaLlamaCpp(
+                    gguf_path=gguf,
+                    expect_bytes=None,
+                    port=getattr(self.config, "qwen06_port", 8085),
+                    n_ctx=getattr(self.config, "qwen06_ctx", 8192),
+                    threads=getattr(self.config, "qwen06_threads", 0),
+                    server_bin=getattr(self.config, "qwen06_bin", "auto"),
+                )
+                return self._leg
             if backend == "bonsai":
+                # 27B-ternary sidecar (Prism-fork llama-server, -ngl auto).
+
                 # 27B-ternary sidecar (Prism-fork llama-server, -ngl auto).
                 # NOTE: resolved BEFORE any torch/CUDA probe, like gemma —
                 # ngl probing reads VRAM without initializing torch state.
@@ -318,7 +397,7 @@ class LlmModel:
                     gguf_path=None if gguf == "auto" else gguf,
                     device=device,
                     model=self.config.model,
-                    max_seq=max(8192, self.config.max_seq),
+                    max_len=max(8192, self.config.max_seq),
                     max_new_tokens=self.config.max_tokens,
                 )
                 return self._leg
@@ -349,9 +428,8 @@ class LlmModel:
         """Lazily build paged InferenceEngine (real QwenRunner, no dummy)."""
         if not getattr(self.config, "use_paged", False):
             return None
-        if str(getattr(self.config, "backend", "")) in ("gemma", "bonsai",
-                                                           "gemma270",
-                                                           "qwen17"):
+        if str(getattr(self.config, "backend", "")) in SIDECAR_BACKENDS:
+
             # Sidecar legs own their inference (llama-server); the paged
             # GPU engine is incoherent here — and must never warm GPU
             # weights behind a sidecar backend's back.
@@ -396,10 +474,7 @@ class LlmModel:
         # warm tokenizer first (lightweight) — except sidecar legs, which
         # need no local tokenizer (GGUF repos ship none; gated downloads
         # would fail here instead of at the leg with a clear message).
-        if str(getattr(self.config, "backend", "")) not in ("gemma",
-                                                            "bonsai",
-                                                            "gemma270",
-                                                            "qwen17"):
+        if str(getattr(self.config, "backend", "")) not in SIDECAR_BACKENDS:
             await asyncio.to_thread(self._tokenizer)
         if getattr(self.config, "use_paged", False):
             # paged path owns its own QwenRunner weights — don't also warm fused leg
@@ -494,7 +569,7 @@ class LlmModel:
         def _run():
             kw: dict = {}
             if tools:
-                kw["tools"] = tools
+                kw["tools"] = to_openai_tools(tools)
             try:
                 return tok.apply_chat_template(
                     messages, return_tensors="pt",

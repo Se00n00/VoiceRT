@@ -20,10 +20,11 @@ active turn drains.
 import asyncio
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
+from src.agent.delegate import Route, is_task_shaped
 from src.agent.events import AgentEvent  # noqa: F401  (public currency)
 from src.agent.memory import JsonSessionMemory
 from src.models.llm import LlmConfig, LlmModel, SYSTEM_PROMPT, split_thinking
@@ -36,6 +37,15 @@ __all__ = ["VoiceAgentConfig", "VoiceAgent"]
 # suffix appended to the shared tool preamble per modality. Voice replies
 # must stay short enough to speak; text turns work until done.
 _VOICE_SUFFIX = "\n\n" + SYSTEM_PROMPT
+# Front-brain (two-brain mode) CHAT system prompt. Used only on the branch
+# where the boolean router said "this is conversation". Spoken aloud, so it
+# is short; the escalation question itself lives in
+# src/agent/delegate.py (BOOLEAN_SYSTEM), and the front leg is never given
+# tool specs — a 0.6B holding a tool schema answers the tool, not the user.
+_FRONT_SYSTEM = (
+    "You are a voice assistant. The user is talking, not asking you to do "
+    "anything on their computer. Reply in ONE short plain sentence, under 15 "
+    "words. No tools, no preamble, no lists.")
 _VOICE_FAST_SYSTEM = ("You are a voice assistant. Reply in one very short "
                       "sentence, under 10 words. Plain text only — no tools, "
                       "no preamble, just the reply.")
@@ -114,6 +124,19 @@ class VoiceAgentConfig:
     memory_recall: bool = False
     memory_store: bool = False
     memory_dir: str = "memory"
+    # Two-brain delegation (src/agent/delegate.py). On: a small front model
+    # (Qwen3-0.6B) talks to the user and is given no tools — it only answers
+    # yes/no on whether the turn needs the worker, and an escalated turn runs
+    # on the worker leg (Bonsai 27B) with the whole agentic harness. Off: the
+    # single llm leg answers everything, as before.
+    #
+    # Default OFF on purpose: turning it on builds a SECOND set of weights,
+    # so a library caller that never asked for delegation should not wake up
+    # paying for it (VRAM on a 4GB card, plus a warm). The app entry points
+    # (server.py /talk, bridge.py /term) opt in — that is where the
+    # two-brain design is the product decision, not a library detail.
+    delegate: bool = False
+    delegate_config: str | None = None
 
 
 def _lc_messages(history: list) -> list:
@@ -176,16 +199,33 @@ class VoiceAgent:
         # Bonsai with partial GPU offload): the paged GPU engine must
         # never warm weights behind their back.
         llm_cfg = cfg.llm
-        if str(getattr(llm_cfg, "backend", "")) in ("gemma",
-                                                    "bonsai",
-                                                    "gemma270",
-                                                    "qwen17") and cfg.llm_paged:
-            from dataclasses import replace
+        from src.models.llm import SIDECAR_BACKENDS
 
+        # -- two-brain routing -------------------------------------------
+        # Loaded before the legs so `worker:` overrides in the YAML land on
+        # the single existing llm leg. Delegation never forks the worker
+        # into a second instance: same graph, same tools, same memory.
+        self.delegate_cfg = None
+        self.front_llm = None
+        # Router-vs-regex disagreement counters, surfaced on /health. See
+        # _note_route_disagreement.
+        self._route_skew: dict = {}
+        if bool(getattr(cfg, "delegate", False)):
+            try:
+                from src.agent.delegate import (
+                    front_llm_config, load_config, worker_llm_overrides)
+
+                dcfg = load_config(getattr(cfg, "delegate_config", None))
+                if dcfg.enabled:
+                    self.delegate_cfg = dcfg
+                    over = worker_llm_overrides(dcfg)
+                    if over:
+                        llm_cfg = replace(llm_cfg, **over)
+            except Exception:
+                self.delegate_cfg = None
+        if str(getattr(llm_cfg, "backend", "")) in SIDECAR_BACKENDS and cfg.llm_paged:
             llm_cfg = replace(llm_cfg, use_paged=False)
         elif cfg.llm_paged:
-            from dataclasses import replace
-
             llm_cfg = replace(llm_cfg, use_paged=True,
                               paged_blocks=cfg.llm_paged_blocks,
                               paged_batch_size=cfg.llm_paged_batch_size)
@@ -193,6 +233,16 @@ class VoiceAgent:
         self.stt = SttModel(cfg.stt)
         self.llm = LlmModel(llm_cfg)
         self.tts = TtsModel(cfg.tts)
+        # Front leg: a SECOND LlmModel, independent of the worker. Built
+        # after the worker override so a placement failure can never take
+        # the worker down with it.
+        if self.delegate_cfg is not None:
+            try:
+                from src.agent.delegate import front_llm_config
+
+                self.front_llm = LlmModel(front_llm_config(self.delegate_cfg))
+            except Exception:
+                self.front_llm = None
         from src.agent.chat_model import LocalChatModel
 
         self.chat_model = LocalChatModel(llm=self.llm)
@@ -332,7 +382,13 @@ class VoiceAgent:
     async def warm(self) -> "VoiceAgent":
         """Build every leg; collect failures instead of raising."""
         self.missing = []
-        for name in ("vad", "stt", "llm", "tts"):
+        # Order matters. The front leg is small and must be resident BEFORE
+        # the worker warms: the Bonsai sidecar picks its layer split with
+        # `-ngl auto`, which probes *free* VRAM at startup. Warm the worker
+        # first and it claims the whole 4GB card, the front then fails to
+        # allocate, and every turn degrades to the worker. Small-and-fixed
+        # first, adaptive-and-large second.
+        for name in ("vad", "stt", "tts", "front_llm", "llm"):
             if name == "tts" and not self.config.speak_text_turns:
                 self.missing.append("tts leg: skipped (text-only)")
                 continue
@@ -494,10 +550,80 @@ class VoiceAgent:
 
         return _wrapper
 
+    # -- two-brain routing -------------------------------------------------
+    def _front_messages(self, text: str, history: list) -> list:
+        """Front-model CHAT prompt: one short spoken sentence, no tools.
+
+        Deliberately NOT ``messages_for_terminal``: the front model has no
+        terminal, and handing it the op catalogue is how small models start
+        emitting ops they cannot run. No tool specs at all, for the same
+        reason.
+        """
+        msgs = [{"role": "system", "content": _FRONT_SYSTEM}]
+        msgs.extend(history or [])
+        msgs.append({"role": "user", "content": str(text)[:1500]})
+        return msgs
+
+    async def _front_decide(self, text: str, history: list):
+        """Route one turn: does this need the worker, or just a reply?
+
+        Returns a :class:`~src.agent.delegate.Route`. The front leg gets no
+        tool schema and writes no task string — it answers one yes/no
+        question, and the worker re-reads the raw user text itself. Every
+        failure path escalates: a dead front leg, an unparseable answer, or a
+        narration-shaped reply all route to the worker, because that is the
+        leg that can actually do anything.
+
+        Order matters: the boolean is asked FIRST so a delegated turn costs
+        one 6-token call and never generates a chat reply nobody will hear.
+        Asking for the flag and the reply together was measured and loses
+        real tasks (31/37 vs 34/37, six tasks silently dropped).
+        """
+        from src.agent.delegate import decide_escalate, parse_delegate
+
+        cap = int(getattr(self.delegate_cfg, "max_task_chars", 1200) or 1200)
+        escalate, reason = await decide_escalate(self.front_llm, text)
+        if escalate:
+            return Route("delegate", str(text), reason=reason,
+                         forced=reason != "boolean")
+
+        # Front said this is conversation, so it is now free to speak.
+        reply, reason2 = await self._front_chat(text, history)
+        route = parse_delegate(reply, max_task_chars=cap)
+        if route is not None:
+            return route
+        # Backstop: the front model said "chat" but the request reads like
+        # machine work. Cheap, deterministic, and the last guard against
+        # telling the user something is done that never happened.
+        if (getattr(self.delegate_cfg, "backstop", False)
+                and is_task_shaped(text, int(getattr(
+                    self.delegate_cfg, "backstop_min_score", 2) or 2))):
+            return Route("delegate", str(text), reason="backstop", forced=True)
+        return Route("chat", reply, reason=reason2 or reason)
+
+    async def _front_chat(self, text: str, history: list) -> tuple[str, str]:
+        """One short spoken reply from the front leg.
+
+        Returns ``(reply, reason)``. Never raises: a dead front leg on the
+        chat path is an empty reply, and an empty chat reply falls through
+        to the worker in _run_turn rather than answering with silence.
+        """
+        try:
+            res = await self.front_llm.generate(
+                self._front_messages(text, history), 96)
+            return str(getattr(res, "text", "") or "").strip(), "chat"
+        except Exception as exc:  # noqa: BLE001 - fall through to the worker
+            return "", f"chat-error:{type(exc).__name__}"
+
     async def _agent_invoke(self, text: str, *, sid: str | None,
                             cwd: str, confirm_fn, system_suffix: str,
                             out_turns: list):
-        """One deep-agent invocation, yielding term/* mid-turn events."""
+        """One deep-agent invocation, yielding term/* mid-turn events.
+
+        With delegation on, this is the WORKER leg: it only runs for turns
+        the front brain handed over (or forced over via the backstop), and
+        it runs the full existing graph.
+        """
         from langchain_core.messages import AIMessageChunk, HumanMessage
 
         from src.models.llm import split_thinking
@@ -645,32 +771,152 @@ class VoiceAgent:
 
     async def _run_locked(self, text: str, *, sid: str | None, cwd: str,
                           confirm_fn, system_suffix: str, out_turns: list):
-        """Serialize turns per session; queue + inject contenders."""
-        if sid is None:
-            async for ev in self._agent_invoke(
-                    text, sid=None, cwd=cwd, confirm_fn=confirm_fn,
-                    system_suffix=system_suffix, out_turns=out_turns):
-                yield ev
-            return
-        lock = self._locks.setdefault(sid, asyncio.Lock())
-        if lock.locked():
-            pend = self._pending.setdefault(sid, [])
-            pend.append(str(text))
-            yield AgentEvent(node="term", kind="queued",
-                             data={"position": len(pend), "session_id": sid})
-            return
-        await lock.acquire()
+        """Serialize turns per session; queue + inject contenders.
+
+        The lock is taken BEFORE the front brain is consulted, not just
+        around the worker: two concurrent turns on one session would
+        otherwise both ask the front model about a conversation it has not
+        seen the first half of, and the second could answer from stale
+        context. The front call is also the slow part on a CPU placement,
+        so serializing it keeps the session coherent.
+        """
+        lock = None
+        if sid is not None:
+            lock = self._locks.setdefault(sid, asyncio.Lock())
+            if lock.locked():
+                pend = self._pending.setdefault(sid, [])
+                pend.append(str(text))
+                yield AgentEvent(node="term", kind="queued",
+                                 data={"position": len(pend), "session_id": sid})
+                return
+            await lock.acquire()
         try:
-            texts = self._pending.pop(sid, []) + [str(text)]
-            while texts:
-                t = texts.pop(0)
-                async for ev in self._agent_invoke(
+            async def _one(t: str):
+                async for ev in self._run_turn(
                         t, sid=sid, cwd=cwd, confirm_fn=confirm_fn,
                         system_suffix=system_suffix, out_turns=out_turns):
                     yield ev
+
+            if sid is None:
+                async for ev in _one(str(text)):
+                    yield ev
+                return
+            texts = self._pending.pop(sid, []) + [str(text)]
+            while texts:
+                async for ev in _one(texts.pop(0)):
+                    yield ev
                 texts.extend(self._pending.pop(sid, []))
         finally:
-            lock.release()
+            if lock is not None:
+                lock.release()
+
+    async def _run_turn(self, text: str, *, sid: str | None, cwd: str,
+                        confirm_fn, system_suffix: str, out_turns: list):
+        """Route one turn: front brain decides chat vs delegate.
+
+        A chat route is answered here and never touches the worker graph,
+        which is what keeps small talk off the 27B. A delegate route (or the
+        backstop forcing one) runs the worker agent and its result is what
+        the user hears — the front model does not get to reword it, so a
+        correct result can't be garbled on its way out.
+        """
+        if self.front_llm is None or self.delegate_cfg is None:
+            async for ev in self._agent_invoke(
+                    text, sid=sid, cwd=cwd, confirm_fn=confirm_fn,
+                    system_suffix=system_suffix, out_turns=out_turns):
+                yield ev
+            return
+
+        history = self.sessions.history(sid) if sid else []
+        route = await self._front_decide(text, history)
+        self._note_route_disagreement(text, route)
+
+        if getattr(self.delegate_cfg, "emit_route", True):
+            yield AgentEvent(node="term", kind="route", data={
+                "brain": "front" if route.kind == "chat" else "worker",
+                "kind": route.kind, "reason": str(route.reason or "")[:80],
+                "forced": bool(route.forced),
+            })
+
+        if route.kind == "chat":
+            reply = str(route.text or "").strip()
+            if not reply:
+                # Front model returned nothing. Falling through to the
+                # worker beats answering with silence.
+                async for ev in self._agent_invoke(
+                        text, sid=sid, cwd=cwd, confirm_fn=confirm_fn,
+                        system_suffix=system_suffix, out_turns=out_turns):
+                    yield ev
+                return
+            out_turns.append((str(text), reply, ""))
+            return
+
+        task = str(route.text or "").strip() or str(text)
+        before = len(out_turns)
+        async for ev in self._agent_invoke(
+                task, sid=sid, cwd=cwd, confirm_fn=confirm_fn,
+                system_suffix=system_suffix, out_turns=out_turns):
+            yield ev
+        # "No turn appended" is not the only empty case: a failed worker
+        # still records a turn, just with an empty reply, and run_text's
+        # post-loop then clobbers last_reply with "" and emits no chat
+        # event. So test the last reply, not the turn count.
+        produced = any(str(reply).strip()
+                       for (_t, reply, _th) in out_turns[before:])
+        if not produced:
+            # Delegated, but nothing came back. If the worker leg failed to
+            # warm, say THAT instead of returning nothing: the front model
+            # already took the request, so silence here reads as "done" and
+            # is the one outcome worse than a clear failure.
+            why = self._worker_missing_reason()
+            if why:
+                notice = (str(text), (
+                    "I handed that to the worker agent, but it could not "
+                    f"start, so nothing was done: {why}"), "")
+                if len(out_turns) > before:
+                    # Replace the empty placeholder rather than adding a
+                    # second entry for the same turn.
+                    out_turns[-1] = notice
+                else:
+                    out_turns.append(notice)
+
+    def _note_route_disagreement(self, text: str, route: Route) -> None:
+        """Log where the 0.6B and the regex scorer disagree.
+
+        The boolean is the router; :func:`is_task_shaped` no longer decides
+        anything except the backstop override. But the two were measured on
+        opposite failure axes — the boolean is reliable on real tasks and
+        over-eager on chit-chat, the regex is the reverse — so the cases
+        where they disagree are the interesting ones and the only honest way
+        to tune the 0.6B on live traffic rather than on 37 prompts.
+        """
+        try:
+            scored = is_task_shaped(text, int(getattr(
+                self.delegate_cfg, "backstop_min_score", 2) or 2))
+            said = route.kind == "delegate"
+            if scored == said:
+                return
+            self._route_skew.setdefault(
+                "regex_no_model_yes" if said else "model_no_regex_yes", 0)
+            self._route_skew[
+                "regex_no_model_yes" if said else "model_no_regex_yes"] += 1
+            log.info("route skew: model=%s regex=%s %.90s", route.kind, scored,
+                     str(text))
+        except Exception:  # noqa: BLE001 - telemetry must never break a turn
+            pass
+
+    def _worker_missing_reason(self) -> str:
+        """Why the worker leg is unusable this process, or "" if it is fine.
+
+        ``warm()`` collects leg failures instead of raising, so a dead
+        worker is otherwise invisible until a delegated turn answers with
+        nothing at all.
+        """
+        for entry in list(getattr(self, "missing", None) or []):
+            text = str(entry)
+            if text.startswith("llm leg:"):
+                return text.split(":", 1)[1].strip()[:200]
+        return ""
 
     # -- three-tier memory ------------------------------------------------
     def _episodic_store(self):
@@ -786,7 +1032,13 @@ class VoiceAgent:
         if isinstance(audio_or_text, str):
             return self._text_reply(str(audio_or_text),
                                     session_id=session_id)
-        if bool(getattr(self.config, "fast_voice", False)):
+        # fast_voice is the one-shot voice path and is incompatible with
+        # delegation: it calls llm.generate directly, so a task would be
+        # answered by whichever leg happens to be the worker with no tools
+        # in front of it. Delegation wins — the front brain still keeps
+        # chat turns cheap, just via the router instead of the short path.
+        if (bool(getattr(self.config, "fast_voice", False))
+                and self.delegate_cfg is None):
             return self._voice_fast(audio_or_text, sr=sr,
                                     session_id=session_id)
         return self._voice_turns(audio_or_text, sr=sr,
@@ -796,17 +1048,38 @@ class VoiceAgent:
                           session_id: str | None = None) -> str:
         """One text turn, reply string only (no audio synthesis).
 
-        Goes through ``agent.ainvoke`` (the ``_agenerate_async`` path),
-        mirroring the pre-voice text harness: session history in, final
-        reply out, remembered as a turn.
+        With delegation on, the front brain routes first: a chat route
+        answers here and never builds the worker graph at all, which is the
+        whole point of the split on a text path that otherwise pays for
+        agent setup on "hi".
         """
         from langchain_core.messages import HumanMessage
 
-        self.agent = self._build_agent(self._extra_tools or [])
         hist = self.sessions.history(session_id) if session_id else []
+        if self.front_llm is not None and self.delegate_cfg is not None:
+            route = await self._front_decide(str(text), hist)
+            if getattr(self.delegate_cfg, "emit_route", True):
+                # No event stream on this path; keep the decision visible
+                # on stdout for the CLI/eval callers that read it.
+                print(f"[route] {'front' if route.kind == 'chat' else 'worker'}"
+                      f" ({route.reason})", flush=True)
+            if route.kind == "chat" and str(route.text or "").strip():
+                reply = str(route.text).strip()
+                if session_id:
+                    try:
+                        self.sessions.remember_turn(
+                            session_id, str(text), reply)
+                    except Exception:
+                        pass
+                return reply
+            task = str(route.text or "").strip() or str(text)
+        else:
+            task = str(text)
+
+        self.agent = self._build_agent(self._extra_tools or [])
         res = await self.agent.ainvoke(
             {"messages": [*_lc_messages(hist),
-                          HumanMessage(content=str(text))]},
+                          HumanMessage(content=task)]},
             config={"recursion_limit": self.config.recursion_limit},
         )
         msgs = res.get("messages", []) if isinstance(res, dict) else []
@@ -1098,7 +1371,7 @@ class VoiceAgent:
                     yield AgentEvent(node="llm", kind="thinking",
                                      data={"text": ev.data.get("text", "")})
                 elif ev.kind in ("action", "observation", "confirm", "deny",
-                                 "error", "queued"):
+                                 "error", "queued", "route"):
                     yield ev
                 # chat/summary left to the tails below (voice speaks + done)
             node_s["llm"] = node_s.get("llm", 0.0) + time.perf_counter() - t_llm

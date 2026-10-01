@@ -131,14 +131,32 @@ class TestThinking(unittest.TestCase):
         from src.models.llm import LlmConfig
 
         self.assertFalse(LlmConfig().thinking)
-        self.assertEqual(LlmConfig().model, "prism-ml/Ternary-Bonsai-2-27B")
+        self.assertEqual(LlmConfig().model, "Qwen/Qwen3-0.6B")
 
 
 class TestQwen3Defaults(unittest.TestCase):
     def test_agent_default(self):
         from src.main import VoiceAgentConfig
 
-        self.assertEqual(VoiceAgentConfig().llm.model, "prism-ml/Ternary-Bonsai-2-27B")
+        self.assertEqual(VoiceAgentConfig().llm.model, "Qwen/Qwen3-0.6B")
+
+    def test_worker_stays_27b(self):
+        """The default flipped to 0.6B; the delegated worker must not.
+
+        configs/delegate.yaml overrides the worker explicitly. If that
+        override ever starts following LlmConfig, delegation becomes a
+        0.6B escalating to a 0.6B and the tool harness collapses.
+        """
+        from dataclasses import replace
+
+        from src.agent.delegate import (DelegateConfig, load_config,
+                                        worker_llm_overrides)
+        from src.models.llm import LlmConfig
+
+        over = worker_llm_overrides(load_config(None))
+        worker = replace(LlmConfig(), **over)
+        self.assertEqual(worker.model, "prism-ml/Ternary-Bonsai-2-27B")
+        self.assertEqual(worker.backend, "bonsai")
 
     def test_no_yaml_configs_dir(self):
         import os
@@ -146,11 +164,12 @@ class TestQwen3Defaults(unittest.TestCase):
         root = os.path.dirname(os.path.dirname(
             os.path.dirname(os.path.abspath(__file__))))
         cfgdir = os.path.join(root, "configs")
-        # configs/ is sanctioned for MCP server wiring only; model/leg
-        # config stays dataclass-bound (no YAML).
+        # configs/ is sanctioned for MCP server wiring and for the
+        # two-brain front-placement switch (configs/delegate.yaml). Other
+        # model/leg config stays dataclass-bound (no YAML).
         if not os.path.isdir(cfgdir):
             return
-        allowed = {"mcp_servers.yaml"}
+        allowed = {"mcp_servers.yaml", "delegate.yaml"}
         found = {f for f in os.listdir(cfgdir) if f.endswith((".yaml", ".yml"))}
         self.assertTrue(found <= allowed,
                         f"configs/ holds non-MCP YAML: {sorted(found - allowed)}")

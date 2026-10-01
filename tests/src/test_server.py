@@ -67,7 +67,13 @@ class TestEndpoints(unittest.TestCase):
         import server as S
 
         paths = sorted({r.path for r in S.router.routes})
-        self.assertEqual(paths, ["/health", "/metrics", "/talk"])
+        self.assertEqual(paths, ["/contact/inbound", "/contact/reply",
+                                 "/health", "/metrics", "/talk",
+                                 "/tg/connect", "/tg/creator-token",
+                                 "/tg/pairing/new", "/tg/pairing/status",
+                                 "/tg/qr", "/tg/status",
+                                 "/tg/token", "/vad",
+                                 "/wa/connect", "/wa/qr"])
         # browser harness lives on its own router (single-model, no sidecar)
         bpaths = sorted({r.path for r in S.browser_router.routes})
         self.assertEqual(bpaths, ["/browser/act", "/browser/tools", "/tts/say"])
@@ -172,6 +178,46 @@ class TestTalkProtocol(unittest.TestCase):
         body = c.get("/metrics").json()
         self.assertGreaterEqual(body["turns"]["done"], 1)
         self.assertGreaterEqual(body["events"].get("tts", 0), 1)
+
+    def test_partial_opt_in_without_stt_leg_is_inert(self):
+        # FakeAgent has no .stt: partial_s must be accepted and change
+        # nothing (no partial frames, flow still reaches done).
+        c = _client()
+        with c.websocket_connect("/talk") as ws:
+            ws.receive_json()  # ready
+            ws.send_json({"type": "config", "sr": 16000, "partial_s": 0.7})
+            ready = ws.receive_json()
+            self.assertEqual(ready["event"], "ready")
+            ws.send_bytes(struct.pack("<160h", *([500] * 160)))
+            ws.send_json({"type": "commit"})
+            partials = 0
+            for _ in range(16):
+                msg = ws.receive_json()
+                if (msg["event"] == "node" and msg.get("node") == "stt"
+                        and msg.get("kind") == "partial"):
+                    partials += 1
+                if msg["event"] == "done":
+                    break
+            self.assertEqual(partials, 0)
+            self.assertEqual(msg["event"], "done")
+
+    def test_get_agent_env_backend_override(self):
+        # Env knobs build the configured agent WITHOUT warming (no weights).
+        import os
+
+        import server as S
+
+        S._agent = None
+        os.environ["VOICE_LLM_BACKEND"] = "qwen17"
+        os.environ["VOICE_FAST_VOICE"] = "1"
+        try:
+            agent = S.get_agent()
+            self.assertEqual(agent.config.llm.backend, "qwen17")
+            self.assertTrue(agent.config.fast_voice)
+        finally:
+            del os.environ["VOICE_LLM_BACKEND"]
+            del os.environ["VOICE_FAST_VOICE"]
+            S._agent = None
 
 
 if __name__ == "__main__":

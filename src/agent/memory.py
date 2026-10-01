@@ -106,6 +106,9 @@ class LangChainSessionMemory:
         self.tokenizer_url = tokenizer_url
         self._lock = threading.Lock()
         self._data: dict[str, LCSessionHistory] = {}
+        # sid -> short session name ("Wifi setup"). Kept beside the history
+        # rather than inside it so it survives pruning and the window cap.
+        self._titles: dict[str, str] = {}
         self._seq = 0
 
     # -- internals ------------------------------------------------------
@@ -176,6 +179,7 @@ class LangChainSessionMemory:
     def reset(self, sid) -> None:
         now = time.time()
         with self._lock:
+            self._titles.pop(sid, None)
             h = self._data.get(sid)
             if h is not None:
                 h.messages = []
@@ -183,13 +187,42 @@ class LangChainSessionMemory:
 
     def drop(self, sid) -> bool:
         with self._lock:
+            self._titles.pop(sid, None)
             return self._data.pop(sid, None) is not None
+
+    # -- session name ---------------------------------------------------
+    # A short label for the session, generated once from the opening
+    # utterance (see src/agent/title.py). Kept beside the history rather
+    # than inside it so a window prune can never drop it, and so it costs
+    # nothing on reload.
+
+    def set_title(self, sid, title: str) -> None:
+        """Name a session. Empty is a no-op: never clobbers a real name."""
+        t = str(title or "").strip()
+        if not t:
+            return
+        with self._lock:
+            self._titles[sid] = t
+
+    def get_title(self, sid) -> str:
+        """Current name for a session, or "" — hydrates from disk if cold."""
+        now = time.time()
+        with self._lock:
+            self._sweep_locked(now)
+            t = self._titles.get(sid)
+            if t:
+                return t
+            # Cold sid: _get_locked hydrates _data from disk (and may evict
+            # this sid for LRU on the way), so only trust the cache after.
+            self._get_locked(sid, now)
+            return self._titles.get(sid, "")
 
     def stats(self) -> dict:
         with self._lock:
             return {
                 "sessions": len(self._data),
                 "turns": sum(len(h.messages) for h in self._data.values()),
+                "titled": sum(1 for v in self._titles.values() if v),
                 "max_turns": self.max_turns,
                 "max_age_s": self.max_age_s,
                 "backend": "langchain",
@@ -230,6 +263,9 @@ class JsonSessionMemory(LangChainSessionMemory):
             payload = {
                 "session_id": str(sid),
                 "at": time.time(),
+                # Absent on sessions written before titles existed; the
+                # loader treats a missing key as "unnamed", not an error.
+                "title": str(self._titles.get(sid, "") or ""),
                 "messages": [_to_dict(m) for m in self._data[sid].messages],
             }
             import json as _json
@@ -277,6 +313,9 @@ class JsonSessionMemory(LangChainSessionMemory):
                     h.messages.append(_to_pair(str(m.get("role", "user")),
                                               str(m.get("content"))))
             h.at = now
+            title = str(payload.get("title", "") or "").strip()
+            if title:
+                self._titles[sid] = title
             self._prune_locked(h)
             return h
         except Exception:
@@ -317,9 +356,21 @@ class JsonSessionMemory(LangChainSessionMemory):
             self._prune_locked(h)
             self._save_locked(sid)
 
+    def set_title(self, sid, title: str) -> None:
+        # Override, not super(): naming a session that has never been
+        # written needs to create the file, and _save_locked reads _data.
+        t = str(title or "").strip()
+        if not t:
+            return
+        with self._lock:
+            self._get_locked(sid, time.time())
+            self._titles[sid] = t
+            self._save_locked(sid)
+
     def reset(self, sid) -> None:
         now = time.time()
         with self._lock:
+            self._titles.pop(sid, None)
             h = self._data.get(sid)
             if h is not None:
                 h.messages = []
@@ -330,6 +381,7 @@ class JsonSessionMemory(LangChainSessionMemory):
 
     def drop(self, sid) -> bool:
         with self._lock:
+            self._titles.pop(sid, None)
             gone = self._data.pop(sid, None) is not None
             self._unlink_locked(sid)
             return gone
@@ -339,6 +391,7 @@ class JsonSessionMemory(LangChainSessionMemory):
             return {
                 "sessions": len(self._data),
                 "turns": sum(len(h.messages) for h in self._data.values()),
+                "titled": sum(1 for v in self._titles.values() if v),
                 "max_turns": self.max_turns,
                 "max_age_s": self.max_age_s,
                 "backend": "json",

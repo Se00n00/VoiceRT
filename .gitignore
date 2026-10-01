@@ -63,9 +63,10 @@ sessions/
 memory/
 
 # node app build outputs (rebuild with npm install && npm run build)
-tui-ink/node_modules/
-tui-ink/dist/
+src/tui/node_modules/
+src/tui/dist/
 tui-preview/node_modules/
+wa-gate/node_modules/
 
 # local llama.cpp source + build trees (GBs; rebuild via cmake)
 third_party/

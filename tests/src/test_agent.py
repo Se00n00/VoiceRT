@@ -43,10 +43,14 @@ class TestConfigs(unittest.TestCase):
                       for d, _, fs in os.walk(top) for f in fs
                       if f.endswith(".py")]
         self.assertGreater(len(paths), 10)
-        # src/agent/mcp/config.py is the one sanctioned YAML user: MCP
-        # server configs (multi-server setup). Everything else stays
-        # code-bound (no yaml, no configs/ references).
-        exempt = {os.path.join(root, "src", "agent", "mcp", "config.py")}
+        # Two sanctioned YAML users: src/agent/mcp/config.py (MCP server
+        # configs, multi-server setup) and src/agent/delegate.py (front
+        # model placement — fused/cpu/sidecar — which a dataclass default
+        # cannot express, since the whole point is a runtime switch with no
+        # code edit). Everything else stays code-bound (no yaml, no
+        # configs/ references).
+        exempt = {os.path.join(root, "src", "agent", "mcp", "config.py"),
+                  os.path.join(root, "src", "agent", "delegate.py")}
         for path in paths:
             with open(path) as f:
                 body = f.read()

@@ -1,13 +1,16 @@
-"""voice-agent server: exactly three endpoints over one :class:`VoiceAgent`.
+"""voice-agent server: HTTP endpoints + WS /talk over one :class:`VoiceAgent`.
 
 - ``GET /health`` — liveness, never builds the agent.
 - ``GET /metrics`` — uptime, turn stats, per-node event counts.
+- ``POST /contact/reply`` — inbound-reply landing zone for ask_on_whatsapp.
 - ``WS /talk`` — two-way socket: PCM audio in, per-node streams out.
 
 Minimal ``/talk`` protocol (JSON text unless noted)::
 
     client -> server: {"type": "config", "sr": 16000,
-                       "session_id": "...", "end_silence_s": 0.8}
+                       "session_id": "...", "end_silence_s": 2.0,
+                       "partial_s": 0.7}
+                       (partial_s > 0 enables live STT partials, 0 = off)
     client -> server: {"type": "audio", "pcm_b64": "<pcm16 mono>", "sr": 16000}
     client -> server: <binary pcm16 mono frames>  (same as an audio chunk)
     client -> server: {"type": "commit"}   run a turn on the buffer now
@@ -18,7 +21,9 @@ Minimal ``/talk`` protocol (JSON text unless noted)::
                        "nodes": ["vad", "stt", "llm", "tts"]}
     server -> client: {"event": "node", "node": "vad"|"stt"|"llm"|"tts",
                        "kind": ..., "data": {...}}
-                      (tts audio arrives as data.wav_b64 + sr + sentence)
+                      (tts audio arrives as data.wav_b64 + sr + sentence;
+                       live STT partials arrive as node=stt kind=partial
+                       while speech is active, final as kind=text)
     server -> client: {"event": "done", "summary": {text, reply, node_s,
                        ttfa_s, total_s, session_id}}
     server -> client: {"event": "error", "message": ...}
@@ -42,8 +47,13 @@ router = APIRouter()
 browser_router = APIRouter()
 
 CLIENT_SR = 16000
-END_SILENCE_S = 0.8
+END_SILENCE_S = 2.0
 MAX_BUFFER_S = 60.0
+# Live STT partials: re-decode the trailing window every partial_s of new
+# audio while speech is active. Never overlaps (one in flight max), never
+# blocks the socket, never raises into the loop.
+PARTIAL_MIN_S = 1.0
+PARTIAL_WINDOW_S = 15.0
 
 _t_boot = time.time()
 _metrics = {"turns_started": 0, "turns_done": 0, "turn_errors": 0,
@@ -96,16 +106,48 @@ def _paged_requested(agent) -> bool:
 def get_agent():
     """Process-wide :class:`VoiceAgent`, built on first use.
 
-    Default leg is the Gemma CPU sidecar (zero VRAM), so no paged GPU
-    engine is requested: STT/TTS stay on GPU, the LLM stays on CPU/RAM.
-    GPU-only backends (qwen/minicpm) may still opt into paging via an
-    explicit VoiceAgentConfig — never by default.
+    Two brains by default (src/agent/delegate.py): a Qwen3-0.6B front leg
+    that talks to the user and is handed no tools at all — it only answers
+    yes/no on "does this need the worker?" — and the Bonsai worker leg
+    behind it carrying the full agentic harness.
+    Placed so the worker keeps the GPU: STT/TTS on GPU, worker offloaded
+    by availability, front as small as the config allows.
+
+    Env overrides (same pattern as VOICE_TEXT_ONLY in bridge.py):
+    ``VOICE_LLM_BACKEND`` (e.g. qwen17, gemma270, qwen, bonsai),
+    ``VOICE_LLM_MODEL`` (HF id for GPU-fused backends),
+    ``VOICE_FAST_VOICE=1`` (one direct generate per turn, no agent loop),
+    ``VOICE_DELEGATE=0`` (single brain: the llm leg answers everything),
+    ``VOICE_DELEGATE_CONFIG`` (path to delegate.yaml).
     """
     global _agent
     if _agent is None:
-        from src.main import VoiceAgent
+        import os
 
-        _agent = VoiceAgent()
+        from src.main import VoiceAgent, VoiceAgentConfig
+
+        backend = os.environ.get("VOICE_LLM_BACKEND", "").strip()
+        model = os.environ.get("VOICE_LLM_MODEL", "").strip()
+        fast = os.environ.get("VOICE_FAST_VOICE", "").strip() == "1"
+        delegate = os.environ.get("VOICE_DELEGATE", "").strip()
+        dpath = os.environ.get("VOICE_DELEGATE_CONFIG", "").strip() or None
+        from dataclasses import replace
+
+        from src.models.llm import LlmConfig
+
+        # Two brains by default: this endpoint IS the product, so the
+        # front/worker split is the default here even though the library
+        # default is off (see VoiceAgentConfig.delegate).
+        cfg = VoiceAgentConfig(
+            delegate=delegate not in ("0", "false", "no"),
+            delegate_config=dpath)
+        if backend or model:
+            cfg = replace(cfg, llm=LlmConfig(
+                backend=backend or LlmConfig.backend,
+                model=model or LlmConfig.model))
+        if fast:
+            cfg = replace(cfg, fast_voice=True)
+        _agent = VoiceAgent(cfg)
     return _agent
 
 
@@ -153,6 +195,39 @@ def health():
             out["sessions"] = _agent.sessions.stats()
         except Exception:
             pass
+        # two-brain routing state: which leg answers, and whether the front
+        # brain is actually live. A front leg that failed to warm is the
+        # single most useful thing to see here — every turn silently falls
+        # back to the worker without it.
+        try:
+            dcfg = getattr(_agent, "delegate_cfg", None)
+            if dcfg is not None:
+                front = getattr(_agent, "front_llm", None)
+                fcfg = getattr(front, "config", None)
+                worker = getattr(_agent, "llm", None)
+                wcfg = getattr(worker, "config", None)
+                out["delegate"] = {
+                    "enabled": True,
+                    "placement": str(getattr(dcfg, "placement", "")),
+                    "backstop": bool(getattr(dcfg, "backstop", False)),
+                    "front": {
+                        "model": getattr(fcfg, "model", None),
+                        "backend": getattr(fcfg, "backend", None),
+                        "device": getattr(fcfg, "device", None),
+                        "built": front is not None,
+                    },
+                    "worker": {
+                        "model": getattr(wcfg, "model", None),
+                        "backend": getattr(wcfg, "backend", None),
+                    },
+                    # Where the 0.6B and the regex scorer disagreed, so
+                    # routing accuracy can be judged on live traffic.
+                    "skew": dict(getattr(_agent, "_route_skew", {}) or {}),
+                }
+            else:
+                out["delegate"] = {"enabled": False}
+        except Exception:
+            pass
         # paged engine stats — proves inference engine is live for LLM
         try:
             stats = _engine_stats(_agent)
@@ -180,6 +255,17 @@ def health():
     except Exception:
         pass
     return out
+
+
+@router.get("/vad", include_in_schema=False)
+def vad_page():
+    """Single-file VAD -> ASR live test page (mic over /talk WS)."""
+    import os
+
+    from fastapi.responses import FileResponse
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    return FileResponse(os.path.join(here, "web", "vad_asr.html"))
 
 
 @router.get("/metrics")
@@ -220,6 +306,223 @@ def metrics():
     return out
 
 
+@router.post("/contact/reply")
+async def contact_reply(payload: dict):
+    """Inbound-reply landing zone for ask_on_whatsapp (CallMeBot cannot
+    deliver WhatsApp replies, so answers arrive here instead).
+
+    Request: {ask_id, answer}. Response: {ok, ask_id}.
+    """
+    from src.agent import contacts
+
+    ask_id = str((payload or {}).get("ask_id", "") or "")[:128]
+    answer = str((payload or {}).get("answer", "") or "")[:2000]
+    if not ask_id:
+        return {"ok": False, "error": "empty ask_id"}
+    return {"ok": bool(contacts.receive_answer(ask_id, answer)),
+            "ask_id": ask_id}
+
+
+@router.post("/contact/inbound")
+async def contact_inbound(payload: dict):
+    """Gateway callback for real WhatsApp replies: {phone, text}.
+
+    Resolves the newest pending ask_on_whatsapp from that phone.
+    Response: {ok}.
+    """
+    from src.agent import contacts
+
+    phone = str((payload or {}).get("phone", "") or "")[:32]
+    text = str((payload or {}).get("text", "") or "")[:2000]
+    if not phone or not text.strip():
+        return {"ok": False, "error": "empty phone/text"}
+    if phone.startswith("tg:"):
+        contacts.remember_tg_chat(phone[3:])
+    return {"ok": bool(contacts.receive_inbound(phone, text))}
+
+
+@router.get("/wa/connect", include_in_schema=False)
+def wa_connect_page():
+    """One-scan WhatsApp linking page (QR from wa-gate)."""
+    import os
+
+    from fastapi.responses import FileResponse
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    return FileResponse(os.path.join(here, "web", "wa_connect.html"))
+
+
+@router.get("/wa/qr")
+def wa_qr():
+    """Proxy wa-gate QR/health so the browser stays same-origin."""
+    import os
+
+    try:
+        import httpx
+
+        base = (os.environ.get("CONTACT_GATEWAY_URL")
+                or "http://127.0.0.1:8100").rstrip("/")
+        r = httpx.get(base + "/wa/health", timeout=5.0)
+        health = r.json() if r.status_code == 200 else {}
+        if health.get("linked"):
+            return {"linked": True, "phone": health.get("phone", "")}
+        q = httpx.get(base + "/wa/qr", timeout=10.0)
+        qd = q.json() if q.status_code == 200 else {}
+        return {"linked": False,
+                "qr_data_url": qd.get("qr_data_url"),
+                "waiting": qd.get("waiting", qd.get("qr_data_url") is None)}
+    except Exception as exc:
+        return {"linked": False, "error": f"gateway down: {exc}"[:200]}
+
+
+@router.get("/tg/connect", include_in_schema=False)
+def tg_connect_page():
+    """Telegram linking page: create bot, /start once, linked."""
+    import os
+
+    from fastapi.responses import FileResponse
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    return FileResponse(os.path.join(here, "web", "tg_connect.html"))
+
+
+@router.get("/tg/status")
+async def tg_status():
+    """Telegram bot link state + creator gate state (never includes tokens).
+    {linked, chat_id?, bot?|err, creator: {linked, bot?|err}}"""
+    import time as _t
+
+    from src.agent import contacts, pairing
+
+    t0 = _t.perf_counter()
+    try:
+        out = await contacts.telegram_status()
+    except Exception as exc:  # never 500
+        _record_turn(_t.perf_counter() - t0, err=True)
+        out = {"linked": False, "err": str(exc)[:200]}
+    try:
+        ctok = pairing.creator_token()
+        cinfo = pairing.creator_info()
+        cbot = str(cinfo.get("username", "") or "")
+        out["creator"] = ({"linked": True, "bot": "@" + cbot} if ctok and cbot
+                          else {"linked": bool(ctok),
+                                "err": "creator token not set"} if not ctok
+                          else {"linked": False,
+                                "err": "creator username unknown"})
+    except Exception:
+        out["creator"] = {"linked": False, "err": "creator check failed"}
+    return out
+
+
+@router.post("/tg/creator-token")
+async def tg_creator_token(payload: dict):
+    """Save the Creator Bot token (validates via getMe first).
+
+    Request: {token}. Response: {ok, bot} or {ok: false, error}.
+    One-time setup; then POST /tg/pairing/new mints guided-setup QRs.
+    """
+    from src.agent import pairing
+
+    token = str((payload or {}).get("token", "") or "")[:200]
+    if not token.strip():
+        return {"ok": False, "error": "empty token"}
+    ok, info = pairing.set_creator_token(token)
+    if not ok:
+        return {"ok": False, "error": info}
+    return {"ok": True, "bot": info}
+
+
+@router.post("/tg/pairing/new")
+async def tg_pairing_new(payload: dict):
+    """Mint a guided-setup pairing: QR -> Creator Bot chat -> bot token.
+
+    Request: {agent_id?}. Response: {ok, pairing_key, qr_data_url,
+    deep_link, expires_in_s} or {ok: false, error}.
+    """
+    from src.agent import pairing
+
+    agent_id = str((payload or {}).get("agent_id", "") or "default")[:64]
+    deep_user = pairing.creator_info().get("username", "")
+    if not pairing.creator_token() or not deep_user:
+        return {"ok": False,
+                "error": "creator bot not set (POST /tg/creator-token first)"}
+    key, ttl = pairing.new_pairing(agent_id)
+    if not key:
+        return {"ok": False, "error": "could not mint pairing key"}
+    link = pairing.creator_deeplink(key)
+    try:
+        import base64
+        import io
+
+        import qrcode
+
+        img = qrcode.make(link)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        qr = ("data:image/png;base64,"
+              + base64.b64encode(buf.getvalue()).decode())
+    except Exception as exc:
+        return {"ok": False, "error": f"qr failed: {exc}"[:200]}
+    return {"ok": True, "pairing_key": key, "qr_data_url": qr,
+            "deep_link": link, "expires_in_s": ttl}
+
+
+@router.get("/tg/pairing/status")
+async def tg_pairing_status(key: str = ""):
+    """Sanitized pairing state (tokens never leave the backend)."""
+    from src.agent import pairing
+
+    rec = pairing.get_pairing(key)
+    if rec is None:
+        return {"ok": False, "error": "unknown pairing key"}
+    live = pairing.validate_pairing(key) is not None
+    out = pairing.sanitize_record(rec)
+    out.update({"ok": True, "live": live})
+    return out
+
+
+@router.post("/tg/token")
+async def tg_token(payload: dict):
+    """Save a BotFather token (validates via getMe first).
+
+    Request: {token}. Response: {ok, bot} or {ok: false, error}.
+    Stored under sessions/tg/ (gitignored), live immediately.
+    """
+    from src.agent import contacts
+
+    token = str((payload or {}).get("token", "") or "")[:200]
+    if not token.strip():
+        return {"ok": False, "error": "empty token"}
+    ok, info = await contacts.set_tg_token(token)
+    if not ok:
+        return {"ok": False, "error": info}
+    return {"ok": True, "bot": info}
+
+
+@router.get("/tg/qr")
+def tg_qr():
+    """Deep-link QR: scan with the phone camera → opens the bot chat.
+
+    Response: {linked, qr_data_url?, bot?} (linked skips the QR).
+    """
+    import asyncio as _aio
+
+    from src.agent import contacts
+
+    try:
+        st = _aio.run(contacts.telegram_status())
+    except Exception as exc:
+        return {"linked": False, "error": str(exc)[:200]}
+    if st.get("linked"):
+        return {"linked": True, "bot": st.get("bot", "")}
+    ok, qr = contacts.tg_deeplink_qr()
+    if not ok:
+        return {"linked": False, "error": qr,
+                "need": "token" if "token" in qr else "start"}
+    return {"linked": False, "qr_data_url": qr,
+            "bot": st.get("bot", "")}
+
+
 @router.websocket("/talk")
 async def talk(ws: WebSocket):
     await ws.accept()
@@ -229,14 +532,70 @@ async def talk(ws: WebSocket):
     sid = ws.query_params.get("session_id") or new_session_id()
     client_sr = CLIENT_SR
     end_silence_s = END_SILENCE_S
+    partial_s = 0.0  # <= 0 disables live partials; config may set cadence
     buf = np.zeros(0, dtype=np.float32)
     speech_seen = False
     trailing_sil = 0.0
     last_vad = None
+    last_partial = ""
+    last_partial_at = 0.0
+    partial_busy = False
+    turn_seq = 0
     await ws.send_json({"event": "ready", "session_id": sid, "sr": 16000,
                         "nodes": ["vad", "stt", "llm", "tts"]})
 
     vad = getattr(agent, "vad", None)
+    stt = getattr(agent, "stt", None)
+
+    def reset_partials():
+        """New turn/reset: in-flight partials go stale, cadence restarts."""
+        nonlocal last_partial, last_partial_at, turn_seq
+        turn_seq += 1
+        last_partial, last_partial_at = "", 0.0
+
+    def maybe_partial():
+        """Launch one rolling-window transcribe; never overlaps, never raises.
+
+        Re-decodes the trailing window from scratch each time, so each
+        partial is self-consistent (continuity comes from overlapping
+        audio, no decoder surgery needed). The loop never awaits it.
+        """
+        nonlocal partial_busy, last_partial_at
+        if (partial_s <= 0 or partial_busy or stt is None
+                or not speech_seen or len(buf) == 0):
+            return
+        buf_s = len(buf) / 16000.0
+        if buf_s < PARTIAL_MIN_S or buf_s - last_partial_at < partial_s:
+            return
+        window_n = int(PARTIAL_WINDOW_S * 16000)
+        snap = buf[-window_n:].copy() if len(buf) > window_n else buf.copy()
+        snap_s = buf_s
+        seq = turn_seq
+        last_partial_at = buf_s
+        partial_busy = True
+
+        async def _run():
+            nonlocal partial_busy, last_partial
+            try:
+                res = await stt.transcribe(snap, 16000)
+                text = str(res.text or "").strip()
+            except Exception:
+                text = ""
+            finally:
+                partial_busy = False
+            if seq != turn_seq or not text or text == last_partial:
+                return  # stale turn, empty, or unchanged: stay silent
+            last_partial = text
+            _record_event("stt")
+            try:
+                await ws.send_json({"event": "node", "node": "stt",
+                                    "kind": "partial",
+                                    "data": {"text": text,
+                                             "buffer_s": round(snap_s, 2)}})
+            except Exception:
+                pass  # disconnect races must never kill the task
+
+        asyncio.create_task(_run())
 
     async def score(chunk: np.ndarray) -> bool:
         if vad is None or len(chunk) == 0:
@@ -329,6 +688,8 @@ async def talk(ws: WebSocket):
                     client_sr = int(cmd.get("sr", client_sr))
                     end_silence_s = float(cmd.get("end_silence_s",
                                                   end_silence_s))
+                    partial_s = max(0.0, float(cmd.get("partial_s",
+                                                       partial_s)))
                     if cmd.get("session_id"):
                         sid = str(cmd["session_id"])[:64]
                 except Exception:
@@ -340,6 +701,7 @@ async def talk(ws: WebSocket):
             if kind == "reset":
                 buf = np.zeros(0, dtype=np.float32)
                 speech_seen, trailing_sil = False, 0.0
+                reset_partials()
                 try:
                     agent.vad.reset()
                 except Exception:
@@ -365,6 +727,7 @@ async def talk(ws: WebSocket):
                     continue
                 audio, buf = buf, np.zeros(0, dtype=np.float32)
                 speech_seen, trailing_sil = False, 0.0
+                reset_partials()
                 await run_turn(audio)
                 continue
             else:
@@ -382,9 +745,12 @@ async def talk(ws: WebSocket):
             speech_seen, trailing_sil = True, 0.0
         else:
             trailing_sil += dur
+        if speech_seen:
+            maybe_partial()
         if speech_seen and trailing_sil >= end_silence_s:
             audio, buf = buf, np.zeros(0, dtype=np.float32)
             speech_seen, trailing_sil = False, 0.0
+            reset_partials()
             await run_turn(audio)
 
 
@@ -500,14 +866,17 @@ _TALK_OPENAPI = {
             "streams out. Connect at ws://host:8003/talk "
             "(optional ?session_id=).\n\n"
             "Client -> server: "
-            '{"type":"config","sr","session_id","end_silence_s"} | '
+            '{"type":"config","sr","session_id","end_silence_s",'
+            '"partial_s"} | '
             '{"type":"audio","pcm_b64","sr"} | binary PCM16 mono frames | '
             '{"type":"commit"} | {"type":"reset"} | {"type":"close"}.\n\n'
             "Server -> client: "
             '{"event":"ready","session_id","sr","nodes"} | '
             '{"event":"node","node":"vad"|"stt"|"llm"|"tts",'
             '"kind","data"} (tts audio arrives as data.wav_b64 + sr + '
-            "sentence) | "
+            "sentence; live STT partials arrive mid-speech as "
+            'node=stt kind=partial when config partial_s > 0, final as '
+            "kind=text) | "
             '{"event":"done","summary":{text,reply,node_s,ttfa_s,total_s,'
             "session_id}} | "
             '{"event":"error","message"}.'
@@ -522,7 +891,7 @@ _TALK_OPENAPI = {
 def create_app(agent=None):
     """Build the voice + browser app; inject an agent (tests) or warm lazily.
 
-    ``router`` keeps exactly /health, /metrics, /talk (voice loop).
+    ``router`` keeps /health, /metrics, /talk (voice loop) + /vad (test page).
     ``browser_router`` adds /browser/tools + /browser/act (extension).
     """
     from fastapi import FastAPI

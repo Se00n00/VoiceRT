@@ -3,8 +3,9 @@
 Text in -> think/tool loop -> text out (same agent as voice + terminal).
 
 Run:
-  PYTHONPATH=. python llm_chat.py
-  PYTHONPATH=. python llm_chat.py --model Qwen/Qwen3-0.6B --backend qwen
+  PYTHONPATH=. python llm_chat.py                          # 0.6B default
+  PYTHONPATH=. python llm_chat.py --model prism-ml/Ternary-Bonsai-2-27B \
+      --backend bonsai                                    # 27B tool harness
   PYTHONPATH=. python llm_chat.py --no-tools  (raw generate, no tool loop)
 
 Keys: type + Enter, /quit to exit, /new for new session.
@@ -184,8 +185,9 @@ async def harness_loop(llm: LlmModel, cwd: str, logf=None,
 
 async def main() -> None:
     ap = argparse.ArgumentParser(description="plain LLM REPL (no TUI)")
-    ap.add_argument("--model", default="prism-ml/Ternary-Bonsai-2-27B")
-    ap.add_argument("--backend", default="bonsai", help="bonsai | gemma | minicpm | minicpm_q4k | qwen")
+    ap.add_argument("--model", default="Qwen/Qwen3-0.6B")
+    ap.add_argument("--backend", default="qwen",
+                    help="qwen | bonsai | gemma | minicpm | minicpm_q4k")
     ap.add_argument("--cwd", default=".")
     ap.add_argument("--max-tokens", type=int, default=256)
     ap.add_argument("--no-tools", action="store_true", help="raw generate, skip harness tool loop")

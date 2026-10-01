@@ -46,6 +46,7 @@ numpy==2.5.3
 onnxruntime==1.30.0
 pyyaml==6.0.3
 httpx==0.28.1
+qrcode==8.2
 kokoro==0.9.4
 # - langgraph: the voice-turn agent is a compiled StateGraph
 #   (src/agent/graph.py). Pulls langchain-core transitively.

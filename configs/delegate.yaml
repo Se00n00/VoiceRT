@@ -1,0 +1,94 @@
+# Two-brain delegation: thin front model, full-harness worker.
+#
+# Loaded by src/agent/delegate.py. Selection order: explicit path arg >
+# $VOICE_DELEGATE_CONFIG > this file > built-in defaults (file absent).
+#
+# Shape of the system:
+#   front  (Qwen3-0.6B)  talks to the user. Gets NO tools at all — it is
+#                        asked one yes/no question per turn ("does this
+#                        need the worker?"), so it cannot fabricate a tool
+#                        call, invent a task string, or paraphrase the job.
+#   worker (Bonsai 27B)  carries the whole agentic harness: terminal ops,
+#                        todo list, semantic tool router, Sim-Agent
+#                        subagents, three-tier memory. It re-reads the raw
+#                        user text itself.
+#
+# `enabled: false` drops back to single-brain (worker answers everything).
+
+enabled: true
+
+# --- front model -----------------------------------------------------------
+#
+# placement decides where the front model's weights live. This is the knob
+# that matters on a 4GB card, because front and worker compete for VRAM.
+#
+#   fused  front fused in-process on CUDA. Fastest chit-chat (14ms TTFT,
+#          the 336ms fast path). Costs ~1.4GB VRAM, which starves the
+#          worker's -ngl auto. DEFAULT.
+#   cpu    front fused on CPU (exact-torch kernel fallbacks, 0 VRAM).
+#          No new download. Slower chit-chat, worker keeps the whole card.
+#   sidecar  front as a 0-VRAM llama.cpp CPU sidecar (port 8085). Best
+#          worker offload; downloads Qwen3-0.6B-Q4_K_M.gguf (~0.4GB) on
+#          first warm.
+#
+# gpu_offload: how much of the front model the sidecar puts on the GPU
+# (only read for placement: sidecar). "auto" = probe free VRAM. Keep this
+# small (0) when the worker needs the card.
+placement: fused
+
+front:
+  backend: qwen              # fused CUDA/CPU leg
+  model: Qwen/Qwen3-0.6B
+  max_tokens: 64             # a routing decision is short; do not let it ramble
+  max_seq: 4096
+  thinking: false            # <think> traces only add tokens to a binary choice
+
+# Read only when placement: sidecar. Stock GGUF, CPU by default.
+front_sidecar:
+  backend: qwen06
+  model: Qwen/Qwen3-0.6B
+  gguf: auto                 # "auto" = download from front_sidecar.repo
+  repo: Qwen/Qwen3-0.6B-GGUF
+  file: Qwen3-0.6B-Q4_K_M.gguf
+  port: 8085
+  ctx: 8192
+  threads: 0                 # 0 = llama-server default
+  gpu_offload: 0             # 0 = keep the card for the worker
+
+# --- worker model ----------------------------------------------------------
+#
+# Defaults mirror LlmConfig's Bonsai leg; override only to change them.
+# This leg keeps the existing deep-agent graph untouched, so every tool,
+# the router and Sim-Agent behave exactly as they do today.
+worker:
+  backend: bonsai
+  model: prism-ml/Ternary-Bonsai-2-27B
+  # The worker's CPU-resident RAM is derived from these three numbers (GGUF
+  # size, context, and how many layers fit on the card), and refused if it
+  # does not fit — no swap death. On a 15GB box the 16K default lands right
+  # on the line: 8GB available vs 7.7GB needed. Dropping to 8192 moves the
+  # need to ~6.2GB (KV cache is 800MB at 16K, 400MB at 8K) and buys real
+  # headroom at the cost of shorter tool-output history.
+  # bonsai_ctx: 16384
+
+# --- routing safety net ----------------------------------------------------
+#
+# A 0.6B front model's dangerous failure is narrating a task instead of
+# escalating it: "Sure, I renamed the file" with nothing renamed. The
+# boolean already fails toward escalation, so this backstop is the last
+# override: deterministic (regex over the text, NO second LLM call), and
+# only consulted if the flag said NO and the request still reads like work.
+# On a 37-prompt run it never fired, so it costs a regex match and buys
+# insurance against the worst bug this design can produce.
+#
+# Cost of a false positive: one slow worker turn instead of a fast chat
+# reply. Cost of a false negative: the assistant lies about doing the work.
+backstop: true
+backstop_min_score: 2        # signals required to force delegation
+max_task_chars: 1200         # cap on the task string handed to the worker
+
+# --- events ----------------------------------------------------------------
+#
+# Emit the front model's decision on the event stream so the TUI can show
+# which brain is speaking. Costs nothing.
+emit_route: true

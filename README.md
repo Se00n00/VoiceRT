@@ -95,8 +95,12 @@ Project structure → [`docs/architecture.md#1-component-map`](docs/architecture
               │     │  batched B=1..8     │ + torch fallback  │
               │     │       │             │ parity-tested     │
               │     │       ▼             │                   │
-              │     │  LLM  Qwen3-0.6B  ──┤                   │
-              │     │  ┌────────────────┴──────────────────┐  │
+                      │     │  front LLM Qwen3-0.6B ─┐ yes/no:   │
+                      │     │  is this worker work?  │ escalate? │
+                      │     │       │                 │ (no tool) │
+                      │     │       ▼ (escalated)    │           │
+                     │     │  worker LLM Bonsai 27B ─┤           │
+                     │     │  ┌────────────────┴──────────────────┐  │
               │     │  │      Inference Engine (paged)     │  │
               │     │  │  scheduling  ContinuousScheduler  │  │
               │     │  │  batching    make_batch + token  │  │
@@ -126,6 +130,96 @@ Project structure → [`docs/architecture.md#1-component-map`](docs/architecture
 Verbose specs → docs: capacity model, queue, Triton details, API and config.
 
 ## Agent — text in, tools out, reply back
+
+### Two brains: the front routes, the worker works
+
+`server.py /talk` and `bridge.py` run **delegation on by default**. A small
+front model (Qwen3-0.6B) owns the conversation and is given **no tools at
+all**: it is asked one yes/no question — *does this need the worker?* — and
+answers with a single word. On `YES` the turn runs on the worker leg (Bonsai
+27B) with the whole existing agentic harness. Delegation does not build a
+second harness — it routes into the one already there, so tools, memory and
+sessions stay shared.
+
+```
+user ──► front (Qwen3-0.6B, no tools, one-word decision)
+            │
+            ├── NO ──► front writes a short reply ──► TTS  (never touches the 27B)
+            │
+            └── YES ─► worker (Bonsai 27B, full tool set) ──► reply → TTS
+```
+
+Four deliberate properties:
+
+- **Chat never loads the worker.** "hi" costs a 0.6B generate, not a 27B
+  one. This is the whole latency argument.
+- **The worker gets the user's own words.** The front writes no task
+  string, so there is nothing for it to garble, drop or invent — Bonsai
+  re-reads the raw utterance and the history and extracts the intent
+  itself. A delegated result also goes straight to TTS; the front does not
+  get to reword it, so a correct result can't be mangled on the way out.
+- **Failure is asymmetric.** A dead front leg, an unparseable answer or a
+  narration-shaped reply all route to the worker, because that is the leg
+  that can actually do anything. A worker that dies **says so** instead of
+  going silent, since silence there reads as "done".
+- **The decision is asked first.** The flag is the *first* call of the
+  turn, so a delegated task costs one 6-token generate and never produces a
+  chat reply nobody will hear. Asking for the flag and the reply in one
+  generation was measured and drops real tasks (31/37 vs 34/37).
+
+### Why a boolean and not a tool
+
+The front leg used to hold exactly one tool, `delegate`, and pick a
+function envelope with a task string as its argument. Measured on real
+task prompts with Qwen3-0.6B, that was the bottleneck, not the routing
+idea: **0 of 8** prompts produced a valid call. The model had the intent
+and no trouble narrating it ("Sure, I renamed it"), and just could not be
+made to fill in the envelope. True token-level prefill, which bypassed the
+envelope entirely, delegated 10/10 — but it also escalated every bit of
+chit-chat, because a 1B-scale model cannot express "not this one" without
+being handed the alternative.
+
+A single yes/no question is the one form of that discrimination a 0.6B
+does reliably, and the asymmetry lets it be biased hard toward `YES`: a
+false positive costs one slow worker turn, a false negative silently drops
+a task the user asked for. With a 5-pair few-shot prompt, on real weights:
+
+| | result |
+| --- | --- |
+| task prompts escalated | **19 / 19** (zero dropped) |
+| chit-chat kept on the front leg | **15 / 18** |
+| chat latency | **0.25 s** mean, 0.13–0.47 s (was 0.7–1.4 s with the tool prompt) |
+
+Turn cost: `YES` = 1 call, 6 tokens. `NO` = 2 calls (flag, then reply).
+
+`configs/delegate.yaml` picks the front's placement — `fused` (CUDA,
+default), `cpu` (0 VRAM), or `sidecar` (a 0-VRAM llama.cpp CPU server) —
+plus the backstop and route-event switches. The backstop is a scored regex
+pass with no second LLM call, kept **on** as the last override before a
+chat reply: a 0.6B model's default failure is narrating work it never did,
+and that is the one bug this design must never ship. It barely fires — on
+the 37-prompt run above the model never said `NO` to anything the regex
+scored as work — so it costs a regex match and buys insurance against the
+worst outcome.
+
+The same regex runs on **every** turn as telemetry either way. Where it
+disagrees with the model, the count surfaces on `GET /health`
+(`delegate.route_skew`): `regex_no_model_yes` means the model escalated
+something the regex reads as chatter (the regex is usually wrong — it
+scored "how do i center a div" 0), and `model_no_regex_yes` is the
+backstop catching a miss. Skew is recorded, never used to decide.
+
+| Switch | Default | Effect |
+| --- | --- | --- |
+| `VOICE_DELEGATE=0` | on | single brain — the llm leg answers everything |
+| `VOICE_DELEGATE_CONFIG` | `configs/delegate.yaml` | path to the placement/routing config |
+| `VoiceAgentConfig(delegate=...)` | **off** | library default: no second set of weights unless asked |
+
+The library default is off on purpose: delegation builds a *second* set of
+weights, so a bare `VoiceAgent()` that never asked for two brains should
+not pay for it. The app entry points are where that decision belongs.
+
+### The deep-agent loop (worker leg)
 
 ```
 text in ──► VoiceAgent.run_text ──► deep-agent loop (≤6 steps, lock+queue per session)
@@ -257,6 +351,10 @@ Concurrency doubles token throughput (26 → 66 tok/s at genlen 16) while per-re
 | | TTFA | E2E | VRAM |
 |---|---|---|---|
 | Fast path `--fast` (Qwen3-0.6B, VAD→STT→1 LLM call→TTS) | 329 ms | 336 ms | 3034 MB |
+
+Measured on the two-brain route (RTX 3050, fused front, real weights):
+chat turn **0.7–1.4 s** front-to-reply, with the worker leg never
+loaded. See `tests/src/test_delegate.py` for the routing contract.
 | Round-trip (synthetic speech in) | 308 ms | 827 ms | 1957 MB |
 | Earlier live turn | 438 ms | 640 ms | 1941 MB |
 | LibriSpeech samples (previous) | 531–858 ms | 1321–2590 ms | 1937 MB |
@@ -321,15 +419,29 @@ More: [`docs/architecture.md`](docs/architecture.md) startup + WS flow, [`docs/i
 
 ## 🚧 TUI version — work in progress
 
-I'm building an opencode-style **terminal voice agent** on top of this pipeline: full-screen split UI — conversation + input on the left, live USER/AGENT audio visualizer on the right — with the same single Qwen model chatting or running shell commands (`v` voice turn, `y`/`n` confirm gate, `/` commands, per-session LangChain memory). Two frontends exist: `tui.py` (Textual) and the current **stock Ink (React) app in `tui-ink/`** backed by `bridge.py` (`:8004`, `server.py` untouched). Not done yet: visual polish and edge cases are still being worked on.
+I'm building an opencode-style **terminal voice agent** on top of this pipeline: full-screen split UI — conversation + input on the left, live USER/AGENT audio visualizer on the right — with the same single Qwen model chatting or running shell commands (`v` voice turn, `y`/`n` confirm gate, `/` commands, per-session LangChain memory). Two frontends exist: `tui.py` (Textual) and the current **OpenTUI (Solid) app in `src/tui/`** backed by `bridge.py` (`:8004`, `server.py` untouched). Not done yet: visual polish and edge cases are still being worked on.
 
 See it live (one command — the TUI spawns its own local agent backend; `server.py` stays out of it):
 
 ```bash
-cd tui-ink && npm install && npm run dev
+cd src/tui && npm install && npm run dev
 ```
 
 First boot warms legs (~1-2 min). Headphones (or speakers down) avoid the mic re-ingesting replies; without them the app still works — it pauses listening while speaking and discards its own echo. Advanced: run the backend separately (`PYTHONPATH=. python bridge.py`) and point the TUI at it with `VOICE_BRIDGE=http://127.0.0.1:8004`.
+
+On quit (`ctrl+c` or `/quit`) a farewell card prints a two-word name for the session and the command to resume it:
+
+```bash
+voicert -s ses_f09c7b175ffews1QW321k2D9An
+```
+
+Session ids are `ses_` + 26 base62 chars, written to `sessions/<id>.json`, so a resume survives a restart of both the TUI and `bridge.py`. `voicert -s <id>` also accepts a bare id (no prefix); anything that isn't 6–64 alphanumerics is rejected.
+
+### Monotonic shades
+
+The palette is black and white plus **one** hue. `/shade <name>` collapses every chromatic role (accent, warn, danger, voice label) onto that single color; the backdrop, ink and borders stay exactly where they were. `/shade` lists them, `/shade none` restores the original multi-hue palette, and `VOICE_SHADE=blue|yellow|red|orange|green|none` picks the starting shade (default **green**). The wordmark's `RT` half is painted in the active shade too.
+
+The trade is deliberate: errors and confirm prompts stop being red and yellow, so they're told apart by their glyph and label rather than color.
 
 ## Sandboxed tool execution (docker)
 

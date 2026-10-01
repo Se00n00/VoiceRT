@@ -12,12 +12,16 @@ function wsURL(): string {
 export type TurnEvent =
   | { event: "action"; action: Record<string, unknown> }
   | { event: "observation"; observation: string }
+  // two-brain delegation: which model took the turn, and why
+  | { event: "route"; brain: "front" | "worker"; kind: string; reason: string; forced: boolean }
   | { event: "chat"; reply: string }
   | { event: "thinking"; text: string; append?: boolean }
   | { event: "token"; piece: string }
   | { event: "audio"; wav_b64: string; sr: number }
   | { event: "confirm"; action: Record<string, unknown> }
   | { event: "summary"; reply: string }
+  // One-shot: the model-named session title, sent after the first turn.
+  | { event: "title"; title: string; session_id?: string }
   | { event: "stuck"; reason: string }
   | { event: "error"; message: string }
   | { event: string; [k: string]: unknown };
@@ -199,7 +203,7 @@ export async function ensureBackend(log: (m: string) => void): Promise<boolean> 
     return loaded();
   }
   if (await loaded()) return true;
-  const root = path.resolve(import.meta.dirname, "..", "..");
+  const root = path.resolve(import.meta.dirname, "..", "..", "..");
   const venvPy = path.join(root, ".venv", "bin", "python");
   const py = fs.existsSync(venvPy) ? venvPy : "python3";
   const port = process.env.VOICE_PORT ?? "8004";
@@ -259,6 +263,22 @@ export type ModelInfo = {
 export async function getModel(): Promise<{ current: string; available: ModelInfo[] }> {
   const r = await fetch(`${API}/model`);
   return (await r.json()) as { current: string; available: ModelInfo[] };
+}
+
+/**
+ * Persisted session name, for a resumed session (`voicert -s <id>`).
+ * Model-free on the bridge side: it only reads sessions/<id>.json, so
+ * quitting a resumed session without speaking still gets its old name.
+ */
+export async function fetchTitle(sid: string): Promise<string> {
+  if (!sid) return "";
+  try {
+    const r = await fetch(`${API}/term/title?sid=${encodeURIComponent(sid)}`);
+    const j = (await r.json()) as { title?: string };
+    return String(j.title ?? "");
+  } catch {
+    return "";
+  }
 }
 
 export async function switchModel(name: string): Promise<{ kind: string; current?: string; label?: string; message?: string; note?: string }> {
