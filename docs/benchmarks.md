@@ -1,4 +1,10 @@
-# Benchmarks — measured on RTX 3050 Laptop 4GB (CUDA 12, torch 2.5.1)
+# Benchmarks — RTX 3050 Laptop 4GB (torch 2.5.1+cu124, driver 615.71)
+
+Legs, turns and routing re-measured 2026-10-02 (means over n=4 steady-state
+turns unless noted; first-call warmup excluded). Rows marked historical
+were not re-run: engine benches need a working `src.inference` (broken,
+do-not-touch), kernel microbenches need a long exclusive GPU session, and
+the concurrency/cost tables are a Qwen2.5-era reference stack.
 
 All commands assume `PYTHONPATH=.` from inside `voice-pipeline/`.
 
@@ -16,7 +22,9 @@ All commands assume `PYTHONPATH=.` from inside `voice-pipeline/`.
 
 ## LLM: inference engine features (Qwen3-0.6B, real QwenRunner, `num_blocks=16`)
 
-Real `QwenRunner` only — isolated subprocess per config; `DummyRunner` removed.
+Historical — not re-run 2026-10-02 (`src.inference` is unimportable:
+pre-existing IndentationError, do-not-touch). Real `QwenRunner` only —
+isolated subprocess per config; `DummyRunner` removed.
 
 | config | 32 tok/req: tok/s | delta | 8 tok/req: tok/s | delta |
 |---|---|---|---|---|
@@ -29,6 +37,9 @@ Real `QwenRunner` only — isolated subprocess per config; `DummyRunner` removed
 Longer generations amortize prefill; short bursts benefit most from chunked / CUDA-graph.
 
 ## Fused kernel microbenchmarks (single layer vs eager torch)
+
+Historical — not re-run 2026-10-02 (needs a long exclusive GPU session;
+plots in `benchmarks/results/plots_fused/` are from the last full run).
 
 Parity: `max_err 9.7e-04` (fp16) under `1e-2`. VRAM `check_budget` passes at B=8 (448MB KV + 1200MB weights < 4000MB).
 
@@ -70,7 +81,7 @@ Plots:
 ![tts fused B](benchmarks/results/plots_fused/tts-fused-B.png)
 ![tts fused L](benchmarks/results/plots_fused/tts-fused-L.png)
 
-## LLM: latency vs concurrency vs generation length (reference Qwen2.5-0.5B stack)
+## LLM: latency vs concurrency vs generation length (reference Qwen2.5-0.5B stack — historical, not re-run)
 
 | genlen | conc | TTFT p50 | TPO | TPS | req/s | tok/s | util% | W | tok/s/W | $/1M |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -93,29 +104,47 @@ Concurrency doubles token throughput (26 → 66 tok/s at genlen 16) while per-re
 
 ## Full voice turn (round-trip: synthetic speech → full pipeline)
 
+Re-measured 2026-10-02 via `benchmarks/voice_latency.py` (single-brain
+Qwen3-0.6B, 48 max-tokens, 1.95 s synth input, first turn excluded):
+
 | | TTFA | E2E | VRAM |
 |---|---|---|---|
-| Round-trip (synthetic speech in) | 308 ms | 827 ms | 1957 MB |
-| Earlier live turn | 438 ms | 640 ms | 1941 MB |
-| LibriSpeech samples (previous) | 531–858 ms | 1321–2590 ms | 1937 MB |
+| Fast path `--fast` (VAD→STT→1 LLM call→TTS, 7 ids) | 551 ms | 551 ms | 3038 MB |
+| Default path (same input, 48 max-tokens) | 859 ms | 1021 ms | 3065 MB |
+
+Earlier rows, kept for history: synthetic round-trip 308/827 ms,
+live turn 438/640 ms, LibriSpeech samples 531–858 / 1321–2590 ms
+(VRAM ~1940 MB — lighter legs than today's full stack).
 
 ## Per-leg spot checks
 
+Re-measured 2026-10-02 via `benchmarks/leg_profile.py` (steady-state of
+3, 1.95 s speech in / 3.02 s audio out) and `benchmarks/voice_latency.py`
+(n=4 turns, ranges in brackets):
+
 | Leg | Latency | Real-time factor |
 |---|---|---|
-| VAD | ~50 ms | 0.01 |
-| STT (Whisper) | 59 ms / 3 s audio | **0.020** (50× real-time) |
-| LLM TTFT / decode | 14 ms / ~69 tok/s | — |
-| TTS (Kokoro, eager) | 141 ms | **0.045** (22× real-time) |
+| VAD (Silero ONNX, CPU) | 23–25 ms / ~2 s audio [19–31] | **≈0.012** |
+| STT (Whisper-base fused) | 113 ms / 1.95 s audio [113–113 steady; 143–221 in-turn] | **≈0.06–0.09** |
+| LLM TTFT / decode (batch-1 fused) | 178 ms TTFT (~40-tok prompt) / 22.7 tok/s over 48 ids | — |
+| TTS (Kokoro-82M, eager) | ~210 ms / 3.02 s audio [198–434 in-turn] | **≈0.07–0.14** |
+
+Historical steady-state claims kept for reference: TTFT 14–30 ms band
+(tiny prompts), decode ~69 tok/s at genlen 48 (batched harness), STT
+59 ms / 3 s (RTF 0.020), TTS 141 ms (RTF 0.045). Today's box reads
+slower across the board than those rows.
 
 ## Capacity: VRAM-probed sessions (RTX 3050 4096 MB, Qwen3-0.6B)
 
+Recomputed 2026-10-02 via `src/models/runtime/capacity.py`
+(baseline 2381 MB legs-resident, up from ~1900 MB):
+
 | | genlen 48 | genlen 128 |
 |---|---|---|
-| Baseline (weights) | ~1900 MB | ~1900 MB |
+| Baseline (weights) | ~2380 MB | ~2380 MB |
 | Headroom (10%) | 410 MB | 410 MB |
-| Usable | ~1700 MB | ~1700 MB |
-| Per session (270 MB @48 tok) | **~6–7 sessions** | **~5–6 sessions** |
+| Usable | ~1300 MB | ~1300 MB |
+| Per session (~270 MB) | **~4 sessions** | **~4 sessions** |
 
 Server auto-derives this at boot (`src/models/runtime/capacity.py`, `auto_engine_config`).
 

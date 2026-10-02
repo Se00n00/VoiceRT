@@ -635,9 +635,9 @@ def create_app(agent=None):
                 except Exception:
                     pass
                 continue
-                if msg.get("session_id"):
-                    _seen_sids.add(str(msg.get("session_id")))
-                turn_task["task"] = asyncio.create_task(run_one(text, msg.get("session_id"), msg.get("cwd") or "."))
+            if msg.get("session_id"):
+                _seen_sids.add(str(msg.get("session_id")))
+            turn_task["task"] = asyncio.create_task(run_one(text, msg.get("session_id"), msg.get("cwd") or "."))
 
         closed["done"] = True
         if turn_task["task"] is not None:

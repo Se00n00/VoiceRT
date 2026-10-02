@@ -29,7 +29,9 @@ const renderer = await createCliRenderer({
   exitOnCtrlC: false,
   targetFps: 60,
   autoFocus: false,
-  useMouse: false,
+  // Mouse tracking for wheel scrolling the transcript. Trade-off: with
+  // tracking on, text selection needs Shift held in most terminals.
+  useMouse: true,
   useKittyKeyboard: {},
 });
 

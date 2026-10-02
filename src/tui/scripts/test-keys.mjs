@@ -6,6 +6,8 @@
 // NOT press ctrl+o — that really spawns a terminal window.
 import { execSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, chmodSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+const stripAnsi = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createComponent, render } from "@opentui/solid";
@@ -50,10 +52,11 @@ const flat = () => frame().replace(/\s+/g, " ");
 const badge = () => (flat().match(/\[.\] MIC (ON|OFF)/) ?? ["<no badge>"])[0];
 const prompt = () => (flat().match(/(?:auto|voice) ->[^│]*/) ?? ["<no prompt>"])[0].trim();
 async function clearInput() {
-  // Backspace until the prompt is empty, not a fixed count. pressKey("PAGEUP")
-  // and friends type their literal name into the input, so by this point in
-  // the run the prompt can hold far more than any assumed length — a fixed
-  // 24 quietly left a "PA" residue that broke later "/"-prefixed checks.
+  // Backspace until the prompt is empty, not a fixed count. Single-letter
+  // presses (shift+M/V in a non-empty prompt) type literally into the input,
+  // so by later stages the prompt can hold far more than any assumed length.
+  // (Mock pressKey has no PageUp entry and would also type literal text, so
+  // scrollback uses real escape sequences instead — see below.)
   for (let i = 0; i < 64; i++) {
     if (!prompt().replace(/^(?:auto|voice) ->/, "").trim()) break;
     await setup.mockInput.pressKey("BACKSPACE");
@@ -68,7 +71,7 @@ async function clearInput() {
 async function waitForBridgeLine(ms = 8000) {
   const t0 = Date.now();
   while (Date.now() - t0 < ms) {
-    if (flat().includes("bridge down") || flat().includes("● bridge")) return flat();
+    if (flat().includes("bridge disabled") || flat().includes("bridge down") || flat().includes("● bridge")) return flat();
     await settle(100);
   }
   return flat();
@@ -147,13 +150,65 @@ await settle();
 check("no stray V in the prompt", !prompt().includes("V"), prompt());
 check("v explains the mode requirement", flat().includes("Tab to switch"), flat().slice(-220));
 
-console.log("\nhistory scrollback");
-for (let i = 0; i < 4; i++) await setup.mockInput.pressKey("PAGEUP");
+// Transcript text only. Strip the 18-column left panel, then drop the frame
+// art. Characters, not regex ranges: ┃/─ are all > U+2500, so a /[^\u2500-\u25ff]/
+// class would wrongly exclude the row text. Anchoring on the wall after the
+// slice keeps the filter honest about what it removes.
+const BOX_ART = /[─-◿▀-▟]/u;
+// A line is transcript text only if readable characters survive stripping the
+// frame art and the level bars. Character classes, not ranges: ┃/─/█/▀ all sit
+// above U+2500, so an inverted-range test would also drop real message text.
+const panelLines = () =>
+  frame()
+    .split("\n")
+    .map((l) => l.slice(18))
+    .map((l) => l.replace(BOX_ART, " ").replace(/┃/g, " ").trim())
+    // The prompt's own row reads "auto -> <placeholder>"; it is chrome, not a
+    // message, and it is always the last row.
+    .filter((l) => !/^(auto|voice) -> /.test(l))
+    .filter((l) => /[a-z0-9]/i.test(l))
+    .map((l) => l.replace(/\s{2,}.*$/, "").trim());
+const lastLine = () => panelLines().at(-1) ?? "";
+
+console.log("\nhistory scrollback (real sequences: mock pressKey has no PageUp entry and would type literal text)");
+const liveLines = () => panelLines().join("\n");
+const pageUp = () => setup.renderer.stdin.emit("data", Buffer.from("\x1B[5~"));
+const pageDown = () => setup.renderer.stdin.emit("data", Buffer.from("\x1B[6~"));
+// Boot no longer seeds the template (backend is back), so seed on demand for scroll depth.
+await runCmd("/template");
+const liveView = liveLines();
+check("live view shows the newest turn", liveView.includes("40 turns"), JSON.stringify(lastLine()));
+// Turn-anchored scrolling: one PgUp lands the previous user input on top.
+pageUp();
 await settle();
-check("pageup keeps the renderer alive", frame().length > 0);
-await setup.mockInput.pressKey("PAGEDOWN");
-await settle();
+check("pageup moves the visible window", liveLines() !== liveView);
+check("pageup anchors on the last user turn", (panelLines()[0] ?? "").includes("Great, session over"), JSON.stringify(panelLines()[0]));
+check("pageup did not type into the prompt", !prompt().includes("PAGE"), prompt());
+// Walk back turn by turn to the first one (bounded loop, not a hard count,
+// so template growth doesn't silently break the trip).
+for (let i = 0; i < 30 && !(panelLines()[0] ?? "").includes("organize the files"); i++) {
+  pageUp();
+  await settle();
+}
+check("deep scrollback reaches the first turn", (panelLines()[0] ?? "").includes("organize the files"), JSON.stringify(panelLines()[0]));
+for (let i = 0; i < 30 && liveLines() !== liveView; i++) {
+  pageDown();
+  await settle();
+}
+check("pagedown returns to the live view", liveLines() === liveView, `${liveLines().length} vs ${liveView.length} chars`);
 check("pagedown keeps the renderer alive", frame().length > 0);
+
+console.log("\nmouse wheel scrolls the transcript (over the chat panel)");
+const liveAgain = liveLines();
+await setup.mockMouse.scroll(50, 8, "up");
+await settle();
+// One notch is +3 messages; mode/mic sys lines sit above the template, so
+// assert the window moved (deep exclusion is covered by the PgUp block).
+check("wheel up scrolls back", liveLines() !== liveAgain);
+check("wheel up shows the scroll hint", flat().includes("scrolled back"), flat().slice(-160));
+await setup.mockMouse.scroll(50, 8, "down");
+await settle();
+check("wheel down returns to live", liveLines() === liveAgain);
 
 console.log("\nescape keeps the prompt focused");
 await setup.mockInput.pressKey("ESCAPE");
@@ -167,7 +222,7 @@ console.log("\ncommand palette (/)");
 // Read rows off the raw frame, never off flat(): flat() collapses newlines,
 // so a `[^┃]*` scan runs straight past the input box into the border art.
 // Menu rows sit inside the palette's own wall, hence the two strips.
-const MENU_CMDS = "(?:new|cwd|clear|model|mode|mic|voice|shade|opencode|help|quit)";
+const MENU_CMDS = "(?:new|cwd|clear|model|mode|mic|voice|shade|opencode|template|help|quit)";
 const menuRows = () =>
   frame()
     .split("\n")
@@ -298,25 +353,6 @@ await clearInput();
 // assert on the last line instead, and let boot() settle first so its async
 // messages can't be mistaken for command output.
 console.log("\nevery command dispatches");
-// Transcript text only. Strip the 18-column left panel, then drop the frame
-// art. Characters, not regex ranges: ┃/─ are all > U+2500, so a /[^\u2500-\u25ff]/
-// class would wrongly exclude the row text. Anchoring on the wall after the
-// slice keeps the filter honest about what it removes.
-const BOX_ART = /[─-◿▀-▟]/u;
-// A line is transcript text only if readable characters survive stripping the
-// frame art and the level bars. Character classes, not ranges: ┃/─/█/▀ all sit
-// above U+2500, so an inverted-range test would also drop real message text.
-const panelLines = () =>
-  frame()
-    .split("\n")
-    .map((l) => l.slice(18))
-    .map((l) => l.replace(BOX_ART, " ").replace(/┃/g, " ").trim())
-    // The prompt's own row reads "auto -> <placeholder>"; it is chrome, not a
-    // message, and it is always the last row.
-    .filter((l) => !/^(auto|voice) -> /.test(l))
-    .filter((l) => /[a-z0-9]/i.test(l))
-    .map((l) => l.replace(/\s{2,}.*$/, "").trim());
-const lastLine = () => panelLines().at(-1) ?? "";
 const micBadgeNow = () => (frame().match(/\[.\] MIC (?:ON|OFF)/) ?? [""])[0];
 async function runCmd(cmd) {
   await clearInput();
@@ -352,11 +388,15 @@ const CMD_CASES = [
   ["/clea", () => lastLine().includes("did you mean /clear")],
   ["/voice", () => lastLine().includes("voice lives in voice mode")],
   ["/model", () => lastLine().includes("could not reach /model")],
+  ["/template", () => lastLine().includes("40 turns") && panelLines().some((l) => l.includes("todos: ✓ List files | ✓ Group by type"))],
 ];
 for (const [cmd, verify] of CMD_CASES) {
   await runCmd(cmd);
   check(`${cmd} dispatches`, verify(), JSON.stringify(lastLine()));
 }
+// /template seeded 20 user turns, each wrapped in its own heavy box on top
+// of the panel + input frames.
+check("user turns render in input-style boxes", frame().split("\n").filter((l) => l.includes("┏")).length > 2);
 
 console.log("\nenter runs the text you typed, not the top match");
 await runCmd("/mode");
@@ -452,6 +492,13 @@ console.log("\nfarewell card");
     const card = sessionEpilogue("Friendly greeting", id);
   check("card says VoiceRT, not opencode", card.includes("Continue") && card.includes(`voicert -s ${id}`) && !card.includes("opencode -s"));
   check("card carries the session name", card.includes("Friendly greeting"));
+  check("card carries the version", /Version\s+v\d+\.\d+\.\d+/.test(stripAnsi(card)), stripAnsi(card).slice(-120));
+  {
+    // The card's version must not drift from the package that ships it.
+    const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+    const { VERSION } = await import("../dist/epilogue.js");
+    check("card version matches package.json", VERSION === pkg.version, `card=${VERSION} pkg=${pkg.version}`);
+  }
   // The wordmark: "Voice" in plain ink, "RT" in the shade. Strip SGR and read
   // the glyphs back, since the split is invisible in a raw string comparison.
   const strip = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");

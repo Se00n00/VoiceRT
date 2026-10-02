@@ -3,13 +3,27 @@
 ---
 
 ```
-─── 01 / HIGH LEVEL ARCHITECTURE ───────────────────────────────────────────────────────────
+─── 01 ~ 1 / HIGH LEVEL ──────────────────────────────────────────────────────────────────────
 
-      ┌──────────────┐   ┌─────────────────────┐   ┌─────────────────┐   ┌───────────────┐
-wav |>  | Silero VAD | |> | Tiny Whisper (STT) | |> | Mini CPM (LLM) | |> | Kokoro (TTS) | |> wav
-      └──────────────┘   └─────────────────────┘   └─────────────────┘   └───────────────┘
-      
-─── 01 ~ 1 / CONTEXT & MEMORY ───────────────────────────────────────────────────────────────────────
+  ┌────────┐   ┌─────────┐   ┌────────────────────┐   ┌─────────┐
+  │  VAD   │──▶│   STT   │──▶│    VoiceAgent      │──▶│   TTS   │──▶ wav
+  │ Silero │   │ Whisper │   │ front 0.6B / 27B   │   │ Kokoro  │
+  │ ONNX   │   │  base   │   │ tools · memory     │   │  82M    │
+  └────────┘   └─────────┘   └────────────────────┘   └─────────┘
+   RTF≈0.01     RTF≈0.06        ≤6 steps/turn
+
+─── 01 ~ 2 / TWO BRAINS ──────────────────────────────────────────────────────────────────────
+
+  text ──▶ front Qwen3-0.6B  ── one yes/no, NO tools, 6 tokens
+            │
+            ├── NO ──▶ front writes reply ──▶ TTS     (≈0.3s, 27B never loads)
+            │
+            └── YES ─▶ worker Bonsai 27B ──▶ full harness ──▶ TTS
+
+  unparseable answer ──▶ YES        failure is asymmetric: silence is never "done"
+  backstop regex ──▶ force YES      0.6B narration is the bug to never ship
+
+─── 01 ~ 3 / CONTEXT BUDGET ──────────────────────────────────────────────────────────────────
 
   BUDGET 16K - pack_prompt cuts obs → hist, never system/facts
   ┌────────────┬───────────┬──────────────────────┬───────────────┬────────────┐
@@ -20,14 +34,32 @@ wav |>  | Silero VAD | |> | Tiny Whisper (STT) | |> | Mini CPM (LLM) | |> | Koko
   └────────────┴───────────┴──────────────────────┴───────────────┴────────────┘
   count: /tokenize exact, else chars/3.5 - per-backend rows in budget.py:BUDGETS
 
-  MEMORY - L1 evict -> L2 store - L2/L3 recall -> prompt (every turn)
+─── 02 / TOOLS ───────────────────────────────────────────────────────────────────────────────
+
+  12 ops (src/tools/terminal.py:ALLOWED_OPS)
+  exec  exec_bg  poll  read  write  edit  grep  list  python_exec  fetch  searxng  done
+
+  model text ──▶ 5 parsers, tried in order ──▶ action ──▶ 2 gates ──▶ run
+                gemma → functiongemma         ┌──────────────┐
+                → toolcall-dict → terminal    │ DENY  fork   │
+                → xml                         │ bomb rm -rf /│
+                                             ├──────────────┤
+                edit = ANCHORED replace      │ CONFIRM sudo │
+                fails if anchor missing      │ rm docker ssh│
+                                             └──────────────┘
+  router: bge-small-en-v1.5 embeds the request, top-k=3 ops + deps, ContextVar → prompt
+  MCP: python_exec / fetch / web_search over stdio, merged into the same op set
+
+─── 03 / MEMORY ──────────────────────────────────────────────────────────────────────────────
+
+  L1 evict -> L2 store - L2/L3 recall -> prompt (every turn)
   ┌────────────────────┐
   │ L1 WORKING         │
   │ sessions/*.json    │
   │ window+tok-TTL-LRU │
   └─────────┬──────────┘
-            │ evict → summarize_turns → store()
-            ▼
+             │ evict → summarize_turns → store()
+             ▼
   ┌────────────────────┐                 ┌──────────────────────┐
   │ L2 EPISODIC bge    │ ──────────────▶ │ ASSEMBLED PROMPT     │
   └────────────────────┘ [Past episodes] │ facts → episodes →   │
@@ -48,21 +80,95 @@ wav |>  | Silero VAD | |> | Tiny Whisper (STT) | |> | Mini CPM (LLM) | |> | Koko
   │ model-switch  │ ──────────────────▶ │ compacted sess │
   │ (bridge)      │  <=150w + last 2    │ summary + 2    │
   └───────────────┘  per-target skip    └────────────────┘
+
+  SIM-AGENT - depth 1, never nested, max 6
   ┌──────────────┐    ┌────────────────┐    ┌──────────────────┐    ┌───────────┐
   │ plan         │───▶│ stash frame    │───▶│ lean subtask x N │───▶│ envelope  │
   │ 1 cheap call │    │ sim_<sid>.json │    │ sliver+preamble  │    │ > parent  │
   │ numbered     │    │                │    │ scratch session  │    │ + restore │
   └──────────────┘    └────────────────┘    └──────────────────┘    └───────────┘
 
+─── 04 / SESSIONS ────────────────────────────────────────────────────────────────────────────
+
+  id = ses_ + 26 base62        body ^[0-9A-Za-z]{6,64}$      "voicert -s <id>"
+  │
+  ├── per-session LOCK ──▶ contenders queue, never interleave  (term/queued)
+  ├── window  20 turns / 30 min / 1000 sessions / optional token cap
+  └── title   2 words, 12 tokens, front brain, printed on the exit card
+
+  VoiceAgent holds windows in RAM only. Persisting is the APP's job:
+      import_session(sid, data)   on start      never raises
+      export_session(sid)          after a turn  never raises
+
+─── 05 / MODELS ──────────────────────────────────────────────────────────────────────────────
+
+  leg  backend     port   notes
+  ───  ──────────  ─────  ─────────────────────────────────────────────────────────────
+  VAD  —           —      Silero ONNX, CPU, RTF 0.01
+  STT  —           —      Whisper-base, RTF 0.02
+  LLM  qwen        fused  Qwen3-0.6B, max_tokens 48, max_seq 8192
+  LLM  bonsai      8081   Ternary-Bonsai-2-27B GGUF  ← the worker
+  LLM  qwen06      8085   Qwen3-0.6B GGUF          ← the front, if sidecar
+  TTS  —           —      Kokoro-82M, RTF 0.045
+
+  sidecars (gemma 8080, gemma270 8083, qwen17 8084) speak HTTP; the rest are fused.
+  assert_cuda_leg() fails fast, so a CPU fallback can never fake a benchmark.
+  ONE GPU process at a time - two models on a 4GB card is an OOM, not a slowdown.
+
+  ┌── TTS voices (Kokoro catalogue: 54 voices · 9 languages) ───────────────────┐
+  │  list_voices(lang, gender)     describe_voices()   * = current voice        │
+  │  set_voice(name)               set_lang(code|alias)   next_voice()          │
+  │  speak(text, voice=…)          per-call override, restored after            │
+  │  voice_info() suggests typos (af_hear → af_heart); strict lang guard        │
+  ├─────────────────────────────────────────────────────────────────────────────├
+  │  a/b AmE/British English · e es · f fr · h hi · i it · j ja · p pt · z zh   │
+  │  prefix = lang+gender: af_=AmE-female … zf_=zh-female (17 prefixes)         │
+  │  gender swaps free (am_michael ← af_heart); lang must match set_lang()      │
+  └─────────────────────────────────────────────────────────────────────────────└
+
+─── 06 / PROCESSES ───────────────────────────────────────────────────────────────────────────
+
+  voicert (OpenTUI) ──:8004──▶ bridge.py    /health /model /term/{stt,say} /term /deep
+  server.py         ──:8003──▶ voice API    /talk WS · /contact/* · /tg/* · /wa/*
+  llm_chat.py       ──────────▶ text REPL
+                    └──────────▶ runs ONE at a time, never two
+
+  ⚠ uvicorn awaits lifespan BEFORE it binds. A warm that hangs leaves NO listener,
+    which the TUI cannot tell from a dead bridge.  (fix pending)
+
+─── 07 / INFERENCE ───────────────────────────────────────────────────────────────────────────
+
+  paged KV · FCFS admission · continuous batching · stall detection at 500 empty steps
+  ✗ BLOCKED: src/inference/engine.py:431 - `for o in outs:` body dedented, file does
+    not parse, src.inference unimportable → 14 of 564 python tests error.
+    One 11-line re-indent. Not on the live path: LlmModel is fused or a llama.cpp sidecar.
+
+─── 08 / TUI (v0.0.1) ────────────────────────────────────────────────────────────────────────
+
+  ┌──────────────┬───────────────────────────────────────────┐
+  │ conversation │  USER / AGENT audio visualiser           │
+  │              ├───────────────────────────────────────────┤
+  │              │  ┌─────────────────────────────────────┐  │
+  │              │  │ / palette - 8 rows, above the input │  │
+  │              │  ├─────────────────────────────────────┤  │
+  │              │  │ auto -> _                            │  │
+  │              │  └─────────────────────────────────────┘  │
+  └──────────────┴───────────────────────────────────────────┘
+     bonsai-2-27b · auto · /cwd · ○ bridge    shades: blue yellow red orange green
+
+  11 commands: /new /cwd /clear /model /mode /mic /voice /shade /opencode /help /quit
+  Enter runs the selection ONLY after you move the highlight - otherwise it submits
+  what you typed. A palette that silently ran /model for /mode is worse than none.
 ```
 
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
 ![CUDA 12](https://img.shields.io/badge/CUDA-12-green)
 ![VRAM 4GB](https://img.shields.io/badge/VRAM-4GB-orange)
 ![TTFT 14ms](https://img.shields.io/badge/TTFT-14ms-brightgreen)
-![Tests 84 passing](https://img.shields.io/badge/tests-84_passing-brightgreen)
+![TUI 158 checks](https://img.shields.io/badge/TUI-158_checks-brightgreen)
+![Python 550/564](https://img.shields.io/badge/python-550%2F564-yellow)
 
-**Full voice loop — speech in, speech out — on a single 4GB laptop GPU.** Mic/wav → text → reply → voice in <1s, no cloud.
+**Full voice loop — speech in, speech out — on a single 4GB laptop GPU.** Mic/wav → text → reply → voice in ≈0.5–1.0 s, no cloud.
 
 ## Run in 2 minutes
 
@@ -78,9 +184,23 @@ curl http://localhost:8003/metrics
 
 `PYTHONPATH=.` is required — kernels live at `src.models.triton_kernels`.
 
-Docs: [`docs/architecture.md`](docs/architecture.md) · [`docs/capacity.md`](docs/capacity.md) · [`docs/inference_engine.md`](docs/inference_engine.md) · [`docs/benchmarks.md`](docs/benchmarks.md) · [`docs/README.md`](docs/README.md)
+**Architecture, one part per file** — the charts above are the summaries, these
+are the cited detail:
 
-Project structure → [`docs/architecture.md#1-component-map`](docs/architecture.md)
+| # | Part | |
+|---|---|---|
+| 01 | [Agent](docs/architecture/01-agent.md) | `VoiceAgent`, warm order, turn loop, events, two-brain routing |
+| 02 | [Tools](docs/architecture/02-tools.md) | 12 ops, 5 parser formats, semantic router, deny/confirm policy |
+| 03 | [Memory](docs/architecture/03-memory.md) | L1 window, L2 episodic, L3 facts, the one injection point |
+| 04 | [Sessions](docs/architecture/04-sessions.md) | identity, window ownership, persistence, resume |
+| 05 | [Models](docs/architecture/05-models.md) | the four legs, `LlmConfig`, 7 backends, streaming, VRAM |
+| 06 | [Processes](docs/architecture/06-processes.md) | bridge/server endpoints, and the startup-warm trap |
+| 07 | [Inference](docs/architecture/07-inference.md) | the custom runtime, and the syntax error blocking it |
+| 08 | [TUI](docs/architecture/08-tui.md) | command palette, shades, exit card |
+
+Docs: [`docs/architecture/`][arch-index] · [`docs/architecture.md`](docs/architecture.md) (legacy single-file) · [`docs/capacity.md`](docs/capacity.md) · [`docs/inference_engine.md`](docs/inference_engine.md) · [`docs/benchmarks.md`](docs/benchmarks.md) · [`docs/README.md`](docs/README.md)
+
+[arch-index]: docs/architecture/README.md
 
 ## Architecture — VoiceAgent + Inference Engine + Kernels
 
@@ -182,13 +302,18 @@ being handed the alternative.
 A single yes/no question is the one form of that discrimination a 0.6B
 does reliably, and the asymmetry lets it be biased hard toward `YES`: a
 false positive costs one slow worker turn, a false negative silently drops
-a task the user asked for. With a 5-pair few-shot prompt, on real weights:
+a task the user asked for. With a 5-pair few-shot prompt, on real weights — re-measured 2026-10-02
+on the committed prompt set (`tests/src/test_delegate.py`: 13 TASK +
+15 CHAT), live Qwen3-0.6B fused front, greedy boolean. (The original
+37-prompt list — 19/19 escalated, 15/18 kept, 0.25 s chat latency — is
+not in the repo, so the table below replaces it with the rerunnable set.)
 
 | | result |
 | --- | --- |
-| task prompts escalated | **19 / 19** (zero dropped) |
-| chit-chat kept on the front leg | **15 / 18** |
-| chat latency | **0.25 s** mean, 0.13–0.47 s (was 0.7–1.4 s with the tool prompt) |
+| task prompts escalated | **13 / 13** (zero dropped) |
+| chit-chat kept on the front leg | **11 / 15** (4 false positives: time, joke, 2+2, price) |
+| routing decision latency | **≈0.1 s** mean (first call 0.9 s, steady 0.0–0.1 s) |
+| front reply, 10 ids | **≈0.3 s** (≈36 tok/s, `benchmarks/leg_profile.py`) |
 
 Turn cost: `YES` = 1 call, 6 tokens. `NO` = 2 calls (flag, then reply).
 
@@ -198,7 +323,7 @@ plus the backstop and route-event switches. The backstop is a scored regex
 pass with no second LLM call, kept **on** as the last override before a
 chat reply: a 0.6B model's default failure is narrating work it never did,
 and that is the one bug this design must never ship. It barely fires — on
-the 37-prompt run above the model never said `NO` to anything the regex
+the 28-prompt run above the model never said `NO` to anything the regex
 scored as work — so it costs a regex match and buys insurance against the
 worst outcome.
 
@@ -259,7 +384,13 @@ gemma      4K     256         256     0 by caps (measured system ~0.5K → ~2K r
 episodic (`memory/episodic.db`), L3 facts (`memory/facts.md`) distill
 from packed context — see PLAN.md (local-only).
 
-## Benchmarks — measured on RTX 3050 Laptop 4GB (CUDA 12, torch 2.5.1)
+## Benchmarks — RTX 3050 Laptop 4GB (torch 2.5.1+cu124, driver 615.71)
+
+Legs, turns and routing re-measured 2026-10-02 (means over n=4 steady-state
+turns unless noted; first-call warmup excluded). Rows marked historical
+were not re-run: engine benches need a working `src.inference` (broken,
+do-not-touch), kernel microbenches need a long exclusive GPU session, and
+the concurrency/cost tables are a Qwen2.5-era reference stack.
 
 All commands assume `PYTHONPATH=.` from inside `voice-pipeline/`.
 
@@ -277,7 +408,9 @@ All commands assume `PYTHONPATH=.` from inside `voice-pipeline/`.
 
 ### LLM: inference engine features (Qwen3-0.6B, real QwenRunner, `num_blocks=16`)
 
-Real `QwenRunner` only — isolated subprocess per config; `DummyRunner` removed.
+Historical — not re-run 2026-10-02 (`src.inference` is unimportable:
+pre-existing IndentationError, do-not-touch). Real `QwenRunner` only —
+isolated subprocess per config; `DummyRunner` removed.
 
 | config | 32 tok/req: tok/s | delta | 8 tok/req: tok/s | delta |
 |---|---|---|---|---|
@@ -290,6 +423,9 @@ Real `QwenRunner` only — isolated subprocess per config; `DummyRunner` removed
 Longer generations amortize prefill; short bursts benefit most from chunked / CUDA-graph.
 
 ### Fused kernel microbenchmarks (single layer vs eager torch)
+
+Historical — not re-run 2026-10-02 (needs a long exclusive GPU session;
+plots in `benchmarks/results/plots_fused/` are from the last full run).
 
 Parity: `max_err 9.7e-04` (fp16) under `1e-2`. VRAM `check_budget` passes at B=8 (448MB KV + 1200MB weights < 4000MB).
 
@@ -325,7 +461,7 @@ Parity: `max_err 9.7e-04` (fp16) under `1e-2`. VRAM `check_budget` passes at B=8
 ![tts fused B](benchmarks/results/plots_fused/tts-fused-B.png)
 ![tts fused L](benchmarks/results/plots_fused/tts-fused-L.png)
 
-### LLM: latency vs concurrency vs generation length (reference Qwen2.5-0.5B stack)
+### LLM: latency vs concurrency vs generation length (reference Qwen2.5-0.5B stack — historical, not re-run)
 
 | genlen | conc | TTFT p50 | TPO | TPS | req/s | tok/s | util% | W | tok/s/W | $/1M |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -348,34 +484,52 @@ Concurrency doubles token throughput (26 → 66 tok/s at genlen 16) while per-re
 
 ### Full voice turn (round-trip: synthetic speech → full pipeline)
 
+Re-measured 2026-10-02 via `benchmarks/voice_latency.py` (single-brain
+Qwen3-0.6B, 48 max-tokens, 1.95 s synth input, first turn excluded):
+
 | | TTFA | E2E | VRAM |
 |---|---|---|---|
-| Fast path `--fast` (Qwen3-0.6B, VAD→STT→1 LLM call→TTS) | 329 ms | 336 ms | 3034 MB |
+| Fast path `--fast` (VAD→STT→1 LLM call→TTS, 7 ids) | 551 ms | 551 ms | 3038 MB |
+| Default path (same input, 48 max-tokens) | 859 ms | 1021 ms | 3065 MB |
 
-Measured on the two-brain route (RTX 3050, fused front, real weights):
-chat turn **0.7–1.4 s** front-to-reply, with the worker leg never
-loaded. See `tests/src/test_delegate.py` for the routing contract.
-| Round-trip (synthetic speech in) | 308 ms | 827 ms | 1957 MB |
-| Earlier live turn | 438 ms | 640 ms | 1941 MB |
-| LibriSpeech samples (previous) | 531–858 ms | 1321–2590 ms | 1937 MB |
+Earlier rows, kept for history: synthetic round-trip 308/827 ms,
+live turn 438/640 ms, LibriSpeech samples 531–858 / 1321–2590 ms
+(VRAM ~1940 MB — lighter legs than today's full stack).
+
+Two-brain chat turn re-measured the same day over the live bridge
+(`/deep`, fused front, worker never loaded): **1.6–1.9 s**
+utterance-to-reply. See `tests/src/test_delegate.py` for the routing
+contract (92 unit tests green).
 
 ### Per-leg spot checks
 
+Re-measured 2026-10-02 via `benchmarks/leg_profile.py` (steady-state of
+3, 1.95 s speech in / 3.02 s audio out) and `benchmarks/voice_latency.py`
+(n=4 turns, ranges in brackets):
+
 | Leg | Latency | Real-time factor |
 |---|---|---|
-| VAD | ~50 ms | 0.01 |
-| STT (Whisper) | 59 ms / 3 s audio | **0.020** (50× real-time) |
-| LLM TTFT / decode | 14 ms / ~69 tok/s | — |
-| TTS (Kokoro, eager) | 141 ms | **0.045** (22× real-time) |
+| VAD (Silero ONNX, CPU) | 23–25 ms / ~2 s audio [19–31] | **≈0.012** |
+| STT (Whisper-base fused) | 113 ms / 1.95 s audio [113–113 steady; 143–221 in-turn] | **≈0.06–0.09** |
+| LLM TTFT / decode (batch-1 fused) | 178 ms TTFT (~40-tok prompt) / 22.7 tok/s over 48 ids | — |
+| TTS (Kokoro-82M, eager) | ~210 ms / 3.02 s audio [198–434 in-turn] | **≈0.07–0.14** |
+
+Historical steady-state claims kept for reference: TTFT 14–30 ms band
+(tiny prompts), decode ~69 tok/s at genlen 48 (batched harness), STT
+59 ms / 3 s (RTF 0.020), TTS 141 ms (RTF 0.045). Today's box reads
+slower across the board than those rows.
 
 ### Capacity: VRAM-probed sessions (RTX 3050 4096 MB, Qwen3-0.6B)
 
+Recomputed 2026-10-02 via `src/models/runtime/capacity.py`
+(baseline 2381 MB legs-resident, up from ~1900 MB):
+
 | | genlen 48 | genlen 128 |
 |---|---|---|
-| Baseline (weights) | ~1900 MB | ~1900 MB |
+| Baseline (weights) | ~2380 MB | ~2380 MB |
 | Headroom (10%) | 410 MB | 410 MB |
-| Usable | ~1700 MB | ~1700 MB |
-| Per session (270 MB @48 tok) | **~6–7 sessions** | **~5–6 sessions** |
+| Usable | ~1300 MB | ~1300 MB |
+| Per session (~270 MB) | **~4 sessions** | **~4 sessions** |
 
 Server auto-derives this at boot (`src/models/runtime/capacity.py`, `auto_engine_config`).
 

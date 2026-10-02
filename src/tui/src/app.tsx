@@ -1,5 +1,5 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
-import { TextAttributes } from "@opentui/core";
+import { TextAttributes, type MouseEvent } from "@opentui/core";
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -75,6 +75,7 @@ const COMMANDS: { name: string; hint: string }[] = [
   { name: "/voice", hint: "/voice [sec] — record a voice turn" },
   { name: "/shade", hint: "/shade [name|none] — monotonic accent hue" },
   { name: "/opencode", hint: "/opencode [dir] — spawn opencode here" },
+  { name: "/template", hint: "show 40-turn conversation template" },
   { name: "/help", hint: "show this list" },
   { name: "/quit", hint: "/quit (or /q) — leave" },
 ];
@@ -210,6 +211,127 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
       return [...m.slice(-199), { id: uid(), who, text: capped }];
     });
   }
+  // Template conversation for visualizing the chat panel + scrollback:
+  // 40 turns (20 user + 20 agent) with thinking traces, tool calls,
+  // observations, confirm gates and todos, rendered exactly like live
+  // transcript lines. Long enough to overflow any terminal so PgUp/PgDn
+  // scrolling is demonstrable. Seeded at boot, re-seedable via /template.
+  function seedTemplate() {
+    push("sys", "Template preview — 40-turn conversation (/clear to dismiss):");
+    // Turn 1: user asks, agent surveys and plans (todos).
+    push("you", "Can you help me organize the files in this directory?");
+    push("think", "Listing files first, then grouping by type.");
+    push("act", "▸ glob: *.* in /current");
+    push("obs", "↳ glob evidence (42 chars — agent sees it, hidden here)");
+    push("act", "todos: ✓ List files | ● Group by type | ○ Move files");
+    push("agent", "Found 12 files. I'll group them: images, docs, code.");
+    // Turn 2: user directs, agent executes shell tool calls.
+    push("you", "Put images in img/, docs in docs/, code in src/");
+    push("think", "Creating directories, then moving by extension.");
+    push("act", "▸ shell: mkdir -p img docs src");
+    push("act", "▸ shell: mv *.png *.jpg img/; mv *.md *.txt docs/");
+    push("obs", "moved 9 files, 3 left");
+    push("agent", "Done — 9 files moved. 3 misc files left over.");
+    // Turn 3: user asks about leftovers, agent re-scans.
+    push("you", "What are the leftover files?");
+    push("act", "▸ glob: * in /current");
+    push("obs", "↳ glob evidence (15 chars — agent sees it, hidden here)");
+    push("agent", "notes.bak, todo.txt and data.csv — move them to docs/?");
+    // Turn 4: user confirms, agent finishes and closes the todos.
+    push("you", "Yes, move them to docs/ and finish up.");
+    push("act", "▸ shell: mv notes.bak todo.txt data.csv docs/");
+    push("act", "todos: ✓ List files | ✓ Group by type | ✓ Move files");
+    push("agent", "All organized. img/ has 4, docs/ has 6, src/ has 5.");
+    // Turn 5: user wants to see the result, agent lists the tree.
+    push("you", "Show me the final tree.");
+    push("think", "Listing directories one level deep.");
+    push("act", "▸ shell: find . -maxdepth 2 | sort");
+    push("obs", "img/ docs/ src/, 15 files total");
+    push("agent", "img/ 4, docs/ 6, src/ 5. Flat and tidy.");
+    // Turn 6: user wants docs, agent writes a README.
+    push("you", "Write a short README for this layout.");
+    push("think", "Describing each directory in one line.");
+    push("act", "▸ shell: writing README.md");
+    push("obs", "wrote 6 lines to README.md");
+    push("agent", "README.md written — img/, docs/, src/ explained.");
+    // Turn 7: user worries about secrets, agent greps.
+    push("you", "Did I leave any secrets or keys behind?");
+    push("think", "Grepping for key, token and secret patterns.");
+    push("act", "▸ shell: grep -ri 'key\\|token\\|secret' .");
+    push("obs", "no matches");
+    push("agent", "Clean — no secrets or keys found.");
+    // Turn 8: user wants backups gone (confirm-gated action).
+    push("you", "Remove the backup files.");
+    push("ask", "rm notes.bak");
+    push("act", "▸ shell: rm notes.bak");
+    push("obs", "removed 1 file");
+    push("agent", "Backups removed. One less clutter.");
+    // Turn 9: user asks about size, agent measures.
+    push("you", "How big is everything now?");
+    push("act", "▸ shell: du -sh img docs src");
+    push("obs", "img 12M, docs 3M, src 8M");
+    push("agent", "23M total — images are the bulk of it.");
+    // Turn 10: user wraps up arc one, agent closes out.
+    push("you", "Thanks, that's tidy. One more round?");
+    push("act", "todos: ✓ List files | ✓ Group by type | ✓ Move files");
+    push("agent", "Sure — repo hygiene next? Say the word.");
+    // Turn 11: git init.
+    push("you", "Init a git repo here.");
+    push("think", "One command, then confirming the branch.");
+    push("act", "▸ shell: git init -b main");
+    push("obs", "initialized empty repo on main");
+    push("agent", "Repo initialized on branch main.");
+    // Turn 12: commit the layout.
+    push("you", "Commit this layout.");
+    push("think", "Staging everything, then committing.");
+    push("act", "▸ shell: git add -A && git commit -m 'organize'");
+    push("obs", "15 files changed, 23M committed");
+    push("agent", "Committed — working tree clean.");
+    // Turn 13: tighten permissions.
+    push("you", "Lock down the scripts to owner-only.");
+    push("think", "Removing group/other access recursively.");
+    push("act", "▸ shell: chmod -R o-rwx img docs src");
+    push("obs", "permissions tightened");
+    push("agent", "Group and other access removed.");
+    // Turn 14: archive the images.
+    push("you", "Archive the images.");
+    push("think", "Compressing img/ into a tarball.");
+    push("act", "▸ shell: tar -czf img.tar.gz img");
+    push("obs", "img.tar.gz, 11M");
+    push("agent", "Archived to img.tar.gz (11M).");
+    // Turn 15: verify the archive.
+    push("you", "Verify the archive.");
+    push("act", "▸ shell: tar -tzf img.tar.gz");
+    push("obs", "4 entries ok");
+    push("agent", "Archive verified — 4 entries intact.");
+    // Turn 16: disk usage again.
+    push("you", "Show disk usage again.");
+    push("act", "▸ shell: du -sh .");
+    push("obs", "34M with the archive");
+    push("agent", "34M total with the archive included.");
+    // Turn 17: drop the archive (confirm-gated).
+    push("you", "Remove the archive, keep it lean.");
+    push("ask", "rm img.tar.gz");
+    push("act", "▸ shell: rm img.tar.gz");
+    push("obs", "removed 1 file");
+    push("agent", "Archive removed. Back to 23M.");
+    // Turn 18: changelog entry.
+    push("you", "Write a CHANGELOG entry.");
+    push("think", "Appending one dated line.");
+    push("act", "▸ shell: appending to CHANGELOG.md");
+    push("obs", "CHANGELOG +3 lines");
+    push("agent", "CHANGELOG updated.");
+    // Turn 19: final sweep.
+    push("you", "Final check — anything left?");
+    push("act", "▸ glob: * in /current");
+    push("obs", "↳ glob evidence (9 chars — agent sees it, hidden here)");
+    push("agent", "Nothing left. Tree is clean.");
+    // Turn 20: user wraps up, agent closes out.
+    push("you", "Great, session over.");
+    push("act", "todos: ✓ List files | ✓ Group by type | ✓ Move files");
+    push("agent", "All done. 40 turns shown as template.");
+  }
+
 
   // The farewell card, printed once the alternate screen is gone. The name is
   // the model's own two-word title when it arrived, else an offline guess
@@ -262,6 +384,8 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
   }
 
   // Boot report: which theme won and why (probe ok / silent / forced).
+  // Template seeding at boot is commented out (backend is back, so the
+  // panel fills with live turns; /template still re-seeds on demand).
   onMount(() => {
     if (props.themeNote) push("sys", props.themeNote);
     const sh = shade();
@@ -798,11 +922,13 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
       firstUtterance = "";
       setSessionTitle("");
       setSid(newSessionId());
+      setHistOff(0);
       push("sys", "new session");
       return;
     }
     if (t === "/clear") {
       setMsgs([]);
+      setHistOff(0);
       return;
     }
     if (t === "/cwd" || t.startsWith("/cwd ")) {
@@ -823,6 +949,10 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
       }
       const s = Number(t.split(/\s+/, 2)[1]) || seconds;
       void voiceStep(s);
+      return;
+    }
+    if (t === "/template") {
+      seedTemplate();
       return;
     }
     if (t === "/mode") {
@@ -950,12 +1080,12 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
       return;
     }
     if (name === "pageup") {
-      setHistOff((o) => Math.min(Math.max(0, msgs().length - 1), o + 10));
+      scrollToPrevUser();
       key.preventDefault();
       return;
     }
     if (name === "pagedown") {
-      setHistOff((o) => Math.max(0, o - 10));
+      scrollToNextUser();
       key.preventDefault();
       return;
     }
@@ -1035,9 +1165,6 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
       return;
     }
     // Typing into the prompt must never trigger the bare-letter shortcuts.
-    // They were already gated on an empty input, but "m" and "v" are also the
-    // first letters of /mic and /voice, so gate on the palette being closed too.
-    const typingCommand = cmdToken() !== null;
     if (name === "m" && value().trim() === "" && !busy()) {
       key.preventDefault();
       setMic();
@@ -1102,12 +1229,92 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
   };
   const rw = () => Math.max(10, Math.floor(termCols() * 0.18) - 2);
   const pad = (s: string) => (s + " ".repeat(rw())).slice(0, rw());
-  const maxHist = () => Math.max(1, termRows() - 16);
+  const colorFor = (w: Msg["who"]) =>
+    w === "you" ? theme().accent : w === "agent" ? theme().ink : w === "err" ? theme().danger : w === "ask" ? theme().warn : theme().dim;
+  const labelFor = (w: Msg["who"]) => (w === "you" ? "› " : w === "ask" ? "⬡ Confirm? " : w === "think" ? "› think " : "");
+  // Visible transcript window, measured in terminal ROWS rather than messages:
+  // a bordered user turn costs 3 rows (top border + text + bottom border)
+  // while plain lines cost wrapped-text rows. The right column has a fixed
+  // height, and overflowing it makes Yoga shrink every child so rows paint
+  // on top of each other — so the window must fit EXACTLY into the space
+  // left by the chrome (panel borders, phase, palette, input).
+  // Two modes: live (histOff 0) fills newest-first so the latest turn and the
+  // input stay visible; scrolled (histOff > 0) is TOP-ANCHORED at a user
+  // message and fills forward, so a scrolled view always opens on the turn's
+  // input with the assistant's reply below it. histOff is the message count
+  // from the end to the top line (len - topIndex).
+  // Chrome rows: 2 panel borders + 1 phase + 3 input box, plus the transient
+  // stream / palette / confirm lines when they are on screen.
+  const rowBudget = () => {
+    const chrome =
+      2 + 1 + 3 +
+      (streamText() ? 1 : 0) +
+      (pending() ? 1 : 0) +
+      (cmdOpen() ? cmdVisible().length + 2 : 0);
+    // -1 safety row: wrapping is estimated, and one spare row degrades to a
+    // blank line while one row over degrades to overlapping text.
+    return Math.max(1, termRows() - chrome - 1);
+  };
+  const rowsOf = (m: Msg) => {
+    const innerW = Math.max(20, termCols() - Math.floor(termCols() * 0.18) - 10);
+    return Math.max(1, Math.ceil((labelFor(m.who).length + m.text.length) / innerW)) + (m.who === "you" ? 2 : 0);
+  };
   const histVis = () => {
     const all = msgs();
-    const end = histOff() === 0 ? all.length : Math.max(0, all.length - histOff());
-    return all.slice(Math.max(0, end - maxHist()), end);
+    const budget = rowBudget();
+    if (histOff() === 0) {
+      let rows = 0;
+      let start = all.length;
+      for (let i = all.length - 1; i >= 0; i--) {
+        rows += rowsOf(all[i]);
+        if (rows > budget) {
+          start = i + 1;
+          break;
+        }
+        start = i;
+      }
+      return all.slice(start);
+    }
+    const top = Math.max(0, Math.min(all.length, all.length - histOff()));
+    const out: Msg[] = [];
+    let rows = 0;
+    for (let i = top; i < all.length; i++) {
+      const r = rowsOf(all[i]);
+      if (rows + r > budget) break;
+      rows += r;
+      out.push(all[i]);
+    }
+    return out;
   };
+  // Turn-anchored scrolling: PgUp/wheel-up jumps to the previous user input,
+  // PgDn/wheel-down to the next one (or back to live past the last turn).
+  const prevUserIdx = (before: number) => {
+    const a = msgs();
+    for (let i = Math.min(before, a.length - 1); i >= 0; i--) {
+      if (a[i].who === "you") return i;
+    }
+    return -1;
+  };
+  const nextUserIdx = (after: number) => {
+    const a = msgs();
+    for (let i = after; i < a.length; i++) {
+      if (a[i].who === "you") return i;
+    }
+    return -1;
+  };
+  function scrollToPrevUser() {
+    const a = msgs();
+    const cur = histOff() === 0 ? a.length : Math.max(0, a.length - histOff());
+    const t = prevUserIdx(cur - 1);
+    setHistOff(a.length - (t < 0 ? 0 : t));
+  }
+  function scrollToNextUser() {
+    const a = msgs();
+    if (histOff() === 0) return;
+    const top = Math.max(0, a.length - histOff());
+    const t = nextUserIdx(top + 1);
+    setHistOff(t < 0 ? 0 : a.length - t);
+  }
 
   // --- command palette ---------------------------------------------------
   // The typed prefix of a command, or null when the input isn't a command.
@@ -1130,9 +1337,6 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
   /** Highest number of rows the palette may take from the transcript. */
   const CMD_ROWS = 8;
   const cmdVisible = () => cmdMatches().slice(0, CMD_ROWS);
-  const colorFor = (w: Msg["who"]) =>
-    w === "you" ? theme().accent : w === "agent" ? theme().ink : w === "err" ? theme().danger : w === "ask" ? theme().warn : theme().dim;
-  const labelFor = (w: Msg["who"]) => (w === "you" ? "› " : w === "ask" ? "⬡ Confirm? " : w === "think" ? "› think " : "");
 
   return (
     <box flexDirection="row" height={termRows()} backgroundColor={theme().screen}>
@@ -1145,6 +1349,9 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
         paddingTop={3}
         backgroundColor={theme().panel}
       >
+        <text fg={theme().ink} attributes={TextAttributes.BOLD}>
+          {pad("info & control")}
+        </text>
         <text fg={micOn() ? theme().accent : theme().dim} attributes={micOn() ? TextAttributes.BOLD : TextAttributes.NONE}>
           {pad(" ".repeat(off() + micPad()) + micLabel())}
         </text>
@@ -1158,6 +1365,8 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
         <text fg={theme().ink}>{pad(modelLabel())}</text>
         <text fg={theme().dim}>{pad(`${mode()} · ${sid().slice(0, 8)}`)}</text>
         <text fg={theme().dim}>{pad(cwd())}</text>
+        <text fg={theme().dim}>{pad(`theme: ${props.theme.mode ?? ""}`)}</text>
+        <text fg={theme().dim}>{pad(`shade: ${shade() ?? "none"}`)}</text>
         <text fg={serverOk() ? theme().ink : theme().danger}>
           {pad(serverOk() === null ? "…" : serverOk() ? "● bridge" : "○ bridge down")}
         </text>
@@ -1172,21 +1381,43 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
         paddingLeft={1}
         paddingRight={1}
         height={termRows()}
+        onMouseScroll={(e: MouseEvent) => {
+          // Wheel over the chat panel scrolls turn by turn, like PgUp/PgDn.
+          // Needs useMouse tracking (see index.tsx).
+          const dir = e.scroll?.direction ?? (e.button === 64 ? "up" : e.button === 65 ? "down" : undefined);
+          if (dir === "up") scrollToPrevUser();
+          else if (dir === "down") scrollToNextUser();
+        }}
       >
-        <For each={histVis()}>
-          {(m) => (
-            <text fg={colorFor(m.who)} attributes={m.who === "think" ? TextAttributes.DIM : TextAttributes.NONE}>
-              {labelFor(m.who) + m.text}
-            </text>
-          )}
-        </For>
-        <box flexGrow={1} />
+        {/* Transcript owns the leftover space but can never push the input
+            off-screen: it clips instead. histVis already windows newest-first
+            by rows, so clipping is only a backstop for the open palette. */}
+        <box flexDirection="column" flexGrow={1} overflow="hidden">
+          <For each={histVis()}>
+            {(m) => (
+              <>
+                <Show when={m.who === "you"}>
+                  <box border borderStyle="heavy" borderColor={theme().inputBorder} opacity={0.6}>
+                    <text fg={colorFor(m.who)}>
+                      {labelFor(m.who) + m.text}
+                    </text>
+                  </box>
+                </Show>
+                <Show when={m.who !== "you"}>
+                  <text fg={colorFor(m.who)} attributes={m.who === "think" ? TextAttributes.DIM : TextAttributes.NONE}>
+                    {labelFor(m.who) + m.text}
+                  </text>
+                </Show>
+              </>
+            )}
+          </For>
+        </box>
         <Show when={streamText()}>
           <text fg={theme().dim} attributes={TextAttributes.DIM}>
             {streamText().slice(-400) + "▌"}
           </text>
         </Show>
-        <text fg={theme().warn}>{phase() || " "}</text>
+        <text fg={theme().warn}>{phase() || (histOff() > 0 ? "↑ scrolled back — PgDn / wheel ↓ for live" : " ")}</text>
         {/* The menu belongs to the prompt, so it renders directly above the
             input box — after the flexGrow spacer, not next to the transcript.
             An empty transcript is the common case, and placing it after the
@@ -1194,6 +1425,7 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
         <Show when={cmdOpen()}>
           <box
             flexDirection="column"
+            flexShrink={0}
             border
             borderStyle="heavy"
             borderColor={theme().inputBorder}
@@ -1214,7 +1446,7 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
             </For>
           </box>
         </Show>
-        <box border borderStyle="heavy" borderColor={theme().inputBorder} flexDirection="row">
+        <box border borderStyle="heavy" borderColor={theme().inputBorder} flexDirection="row" flexShrink={0}>
           <text fg={theme().ink}>{" "}</text>
           <text fg={mode() === "voice" ? theme().voiceBlue : theme().ink}>{mode() === "voice" ? "voice" : mode()}</text>
           <text fg={theme().ink}>{" -> "}</text>
