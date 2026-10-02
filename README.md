@@ -519,6 +519,19 @@ Historical steady-state claims kept for reference: TTFT 14–30 ms band
 59 ms / 3 s (RTF 0.020), TTS 141 ms (RTF 0.045). Today's box reads
 slower across the board than those rows.
 
+### Larger legs (2026-10-02)
+
+| Leg | Latency / throughput |
+|---|---|
+| Qwen3-1.7B Q4_K_M CPU sidecar (`backend=qwen17`, :8084, greedy 48 ids) | warm 7 s · server TTFT ~80 ms steady (557 ms first call) · decode **12.5 tok/s** stable over 3 reps |
+| Bonsai 27B worker | not runnable here: RAM guard refused (5.6 GB GGUF vs 3.9 GB available) — no tok/s |
+| Gemma-4-E4B sidecar | not runnable here: needs ~6 GB RAM |
+
+CUDA-graphs, engine features and kernel plots are blocked behind the
+2026-10-02 GPU wedge (`ERR!`, cold boot required) plus the pre-existing
+`src/inference` breakage — see `docs/plans/gpu-memory-guard.md` for the
+pre-execution guard plan written up after the incident.
+
 ### Capacity: VRAM-probed sessions (RTX 3050 4096 MB, Qwen3-0.6B)
 
 Recomputed 2026-10-02 via `src/models/runtime/capacity.py`
@@ -547,6 +560,8 @@ All plots in `benchmarks/results/plots_fused/` · engine bench in `benchmarks/en
 ### Inference
 
 - [3]: https://learn-inference.com/ | learn-inference.com - by learn-inference.com
+- [11]: https://udayan.co/writing/inference-engineering-101/ | Inference Engineering 101 - by Udayan
+- [12]: https://udayan.co/writing/voice-ai-inference-101/ | Voice AI Inference 101 - by Udayan
 
 ### Kernels
 
