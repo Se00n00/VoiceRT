@@ -344,6 +344,35 @@ The library default is off on purpose: delegation builds a *second* set of
 weights, so a bare `VoiceAgent()` that never asked for two brains should
 not pay for it. The app entry points are where that decision belongs.
 
+### Lazy worker: measured 2026-10-02
+
+The worker sidecar boots on the first delegate route, not at app start
+(`worker_eager: false`). Same box, live bridge, worker CPU-only
+(`--n-gpu-layers 0`):
+
+| | measured |
+|---|---|
+| Boot to ready (lazy) | **~40 s**, 2283 MB VRAM, 0 worker procs, `missing: []` |
+| Chat turn (front only) | **0.9–1.7 s**, no spawn |
+| First YES (cold worker) | route 0.1 s → first output **44 s** (spawn+load+prefill) → done **208 s** |
+| Steady YES (warm worker) | route ~1 s → done **~340 s**; direct `:8081` timings: 13.7 s prompt, decode **1.4 tok/s** |
+| RAM | 8 GB avail at boot → 6 GB with worker resident (5.6 GB GGUF vs 7.7 GB need at 16K ctx) |
+| VRAM | 2283 MB boot → 3676 MB post-turn (sidecar CUDA context alone costs ~886 MB despite `ngl=0`) |
+
+Two failure modes observed, both loud (no hangs): a sidecar can die
+minutes after a good boot (probable kernel OOM at ~6 GB avail vs ~7 GB
+need) — the next YES then fails fast with `Connection refused`; and one
+456 s worker turn died at the final TTS step with CUDA OOM (64 MB alloc,
+62 MB free). Worker turns on 4 GB are possible but fragile — see
+`docs/plans/gpu-memory-guard.md`.
+
+![turn anatomy](benchmarks/results/plots_voice/turn_anatomy.png)
+![decode tok/s by leg](benchmarks/results/plots_voice/toks_comparison.png)
+![footprint](benchmarks/results/plots_voice/footprint.png)
+
+Source data: `benchmarks/results/voice_lazy_20261002.json`, plots via
+`benchmarks/plot_voice_lazy.py` (300 dpi, no GPU needed to regenerate).
+
 ### The deep-agent loop (worker leg)
 
 ```

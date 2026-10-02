@@ -116,6 +116,23 @@ Earlier rows, kept for history: synthetic round-trip 308/827 ms,
 live turn 438/640 ms, LibriSpeech samples 531–858 / 1321–2590 ms
 (VRAM ~1940 MB — lighter legs than today's full stack).
 
+### Lazy worker turns (2026-10-02, Bonsai CPU sidecar `ngl=0`)
+
+| | measured |
+|---|---|
+| Boot to ready (lazy) | **~40 s**, 2283 MB VRAM, 0 worker procs |
+| First YES (cold worker) | route 0.1 s → first output **44 s** → done **208 s** |
+| Steady YES (warm worker) | route ~1 s → done **~340 s**; direct `:8081`: 13.7 s prompt, decode **1.4 tok/s** |
+| Footprint | RAM 8→6 GB avail; VRAM 2283→3676 MB (sidecar CUDA context ~886 MB despite `ngl=0`) |
+
+Observed failures (loud, no hangs): sidecar death minutes after boot
+(probable kernel OOM) → next YES fails fast `Connection refused`; one
+456 s turn died at TTS with CUDA OOM (64 MB alloc, 62 MB free).
+
+![turn anatomy](../benchmarks/results/plots_voice/turn_anatomy.png)
+![decode tok/s by leg](../benchmarks/results/plots_voice/toks_comparison.png)
+![footprint](../benchmarks/results/plots_voice/footprint.png)
+
 ## Per-leg spot checks
 
 Re-measured 2026-10-02 via `benchmarks/leg_profile.py` (steady-state of

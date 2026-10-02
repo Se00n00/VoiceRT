@@ -471,6 +471,28 @@ class LlmModel:
         return self._tok
 
     async def warm(self) -> "LlmModel":
+        # Pre-execution guard BEFORE weights load: refuses a doomed warm
+        # (wedged driver, second tenant, unfit VRAM/RAM) instead of hanging.
+        from src.models.runtime.guard import (
+            LEG_RAM_MB,
+            LEG_VRAM_MB,
+            preflight,
+        )
+
+        _be = str(getattr(self.config, "backend", ""))
+        if _be in SIDECAR_BACKENDS:
+            # Bonsai parks -ngl layers in VRAM: price them so the worker
+            # cannot silently claim a full card. Pure-CPU sidecars skip
+            # the GPU checks entirely.
+            from src.models.runtime.guard import sidecar_gpu_estimate
+
+            _need_gpu, _vram = sidecar_gpu_estimate(_be, self.config)
+            preflight(f"llm warm [{_be}]", vram_mb=_vram,
+                      needs_gpu=_need_gpu)
+        else:
+            preflight(f"llm warm [{_be}]",
+                      vram_mb=LEG_VRAM_MB.get(_be, 2000.0),
+                      ram_mb=LEG_RAM_MB.get(_be, 1500.0))
         # warm tokenizer first (lightweight) — except sidecar legs, which
         # need no local tokenizer (GGUF repos ship none; gated downloads
         # would fail here instead of at the leg with a clear message).

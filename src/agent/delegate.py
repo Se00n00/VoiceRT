@@ -103,6 +103,10 @@ class DelegateConfig:
     backstop_min_score: int = 2
     max_task_chars: int = 1200
     emit_route: bool = True
+    # Worker sidecar warm policy: False (default) boots it lazily on the
+    # first delegate route (zero footprint until then); True warms eagerly
+    # at app boot as before. Mirrors VoiceAgentConfig.worker_eager.
+    worker_eager: bool = False
 
     def with_overrides(self, **kw) -> "DelegateConfig":
         return replace(self, **{k: v for k, v in kw.items()
@@ -169,6 +173,7 @@ def load_config(explicit: str | None = None) -> DelegateConfig:
         backstop_min_score=max(1, _int("backstop_min_score", 2)),
         max_task_chars=max(200, _int("max_task_chars", 1200)),
         emit_route=_flag("emit_route", True),
+        worker_eager=_flag("worker_eager", False),
     )
 
 

@@ -1,9 +1,12 @@
 # PLAN: pre-execution GPU memory guard
 
-Status: proposed · Author: session 2026-10-02 · Trigger: RTX 3050 wedged
-into `ERR!` state (torch CUDA `False`, cold boot required) after a `kill -9`
-landed mid-CUDA-compile, plus the standing rule that a second GPU process
-means OOM on this 4GB box.
+Status: steps 1–2 implemented 2026-10-02 (`src/models/runtime/guard.py` +
+`tests/runtime/test_guard.py`, warm paths wired, enforcing by default).
+Steps 3–4 (hot-path gates, SIGTERM handlers, `/health` field, TUI badge)
+remain open. Trigger: RTX 3050 wedged into `ERR!` state (torch CUDA
+`False`, cold boot required) after a `kill -9` landed mid-CUDA-compile,
+plus the standing rule that a second GPU process means OOM on this 4GB
+box.
 
 Goal: refuse or serialize work **before** the GPU can wedge — never clean
 up after. A guard that fires post-mortem is a log line, not a guard.

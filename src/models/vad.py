@@ -53,6 +53,9 @@ class VadModel:
         return self._leg
 
     async def warm(self) -> "VadModel":
+        from src.models.runtime.guard import VAD_RAM_MB, preflight
+
+        preflight("vad warm", needs_gpu=False, ram_mb=VAD_RAM_MB)
         await asyncio.to_thread(self._backend)
         return self
 

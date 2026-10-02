@@ -17,6 +17,12 @@
 
 enabled: true
 
+# Worker sidecar warm policy: false (default) keeps Bonsai completely
+# unloaded — no CPU RAM, no GPU VRAM — until the first delegate route
+# boots it on demand. True restores eager boot-time warm. VOICE_DELEGATE=0
+# remains the full single-brain escape (no worker at all).
+worker_eager: false
+
 # --- front model -----------------------------------------------------------
 #
 # placement decides where the front model's weights live. This is the knob

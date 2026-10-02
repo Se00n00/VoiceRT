@@ -137,6 +137,11 @@ class VoiceAgentConfig:
     # two-brain design is the product decision, not a library detail.
     delegate: bool = False
     delegate_config: str | None = None
+    # Worker sidecar warm policy. False (default): the Bonsai worker is NOT
+    # warmed at boot — zero CPU/GPU footprint until the first delegate
+    # route boots it on demand (see _ensure_worker). True: warm eagerly as
+    # before. `configs/delegate.yaml` may also set `worker_eager: true`.
+    worker_eager: bool = False
 
 
 def _lc_messages(history: list) -> list:
@@ -281,6 +286,17 @@ class VoiceAgent:
             self._sched = None
         self.missing: list = []
         self._warmed = False
+        # Lazy-worker state (see _ensure_worker): the Bonsai sidecar boots
+        # on first delegate route, not at app warm. A refusal latches so
+        # later YES turns fail fast with the same reason; an explicit
+        # /model switch to a warmed leg resets both (bridge.py).
+        self._worker_unavailable: str | None = None
+        self._worker_warmed = False
+        self._worker_eager = bool(getattr(cfg, "worker_eager", False))
+        if self.delegate_cfg is not None and bool(
+                getattr(self.delegate_cfg, "worker_eager", False)):
+            # YAML asks eager too: either source opting in enables it.
+            self._worker_eager = True
         self._locks: dict[str, asyncio.Lock] = {}
         self._pending: dict[str, list[str]] = {}
         self.approvals: dict[str, set[str]] = {}
@@ -392,11 +408,19 @@ class VoiceAgent:
             if name == "tts" and not self.config.speak_text_turns:
                 self.missing.append("tts leg: skipped (text-only)")
                 continue
+            if (name == "llm" and self.delegate_cfg is not None
+                    and not self._worker_eager):
+                # Lazy worker: no footprint until the first delegate route
+                # boots it on demand. Deliberately NOT a missing entry —
+                # nothing failed.
+                continue
             leg = getattr(self, name, None)
             if leg is None:
                 continue
             try:
                 await leg.warm()
+                if name == "llm":
+                    self._worker_warmed = True
             except Exception as exc:  # noqa: BLE001 - omit-and-report
                 self.missing.append(f"{name} leg: {exc}")
         try:
@@ -615,6 +639,46 @@ class VoiceAgent:
         except Exception as exc:  # noqa: BLE001 - fall through to the worker
             return "", f"chat-error:{type(exc).__name__}"
 
+    async def _ensure_worker(self) -> str:
+        """Warm the lazy worker leg on first delegate route.
+
+        Returns "" when the worker is usable, else the refusal reason.
+        A refusal latches in _worker_unavailable so later YES turns fail
+        fast with the same message instead of re-trying a doomed warm.
+        An explicit /model switch to a warmed leg resets the latch (see
+        bridge.py model switch).
+        """
+        if self.delegate_cfg is None:
+            return ""
+        if getattr(self, "_worker_unavailable", None):
+            return str(self._worker_unavailable)
+        if getattr(self, "_worker_warmed", False):
+            return ""
+        leg = getattr(self, "llm", None)
+        if leg is None:
+            reason = "no worker leg constructed"
+            self._worker_unavailable = reason
+            return reason
+        try:
+            await leg.warm()
+        except Exception as exc:  # noqa: BLE001 - latch, report, move on
+            reason = str(exc)[:200] or type(exc).__name__
+            self._worker_unavailable = reason
+            try:
+                self.missing.append(f"llm leg: {reason}")
+            except Exception:
+                pass
+            return reason
+        self._worker_warmed = True
+        return ""
+
+    @staticmethod
+    def _worker_down_notice(task: str, reason: str) -> tuple:
+        """Transcript entry for a delegated turn the worker could not run."""
+        return (str(task), (
+            "I handed that to the worker agent, but it could not "
+            f"start, so nothing was done: {reason}"), "")
+
     async def _agent_invoke(self, text: str, *, sid: str | None,
                             cwd: str, confirm_fn, system_suffix: str,
                             out_turns: list):
@@ -821,6 +885,11 @@ class VoiceAgent:
         correct result can't be garbled on its way out.
         """
         if self.front_llm is None or self.delegate_cfg is None:
+            reason = await self._ensure_worker()
+            if reason:
+                out_turns.append(
+                    self._worker_down_notice(str(text), reason))
+                return
             async for ev in self._agent_invoke(
                     text, sid=sid, cwd=cwd, confirm_fn=confirm_fn,
                     system_suffix=system_suffix, out_turns=out_turns):
@@ -843,6 +912,11 @@ class VoiceAgent:
             if not reply:
                 # Front model returned nothing. Falling through to the
                 # worker beats answering with silence.
+                reason = await self._ensure_worker()
+                if reason:
+                    out_turns.append(
+                        self._worker_down_notice(str(text), reason))
+                    return
                 async for ev in self._agent_invoke(
                         text, sid=sid, cwd=cwd, confirm_fn=confirm_fn,
                         system_suffix=system_suffix, out_turns=out_turns):
@@ -852,6 +926,10 @@ class VoiceAgent:
             return
 
         task = str(route.text or "").strip() or str(text)
+        reason = await self._ensure_worker()
+        if reason:
+            out_turns.append(self._worker_down_notice(task, reason))
+            return
         before = len(out_turns)
         async for ev in self._agent_invoke(
                 task, sid=sid, cwd=cwd, confirm_fn=confirm_fn,
@@ -910,8 +988,12 @@ class VoiceAgent:
 
         ``warm()`` collects leg failures instead of raising, so a dead
         worker is otherwise invisible until a delegated turn answers with
-        nothing at all.
+        nothing at all. Also covers the lazy-worker latch: a refused
+        on-demand warm reports the same way as a failed boot warm.
         """
+        latched = getattr(self, "_worker_unavailable", None)
+        if latched:
+            return str(latched)[:200]
         for entry in list(getattr(self, "missing", None) or []):
             text = str(entry)
             if text.startswith("llm leg:"):
@@ -1075,6 +1157,10 @@ class VoiceAgent:
             task = str(route.text or "").strip() or str(text)
         else:
             task = str(text)
+
+        reason = await self._ensure_worker()
+        if reason:
+            return self._worker_down_notice(task, reason)[1]
 
         self.agent = self._build_agent(self._extra_tools or [])
         res = await self.agent.ainvoke(

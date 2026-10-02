@@ -329,6 +329,17 @@ async def switch_model(name: str) -> dict:
                 old_leg.close()
         except Exception:
             pass
+        try:
+            # The new sidecar leg above only ATTACHED to the old server (its
+            # port was taken); now that the old server is closed, warm again
+            # so it spawns its own. Otherwise the swap commits a leg that
+            # points at a dead port.
+            new_leg = getattr(new_llm, "_leg", None)
+            if getattr(new_leg, "is_sidecar", False) and not new_leg._health():
+                await new_llm.warm()
+        except Exception as exc:
+            return {"kind": "error",
+                    "message": f"re-warm after switch failed: {exc}"[:300]}
         agent.llm = new_llm
         try:
             del old
@@ -338,6 +349,13 @@ async def switch_model(name: str) -> dict:
         try:  # drop stale llm-leg entries; keep the rest of the report
             agent.missing = [m for m in (getattr(agent, "missing", []) or [])
                              if not str(m).startswith("llm leg")]
+        except Exception:
+            pass
+        # Explicit switch to a freshly warmed+smoked leg: mark usable and
+        # clear any latched worker refusal (direct ask beats the latch).
+        try:
+            agent._worker_warmed = True
+            agent._worker_unavailable = None
         except Exception:
             pass
         _current_model["name"] = name

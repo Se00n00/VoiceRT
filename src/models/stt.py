@@ -59,6 +59,9 @@ class SttModel:
         return self._proc
 
     async def warm(self) -> "SttModel":
+        from src.models.runtime.guard import STT_RAM_MB, STT_VRAM_MB, preflight
+
+        preflight("stt warm", vram_mb=STT_VRAM_MB, ram_mb=STT_RAM_MB)
         await asyncio.to_thread(self._backend)
         await asyncio.to_thread(self._processor)
         return self
