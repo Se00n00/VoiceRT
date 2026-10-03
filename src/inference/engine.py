@@ -429,16 +429,16 @@ class InferenceEngine:
                 else:
                     empty_streak = 0
                 for o in outs:
-                # append to results via internal sg lookup
-                results[o.request_id].append(o.token_id)
-                if o.finished and o.request_id in self._req_to_sg:
-                    # ensure we capture final output_token_ids from sequence
-                    sg = self._req_to_sg.get(o.request_id)
-                    if sg is not None:
-                        results[o.request_id] = list(sg.seq.output_token_ids)
-                        # strip trailing EOS if present and not ignore
-                        if results[o.request_id] and results[o.request_id][-1] in sp.stop_token_ids and not sp.ignore_eos:
-                            results[o.request_id] = results[o.request_id][:-1]
+                    # append to results via internal sg lookup
+                    results[o.request_id].append(o.token_id)
+                    if o.finished and o.request_id in self._req_to_sg:
+                        # ensure we capture final output_token_ids from sequence
+                        sg = self._req_to_sg.get(o.request_id)
+                        if sg is not None:
+                            results[o.request_id] = list(sg.seq.output_token_ids)
+                            # strip trailing EOS if present and not ignore
+                            if results[o.request_id] and results[o.request_id][-1] in sp.stop_token_ids and not sp.ignore_eos:
+                                results[o.request_id] = results[o.request_id][:-1]
         finally:
             # Never leak blocks / poison request_ids on failure paths
             # (stall, forward crash, caller timeout): free what is mine.

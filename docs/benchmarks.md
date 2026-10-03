@@ -2,9 +2,9 @@
 
 Legs, turns and routing re-measured 2026-10-02 (means over n=4 steady-state
 turns unless noted; first-call warmup excluded). Rows marked historical
-were not re-run: engine benches need a working `src.inference` (broken,
-do-not-touch), kernel microbenches need a long exclusive GPU session, and
-the concurrency/cost tables are a Qwen2.5-era reference stack.
+were not re-run: kernel microbenches need a long exclusive GPU session,
+and the concurrency/cost tables are a Qwen2.5-era reference stack. Engine
+benches were re-run 2026-10-03 after the `src.inference` parser fix.
 
 All commands assume `PYTHONPATH=.` from inside `voice-pipeline/`.
 
@@ -22,9 +22,23 @@ All commands assume `PYTHONPATH=.` from inside `voice-pipeline/`.
 
 ## LLM: inference engine features (Qwen3-0.6B, real QwenRunner, `num_blocks=16`)
 
-Historical — not re-run 2026-10-02 (`src.inference` is unimportable:
-pre-existing IndentationError, do-not-touch). Real `QwenRunner` only —
-isolated subprocess per config; `DummyRunner` removed.
+Re-run 2026-10-03 after fixing the `engine.py:431` indentation (the file
+imports again). Real `QwenRunner` only — isolated subprocess per config;
+`DummyRunner` removed. Workload: 8 requests × 32 tokens (256 total).
+
+| config | tok/s | delta vs base |
+|---|---|---|
+| base (no features) | 39.5 | — |
+| + prefix caching | 35.9 | -9.1% |
+| + chunked prefill | 34.4 | -12.8% |
+| + CUDA graph | 37.8 | -4.2% |
+| all features | 34.7 | -12.0% |
+
+Honest read: on this all-distinct-prompts workload the features do not pay —
+prefix cache records 0 hits and CUDA graphs stay enabled-but-never-captured,
+so each feature is pure overhead and base wins.
+
+<details><summary>Earlier run (different workload mix)</summary>
 
 | config | 32 tok/req: tok/s | delta | 8 tok/req: tok/s | delta |
 |---|---|---|---|---|
@@ -34,7 +48,7 @@ isolated subprocess per config; `DummyRunner` removed.
 | + CUDA graph | 48.4 | **+15.3%** | 31.8 | **+46.7%** |
 | all features | 48.0 | **+14.4%** | 32.4 | **+49.4%** |
 
-Longer generations amortize prefill; short bursts benefit most from chunked / CUDA-graph.
+</details>
 
 ## Fused kernel microbenchmarks (single layer vs eager torch)
 
@@ -53,8 +67,8 @@ Parity: `max_err 9.7e-04` (fp16) under `1e-2`. VRAM `check_budget` passes at B=8
 
 Plots:
 
-![qwen fused B](benchmarks/results/plots_fused/qwen-fused-layer-B.png)
-![qwen fused seq](benchmarks/results/plots_fused/qwen-fused-layer-seq.png)
+![qwen fused B](../benchmarks/results/plots_fused/qwen-fused-layer-B.png)
+![qwen fused seq](../benchmarks/results/plots_fused/qwen-fused-layer-seq.png)
 
 ### STT — `whisper_fused_decoder_layer` (6 layers, B=1..8)
 
@@ -66,8 +80,8 @@ Plots:
 
 Plots:
 
-![whisper fused B](benchmarks/results/plots_fused/whisper-fused-layer-B.png)
-![whisper fused seq](benchmarks/results/plots_fused/whisper-fused-layer-seq.png)
+![whisper fused B](../benchmarks/results/plots_fused/whisper-fused-layer-B.png)
+![whisper fused seq](../benchmarks/results/plots_fused/whisper-fused-layer-seq.png)
 
 ### TTS — `in1d_silu` / `conv1d_silu` / `postprocess_batched`
 
@@ -78,8 +92,8 @@ Plots:
 
 Plots:
 
-![tts fused B](benchmarks/results/plots_fused/tts-fused-B.png)
-![tts fused L](benchmarks/results/plots_fused/tts-fused-L.png)
+![tts fused B](../benchmarks/results/plots_fused/tts-fused-B.png)
+![tts fused L](../benchmarks/results/plots_fused/tts-fused-L.png)
 
 ## LLM: latency vs concurrency vs generation length (reference Qwen2.5-0.5B stack — historical, not re-run)
 

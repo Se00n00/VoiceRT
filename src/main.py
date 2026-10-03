@@ -140,7 +140,7 @@ class VoiceAgentConfig:
     # Worker sidecar warm policy. False (default): the Bonsai worker is NOT
     # warmed at boot — zero CPU/GPU footprint until the first delegate
     # route boots it on demand (see _ensure_worker). True: warm eagerly as
-    # before. `configs/delegate.yaml` may also set `worker_eager: true`.
+    # before. The delegate YAML may also set `worker_eager: true`.
     worker_eager: bool = False
 
 

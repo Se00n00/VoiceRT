@@ -139,9 +139,9 @@
 ─── 07 / INFERENCE ───────────────────────────────────────────────────────────────────────────
 
   paged KV · FCFS admission · continuous batching · stall detection at 500 empty steps
-  ✗ BLOCKED: src/inference/engine.py:431 - `for o in outs:` body dedented, file does
-    not parse, src.inference unimportable → 14 of 564 python tests error.
-    One 11-line re-indent. Not on the live path: LlmModel is fused or a llama.cpp sidecar.
+  ✓ FIXED 2026-10-03: the `for o in outs:` body is re-indented, src.inference
+    imports, and the 14 collection errors are gone (634 run, 0 errors).
+    Not on the live path: LlmModel is fused or a llama.cpp sidecar.
 
 ─── 08 / TUI (v0.0.1) ────────────────────────────────────────────────────────────────────────
 
@@ -166,7 +166,7 @@
 ![VRAM 4GB](https://img.shields.io/badge/VRAM-4GB-orange)
 ![TTFT 14ms](https://img.shields.io/badge/TTFT-14ms-brightgreen)
 ![TUI 158 checks](https://img.shields.io/badge/TUI-158_checks-brightgreen)
-![Python 550/564](https://img.shields.io/badge/python-550%2F564-yellow)
+![Python 630/634](https://img.shields.io/badge/python-630%2F634-brightgreen)
 
 **Full voice loop — speech in, speech out — on a single 4GB laptop GPU.** Mic/wav → text → reply → voice in ≈0.5–1.0 s, no cloud.
 
@@ -195,7 +195,7 @@ are the cited detail:
 | 04 | [Sessions](docs/architecture/04-sessions.md) | identity, window ownership, persistence, resume |
 | 05 | [Models](docs/architecture/05-models.md) | the four legs, `LlmConfig`, 7 backends, streaming, VRAM |
 | 06 | [Processes](docs/architecture/06-processes.md) | bridge/server endpoints, and the startup-warm trap |
-| 07 | [Inference](docs/architecture/07-inference.md) | the custom runtime, and the syntax error blocking it |
+| 07 | [Inference](docs/architecture/07-inference.md) | the custom runtime (parser fixed 2026-10-03, bench re-run) |
 | 08 | [TUI](docs/architecture/08-tui.md) | command palette, shades, exit card |
 
 Docs: [`docs/architecture/`][arch-index] · [`docs/architecture.md`](docs/architecture.md) (legacy single-file) · [`docs/capacity.md`](docs/capacity.md) · [`docs/inference_engine.md`](docs/inference_engine.md) · [`docs/benchmarks.md`](docs/benchmarks.md) · [`docs/README.md`](docs/README.md)
@@ -246,6 +246,8 @@ Docs: [`docs/architecture/`][arch-index] · [`docs/architecture.md`](docs/archit
 
 **How a kernel is built (same for Qwen/Whisper/Kokoro):**
 `src/models/triton_kernels/qwen_fused.py` — *one file* = all fused kernels + `@triton.testing.perf_report` bench + torch exact fallback. `src/models/pytorch/qwen.py` is the PyTorch reference. `src/models/qwen.py:QwenFused` loops it `28×` with `KVCacheBatched` and `check_budget`. Same pattern for `whisper_fused` (6×) and `tts_fused`. Facades `src/models/llm.py:SttModel/TtsModel` are mandatory fused (no legacy `engines/*` fallback). `LlmModel(use_paged=True)` wraps the same weights in the paged engine; `VoiceAgent(llm_paged=True)` / `server.py` on CUDA activates it — `GET /health → engine.active` proves it.
+
+**Inference engine (live, re-verified 2026-10-03):** paged KV cache, continuous batching, prefix caching, chunked prefill, CUDA graphs — `src/inference/` runs the real QwenRunner (28 layers, real weights, no dummy fallback) behind `InferenceEngine.generate`, with FCFS admission, block reservation, and a 500-empty-step stall watchdog. Throughput re-measured below via `benchmarks/engine_bench.py`.
 
 Verbose specs → docs: capacity model, queue, Triton details, API and config.
 
@@ -417,9 +419,9 @@ from packed context — see PLAN.md (local-only).
 
 Legs, turns and routing re-measured 2026-10-02 (means over n=4 steady-state
 turns unless noted; first-call warmup excluded). Rows marked historical
-were not re-run: engine benches need a working `src.inference` (broken,
-do-not-touch), kernel microbenches need a long exclusive GPU session, and
-the concurrency/cost tables are a Qwen2.5-era reference stack.
+were not re-run: kernel microbenches need a long exclusive GPU session,
+and the concurrency/cost tables are a Qwen2.5-era reference stack. Engine
+benches were re-run 2026-10-03 after the `src.inference` parser fix.
 
 All commands assume `PYTHONPATH=.` from inside `voice-pipeline/`.
 
@@ -437,9 +439,25 @@ All commands assume `PYTHONPATH=.` from inside `voice-pipeline/`.
 
 ### LLM: inference engine features (Qwen3-0.6B, real QwenRunner, `num_blocks=16`)
 
-Historical — not re-run 2026-10-02 (`src.inference` is unimportable:
-pre-existing IndentationError, do-not-touch). Real `QwenRunner` only —
-isolated subprocess per config; `DummyRunner` removed.
+Re-run 2026-10-03 after fixing the `engine.py:431` indentation (the file
+imports again). Real `QwenRunner` only — isolated subprocess per config;
+`DummyRunner` removed. Workload: 8 requests × 32 tokens (256 total).
+
+| config | tok/s | delta vs base |
+|---|---|---|
+| base (no features) | 39.5 | — |
+| + prefix caching | 35.9 | -9.1% |
+| + chunked prefill | 34.4 | -12.8% |
+| + CUDA graph | 37.8 | -4.2% |
+| all features | 34.7 | -12.0% |
+
+Honest read: on this all-distinct-prompts workload the features do not
+pay — prefix cache records 0 hits and CUDA graphs stay enabled-but-never-
+captured, so each feature is pure overhead and base wins. (Earlier run on
+a shorter-burst workload showed up to +49.4% for all-features; kept below
+for reference.)
+
+<details><summary>Earlier run (different workload mix)</summary>
 
 | config | 32 tok/req: tok/s | delta | 8 tok/req: tok/s | delta |
 |---|---|---|---|---|
@@ -449,7 +467,7 @@ isolated subprocess per config; `DummyRunner` removed.
 | + CUDA graph | 48.4 | **+15.3%** | 31.8 | **+46.7%** |
 | all features | 48.0 | **+14.4%** | 32.4 | **+49.4%** |
 
-Longer generations amortize prefill; short bursts benefit most from chunked / CUDA-graph.
+</details>
 
 ### Fused kernel microbenchmarks (single layer vs eager torch)
 
