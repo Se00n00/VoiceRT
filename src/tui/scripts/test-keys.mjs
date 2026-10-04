@@ -64,6 +64,40 @@ async function clearInput() {
   }
   await settle(60);
 }
+async function runCmd(cmd) {
+  await clearInput();
+  await setup.mockInput.typeText(cmd, 4);
+  await settle(70);
+  await setup.mockInput.pressKey("RETURN");
+  await settle(280);
+}
+
+// Transcript text only. Strip the left panel when shown (22 cols + wall),
+// drop the frame art. When hidden the rows start at the chat wall and the
+// strip regex below matches nothing, so nothing is stripped.
+const BOX_ART = /[─-◿▀-▟]/u;
+// A line is transcript text only if readable characters survive stripping the
+// frame art and the level bars.
+const panelLines = () =>
+  frame()
+    .split("\n")
+    .map((l) => l.replace(/^.{22}(?=┃)/, ""))
+    .map((l) => l.replace(BOX_ART, " ").replace(/┃/g, " ").trim())
+    // The prompt's own row reads "auto -> <placeholder>"; it is chrome, not a
+    // message, and it is always the last row. The ›› status line is chrome
+    // too (former sys logs live there now, never in the transcript).
+    .filter((l) => !/^(auto|voice) -> /.test(l))
+    .filter((l) => !l.includes("››"))
+    .filter((l) => /[a-z0-9]/i.test(l))
+    .map((l) => l.replace(/\s{2,}.*$/, "").trim());
+const lastLine = () => panelLines().at(-1) ?? "";
+// The ›› status row above the input box (one row, never scrolling).
+const statusText = () =>
+  frame()
+    .split("\n")
+    .filter((l) => l.includes("››"))
+    .map((l) => l.slice(l.indexOf("››")))
+    .join(" ");
 
 // The bridge badge is set by an async health probe, so a fixed sleep races it:
 // the panel legitimately shows "…" until the probe answers. Poll instead of
@@ -79,13 +113,22 @@ async function waitForBridgeLine(ms = 8000) {
 await settle(300);
 await waitForBridgeLine();
 
-console.log("\nboot");
+console.log("\nboot (panel hidden by default)");
 check("prompt renders the mode", prompt().startsWith("auto ->"), prompt());
 check("text-mode placeholder shows", frame().includes("Add a follow-up"));
-check("bridge state shows", flat().includes("bridge down"), (flat().match(/.{0,4}bridge.{0,10}/) ?? ["<none>"])[0]);
-check("mic badge starts ON", badge() === "[●] MIC ON", badge());
-check("session line shows", flat().includes("auto · "));
+check("no left panel while hidden", !flat().includes("info & control"));
 check("left panel rows do not overflow the frame", frame().replace(/\n$/, "").split("\n").length === 30, `${frame().replace(/\n$/, "").split("\n").length} rows`);
+
+console.log("\n/panel shows and hides the dashboard");
+await runCmd("/panel");
+check("panel opens on command", statusText().includes("panel shown"), JSON.stringify(statusText()));
+check("mic badge starts ON", badge() === "[●] MIC ON", badge());
+check("header strip shows mic status", flat().includes("MIC STATUS : ON"));
+check("session line shows", flat().includes("auto · "));
+check("bridge state shows", flat().includes("bridge down"), (flat().match(/.{0,4}bridge.{0,10}/) ?? ["<none>"])[0]);
+check("agent readiness lives in the left panel", /agent (ready|down|starting|failed)/.test(flat()));
+await runCmd("/panel");
+check("panel closes on command", statusText().includes("panel hidden") && badge() === "<no badge>");
 
 // Both borders are heavy: square corners, thick rules. Guards against a
 // regression to "rounded" on the panel or "single" on the prompt.
@@ -98,11 +141,11 @@ check("left panel rows do not overflow the frame", frame().replace(/\n$/, "").sp
   check("panel sides are heavy verticals", lines.filter((l) => l.trimStart().startsWith("┃")).length >= 2);
   check("input border is heavy too", !!inputBox, inputBox ?? "<no heavy input box>");
   check("input box has no rounded corners", !frame().includes("┌"));
-  // Two heavy frames exist (panel + prompt); the panel's is the only one that
-// is not itself nested inside the panel's right wall.
-const frameHeads = frame().split("\n").filter((l) => l.includes("┏"));
-  check("exactly two heavy frames (panel + input)", frameHeads.length === 2, `${frameHeads.length}`);
-  check("only the panel frame sits at the panel column", frameHeads.filter((l) => !l.trimStart().startsWith("┃")).length === 1, JSON.stringify(frameHeads.map((l) => l.trimStart().slice(0, 4))));
+  // Two ┏ rows exist (row 0 carries both the widget top and the panel
+  // top; the prompt frame is nested inside the panel's right wall).
+  const frameHeads = frame().split("\n").filter((l) => l.includes("┏"));
+  check("exactly two heavy-frame rows (top strip + input)", frameHeads.length === 2, `${frameHeads.length}`);
+  check("only the top row starts at column 0", frameHeads.filter((l) => l.startsWith("┏")).length === 1, JSON.stringify(frameHeads.map((l) => l.trimStart().slice(0, 4))));
 }
 
 console.log("\ntyping");
@@ -124,15 +167,13 @@ check("second tab returns to auto", flat().includes("mode → auto (text + LLM, 
 check("text placeholder restored", frame().includes("Add a follow-up"));
 
 console.log("\nletter shortcuts are case-insensitive (empty prompt)");
-const micBefore = badge();
 await setup.mockInput.pressKey("M", { shift: true });
 await settle();
-const micAfter = badge();
-check("shift+M toggled the mic badge", micBefore !== micAfter, `${micBefore} -> ${micAfter}`);
+check("shift+M toggled the mic (status)", statusText().includes("mic off"), JSON.stringify(statusText()));
 check("shift+M never typed an M", !prompt().includes("M"), prompt());
 await setup.mockInput.pressKey("M", { shift: true });
 await settle();
-check("shift+M toggles it back", badge() === micBefore, `${badge()} vs ${micBefore}`);
+check("shift+M toggles it back", statusText().includes("mic on"), JSON.stringify(statusText()));
 
 console.log("\nshortcuts never leak into a non-empty prompt");
 await setup.mockInput.typeText("busy", 5);
@@ -149,26 +190,6 @@ await setup.mockInput.pressKey("V", { shift: true });
 await settle();
 check("no stray V in the prompt", !prompt().includes("V"), prompt());
 check("v explains the mode requirement", flat().includes("Tab to switch"), flat().slice(-220));
-
-// Transcript text only. Strip the 18-column left panel, then drop the frame
-// art. Characters, not regex ranges: ┃/─ are all > U+2500, so a /[^\u2500-\u25ff]/
-// class would wrongly exclude the row text. Anchoring on the wall after the
-// slice keeps the filter honest about what it removes.
-const BOX_ART = /[─-◿▀-▟]/u;
-// A line is transcript text only if readable characters survive stripping the
-// frame art and the level bars. Character classes, not ranges: ┃/─/█/▀ all sit
-// above U+2500, so an inverted-range test would also drop real message text.
-const panelLines = () =>
-  frame()
-    .split("\n")
-    .map((l) => l.slice(18))
-    .map((l) => l.replace(BOX_ART, " ").replace(/┃/g, " ").trim())
-    // The prompt's own row reads "auto -> <placeholder>"; it is chrome, not a
-    // message, and it is always the last row.
-    .filter((l) => !/^(auto|voice) -> /.test(l))
-    .filter((l) => /[a-z0-9]/i.test(l))
-    .map((l) => l.replace(/\s{2,}.*$/, "").trim());
-const lastLine = () => panelLines().at(-1) ?? "";
 
 console.log("\nhistory scrollback (real sequences: mock pressKey has no PageUp entry and would type literal text)");
 const liveLines = () => panelLines().join("\n");
@@ -226,7 +247,7 @@ const MENU_CMDS = "(?:new|cwd|clear|model|mode|mic|voice|shade|opencode|template
 const menuRows = () =>
   frame()
     .split("\n")
-    .map((l) => l.replace(/^.{18}┃ ?/, "").replace(/^┃/, ""))
+    .map((l) => l.replace(/^.{22}(?=┃)/, "").replace(/^┃ ?/, "").replace(/^┃ ?/, ""))
     .filter((l) => new RegExp(`^[▸ ]\\s*/${MENU_CMDS}\\b`).test(l))
     .map((l) => l.replace(/┃.*$/, "").trimEnd());
 const inputText = () => inputRaw().trim();
@@ -354,41 +375,34 @@ await clearInput();
 // messages can't be mistaken for command output.
 console.log("\nevery command dispatches");
 const micBadgeNow = () => (frame().match(/\[.\] MIC (?:ON|OFF)/) ?? [""])[0];
-async function runCmd(cmd) {
-  await clearInput();
-  await setup.mockInput.typeText(cmd, 4);
-  await settle(70);
-  await setup.mockInput.pressKey("RETURN");
-  await settle(280);
-}
 await settle(900); // drain boot()'s async pushes
 
 const CMD_CASES = [
   // /help prints two lines, so match on the whole window rather than the last.
   ["/help", () => panelLines().some((l) => l.includes("/new /cwd /clear"))],
-  ["/mode", () => lastLine() === "mode: auto (Tab toggles auto ↔ voice)"],
-  ["/mode voice", () => lastLine() === "mode → voice"],
-  ["/mode auto", () => lastLine() === "mode → auto"],
+  ["/mode", () => statusText().includes("mode: auto (Tab toggles auto ↔ voice)")],
+  ["/mode voice", () => statusText().includes("mode → voice")],
+  ["/mode auto", () => statusText().includes("mode → auto")],
   ["/mode bogus", () => lastLine() === "mode must be auto|voice"],
-  ["/cwd", () => /^cwd \//.test(lastLine())],
-  ["/cwd /tmp", () => lastLine() === "cwd /tmp"],
-  ["/mic off", () => micBadgeNow() === "[○] MIC OFF"],
-  ["/mic on", () => micBadgeNow() === "[●] MIC ON"],
-  ["/mic", () => micBadgeNow() === "[○] MIC OFF"],
+  ["/cwd", () => /cwd \//.test(statusText())],
+  ["/cwd /tmp", () => statusText().includes("cwd /tmp")],
+  ["/mic off", () => statusText().includes("mic off")],
+  ["/mic on", () => statusText().includes("mic on")],
+  ["/mic", () => statusText().includes("mic off")],
   // Guard the fix: the guard used to match only the exact strings, so a bad
   // argument fell through to the unknown handler and said "did you mean /mic?"
   ["/mic bogus", () => lastLine() === "usage: /mic [on|off]"],
-  ["/shade", () => lastLine().includes("● green")],
-  ["/shade blue", () => lastLine() === "shade → blue (monotonic; backdrop unchanged)"],
-  ["/shade none", () => lastLine() === "shade → none (default palette)"],
+  ["/shade", () => statusText().includes("● green")],
+  ["/shade blue", () => statusText().includes("shade → blue (monotonic; backdrop unchanged)")],
+  ["/shade none", () => statusText().includes("shade → none (default palette)")],
   ["/shade junk", () => lastLine().startsWith("usage: /shade")],
   ["/nope", () => lastLine() === "unknown /nope — /help"],
   // Typo suggestions: prefix matching alone missed these entirely.
   ["/modle", () => lastLine().includes("did you mean /mode")],
   ["/clea", () => lastLine().includes("did you mean /clear")],
-  ["/voice", () => lastLine().includes("voice lives in voice mode")],
+  ["/voice", () => statusText().includes("voice lives in voice mode")],
   ["/model", () => lastLine().includes("could not reach /model")],
-  ["/template", () => lastLine().includes("40 turns") && panelLines().some((l) => l.includes("todos: ✓ List files | ✓ Group by type"))],
+  ["/template", () => panelLines().some((l) => l.includes("40 turns")) && panelLines().some((l) => l.includes("todos: ✓ List files | ✓ Group by type"))],
 ];
 for (const [cmd, verify] of CMD_CASES) {
   await runCmd(cmd);
@@ -400,7 +414,7 @@ check("user turns render in input-style boxes", frame().split("\n").filter((l) =
 
 console.log("\nenter runs the text you typed, not the top match");
 await runCmd("/mode");
-check("a bare /mode ran /mode, not /model", lastLine() === "mode: auto (Tab toggles auto ↔ voice)", JSON.stringify(lastLine()));
+check("a bare /mode ran /mode, not /model", statusText().includes("mode: auto (Tab toggles auto ↔ voice)"), JSON.stringify(statusText()));
 await clearInput();
 await setup.mockInput.typeText("/mo", 4);
 await settle();
@@ -411,17 +425,50 @@ await settle();
 // typed ("/mode") submits that text instead; neither path runs /model.
 await setup.mockInput.pressKey("RETURN");
 await settle();
-check("enter on a prefix runs the highlighted row", lastLine().startsWith("mode:"), JSON.stringify(lastLine()));
+check("enter on a prefix runs the highlighted row", statusText().includes("mode:"), JSON.stringify(statusText()));
 check("enter never silently ran the other match", !panelLines().includes("could not reach /model"), JSON.stringify(panelLines().slice(-3)));
+
+console.log("\nstatus line owns the sys logs (transcript keeps conversation only)");
+await runCmd("/mode voice");
+check("ack shows above the input", statusText().includes("mode → voice"), JSON.stringify(statusText()));
+check("ack never enters the transcript", !panelLines().some((l) => l.includes("mode → voice")), JSON.stringify(panelLines().slice(-3)));
+await runCmd("/mode auto");
+check("mode restored for the tests below", statusText().includes("mode → auto"), JSON.stringify(statusText()));
+
+console.log("\ntemplate covers every bubble");
+await runCmd("/template");
+// Fresh seed shows the tail (turns 18-20); earlier showcase rows need PgUps.
+{
+  const f = flat();
+  check("deny renders", f.includes("✗ denied"));
+  check("error renders", f.includes("TTS voice unavailable"));
+  check("timestamped thought renders", /› think \[\d{2}:\d{2}:\d{2}\]/.test(f));
+  check("preview note went to status, not history", statusText().includes("every bubble type") && !panelLines().some((l) => l.includes("every bubble type")));
+}
+for (let i = 0; i < 10 && !flat().includes("[queued #2]"); i++) {
+  pageUp();
+  await settle();
+}
+{
+  const f = flat();
+  check("queued badge renders", f.includes("[queued #2]"));
+  check("confirm prompt renders", f.includes("Confirm?"));
+  // Turn 18 rides along in this window (17 + 18 fit the budget together).
+  check("compaction renders", f.includes("context compacted"));
+  check("markdown code renders", f.includes("cat CHANGELOG.md"));
+}
 
 console.log("\n/clear and /new change state");
 await runCmd("/mode voice");
 await runCmd("/clear");
-const clearedRows = panelLines().length;
-check("/clear wiped the transcript", clearedRows === 0, `${clearedRows} rows left`);
-const sidBefore = (frame().match(/· (\w+)/) ?? [])[1];
+check("/clear wiped the transcript", panelLines().every((l) => !l.startsWith("›")), `${panelLines().length} rows left`);
+check("/clear shows the home screen", flat().includes("Shift+drag selects"), flat().slice(-200));
+await runCmd("/panel");
+const sidBefore = (frame().match(/(?:auto|voice) · (\w{8})/) ?? [])[1];
 await runCmd("/new");
-check("/new rotated the session id", (frame().match(/· (\w+)/) ?? [])[1] !== sidBefore, `${sidBefore} -> ${(frame().match(/· (\w+)/) ?? [])[1]}`);
+check("/new rotated the session id", (frame().match(/(?:auto|voice) · (\w{8})/) ?? [])[1] !== sidBefore, `${sidBefore} -> ${(frame().match(/(?:auto|voice) · (\w{8})/) ?? [])[1]}`);
+await runCmd("/panel");
+check("panel hides again", badge() === "<no badge>");
 
 console.log("\nmodified-key normalisation (why ctrl+o needs ctrlName)");
 const kittyCtrlO = parseKeypress("\u001b[15;5u", { useKittyKeyboard: true });

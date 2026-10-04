@@ -3,9 +3,13 @@ import { TextAttributes, type MouseEvent } from "@opentui/core";
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { DeepSocket, TermSocket, ensureBackend, fetchTitle, getModel, health, say, stopBackend, stt, switchModel, type TurnEvent } from "./bridge.js";
-import { printEpilogue } from "./epilogue.js";
+import { DeepSocket, TermSocket, ensureBackend, fetchTitle, getLegs, getModel, health, say, sayStream, stopBackend, stt, sttInterim, switchModel, type TurnEvent } from "./bridge.js";
+import { printEpilogue, RT_COL, WORDMARK } from "./epilogue.js";
+import { markdownStyle } from "./markdown.js";
+import { Panel, type Todos } from "./panel.js";
 import { newSessionId, sessionName } from "./session.js";
+import { phaseLabel, spinnerFrame } from "./spinner.js";
+import { SUGGESTIONS } from "./suggestions.js";
 import {
   SHADES,
   initialShade,
@@ -55,7 +59,17 @@ export function isEcho(spoken: string[], heard: string): boolean {
   return false;
 }
 
-type Msg = { id: string; who: "you" | "agent" | "sys" | "act" | "obs" | "err" | "ask" | "think"; text: string };
+type Msg = {
+  id: string;
+  who: "you" | "agent" | "sys" | "act" | "obs" | "err" | "ask" | "think" | "deny" | "compact";
+  text: string;
+  // Wall clock (bridge `ts`): thoughts and tool calls carry it.
+  ts?: number;
+  // Queue position while the session lock is held (queued event).
+  queued?: number;
+  // Tool call completed (observation arrived) — the ✓ sign.
+  done?: boolean;
+};
 type VizMode = "idle" | "user" | "agent";
 type Mode = "auto" | "voice";
 const MODES: Mode[] = ["auto", "voice"];
@@ -74,8 +88,11 @@ const COMMANDS: { name: string; hint: string }[] = [
   { name: "/mic", hint: "/mic [on|off] — toggle the microphone" },
   { name: "/voice", hint: "/voice [sec] — record a voice turn" },
   { name: "/shade", hint: "/shade [name|none] — monotonic accent hue" },
+  { name: "/settings", hint: "show legs, models and tool policy" },
+  { name: "/dictate", hint: "/dictate [sec] — voice dictation input" },
   { name: "/opencode", hint: "/opencode [dir] — spawn opencode here" },
   { name: "/template", hint: "show 40-turn conversation template" },
+  { name: "/panel", hint: "/panel — show or hide the dashboard" },
   { name: "/help", hint: "show this list" },
   { name: "/quit", hint: "/quit (or /q) — leave" },
 ];
@@ -115,6 +132,8 @@ const CAP_FOR: Record<Msg["who"], number> = {
   err: 500,
   ask: 500,
   think: 800,
+  deny: 500,
+  compact: 500,
 };
 function capText(who: Msg["who"], text: string): string {
   const t = String(text ?? "");
@@ -122,10 +141,6 @@ function capText(who: Msg["who"], text: string): string {
   if (t.length <= cap) return t;
   return t.slice(0, cap) + ` …[${t.length - cap} chars more]`;
 }
-
-const HALF = 4;
-const BW = 3;
-const GAP = "  ";
 
 export function App(props: { seconds?: number; theme: Theme; themeNote?: string; initialSid?: string }) {
   const { initialSid } = props;
@@ -136,6 +151,27 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
   // Memo, not a plain const: the palette has to be recomputed when /shade
   // flips it, otherwise every `theme.` below would keep the boot-time colors.
   const theme = createMemo(() => withShade(props.theme, shade()));
+  // Shared markdown style (one native handle for all assistant bubbles).
+  const mdStyle = markdownStyle();
+  // "RT" half of the wordmark: live shade color, or the plain accent when
+  // unshaded. Same split as the farewell card (see epilogue.ts).
+  const rtColor = () => {
+    const s = shade();
+    return s ? shadeHex(s, theme().mode) : theme().accent;
+  };
+  // Header voice level 0..1: live mic spectrum average while the user
+  // side is audible, else 0 (bar collapses — it grows/shrinks with voice).
+  const micLevel = () => {
+    const v = viz();
+    if (!micOn() || v.mode !== "user") return 0;
+    const b = v.bins;
+    if (!b.length) return 0;
+    return Math.min(1, Math.max(0, b.reduce((a, x) => a + (x ?? 0), 0) / b.length));
+  };
+  const BAR_MAX = 20;
+  const barW = () => Math.round(micLevel() * BAR_MAX);
+  // VAD dot: only present while speech is detected (appears = listening).
+  const vadLive = () => micOn() && speech();
   const renderer = useRenderer();
   const dims = useTerminalDimensions();
   const termRows = () => dims().height;
@@ -155,10 +191,35 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
   const [phase, setPhase] = createSignal("");
   // Scrollback: PgUp/PgDn shifts the visible history window (0 = live).
   const [histOff, setHistOff] = createSignal(0);
+  // Left dashboard visibility: hidden by default, /panel brings it back
+  // (widget included — the whole column unmounts and returns together).
+  const [showPanel, setShowPanel] = createSignal(false);
+  // Effective left width in columns: 0 while hidden (full-width chat).
+  const leftW = () => (showPanel() ? Math.floor(termCols() * 0.22) : 0);
   const [mode, setMode] = createSignal<Mode>(process.env.VOICE_MODE === "voice" ? "voice" : "auto");
   // Mic master switch: OFF pauses all voice capture (v, /voice, live loop).
   const [micOn, setMicOn] = createSignal(true);
   const [streamText, setStreamText] = createSignal("");
+  // Dashboard state the left panel renders.
+  const [todos, setTodos] = createSignal<Todos>([]);
+  // VAD: speech in the current mic chunk (local energy gate).
+  const [speech, setSpeech] = createSignal(false);
+  // Dictation: a recording is in progress, plus its elapsed time.
+  const [dictating, setDictating] = createSignal(false);
+  const [recSeconds, setRecSeconds] = createSignal(0);
+  // Interim STT draft: the live user bubble while speaking.
+  const [draft, setDraft] = createSignal("");
+  // Status line above the input: every former `sys` log lives here now, so
+  // the transcript keeps only the conversation (user/agent/thoughts/tools).
+  // Last message wins; capped to one row. Backend warm logs are the one
+  // exception: they go to the left dashboard (backendNote), never here.
+  const [status, setStatus] = createSignal("");
+  const [backendNote, setBackendNote] = createSignal("");
+  function note(text: string) {
+    const t = String(text ?? "").trim();
+    if (!t) return;
+    setStatus(t.split("\n")[0]?.slice(0, 200) ?? "");
+  }
   // Command palette: index of the highlighted row, and whether the user has
   // dismissed it with escape (dismissed stays closed until the text stops
   // looking like a command, so escaping doesn't pop it back on every keypress).
@@ -167,9 +228,9 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
 
   // --- mutable (non-reactive) state: never rendered, only read in callbacks --
   let sock: DeepSocket | TermSocket | null = null;
-  // TermSocket is the only socket that carries the confirm gate.
+  // Both sockets carry the confirm gate now (/deep got it too).
   function confirmSock(ok: boolean) {
-    if (sock instanceof TermSocket) sock.confirm(ok);
+    sock?.confirm(ok);
   }
   // Op of the last action — web/fetch observations collapse to a marker.
   let lastOp = "";
@@ -191,7 +252,9 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
   let turnChatCount = 0;
   let quietStreak = 0;
   let booted = false;
-  let smoothBands = [0.24, 0.32, 0.38, 0.32, 0.24];
+  // Dictation timers: elapsed-second clock + VAD speech decay.
+  let recTimer: ReturnType<typeof setInterval> | null = null;
+  let speechTimer: ReturnType<typeof setTimeout> | null = null;
   // First non-slash utterance this session (typed or spoken). Kept as the
   // offline fallback name and as the "was anything said at all" flag: an
   // empty value means no farewell card.
@@ -200,7 +263,16 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
   // session's persisted one). Preferred over firstUtterance when present.
   const [sessionTitle, setSessionTitle] = createSignal("");
 
-  function push(who: Msg["who"], text: string) {
+  /** VAD speech gate: true while chunks keep arriving above the
+   *  room-hiss threshold, decays to false 300ms after the last. */
+  function noteSpeech(now: boolean) {
+    if (!now) return;
+    setSpeech(true);
+    if (speechTimer) clearTimeout(speechTimer);
+    speechTimer = setTimeout(() => setSpeech(false), 300);
+  }
+
+  function push(who: Msg["who"], text: string, ts?: number) {
     const capped = capText(who, text);
     if (!capped.trim()) return;
     setMsgs((m) => {
@@ -208,19 +280,44 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
       // step, overlapping socket) — never render the same bubble twice.
       const last = m[m.length - 1];
       if (last && last.who === who && last.text === capped) return m;
-      return [...m.slice(-199), { id: uid(), who, text: capped }];
+      return [...m.slice(-199), { id: uid(), who, text: capped, ts }];
     });
   }
-  // Template conversation for visualizing the chat panel + scrollback:
-  // 40 turns (20 user + 20 agent) with thinking traces, tool calls,
-  // observations, confirm gates and todos, rendered exactly like live
+  // Template conversation for visualizing every chat bubble + scrollback:
+  // 20 user turns with thinking traces (one timestamped), markdown agent
+  // replies, pending/✓/✗ tool calls, observations, confirm gates, a deny,
+  // an error, a compaction and a queued badge — rendered exactly like live
   // transcript lines. Long enough to overflow any terminal so PgUp/PgDn
-  // scrolling is demonstrable. Seeded at boot, re-seedable via /template.
+  // scrolling is demonstrable. Re-seedable via /template.
   function seedTemplate() {
-    push("sys", "Template preview — 40-turn conversation (/clear to dismiss):");
+    note("Template preview — every bubble type (/clear to dismiss):");
+    // Marks the last tool-call line done (✓) or denied (✗), like the live
+    // observation/deny events do.
+    const markLastAct = (done: boolean) =>
+      setMsgs((m) => {
+        for (let i = m.length - 1; i >= 0; i--) {
+          if (m[i]!.who === "act") {
+            if (m[i]!.done !== undefined) break;
+            const copy = m[i]!;
+            return [...m.slice(0, i), { ...copy, done }, ...m.slice(i + 1)];
+          }
+          if (m[i]!.who === "you") break;
+        }
+        return m;
+      });
+    // Tags the last user bubble with its queue position, like the live
+    // `queued` event does while the session lock is held.
+    const tagQueued = (pos: number) =>
+      setMsgs((m) => {
+        const i = m.map((x) => x.who).lastIndexOf("you");
+        if (i < 0) return m;
+        const copy = m[i]!;
+        return [...m.slice(0, i), { ...copy, queued: pos }, ...m.slice(i + 1)];
+      });
+    const now = Math.floor(Date.now() / 1000);
     // Turn 1: user asks, agent surveys and plans (todos).
     push("you", "Can you help me organize the files in this directory?");
-    push("think", "Listing files first, then grouping by type.");
+    push("think", "Listing files first, then grouping by type.", now);
     push("act", "▸ glob: *.* in /current");
     push("obs", "↳ glob evidence (42 chars — agent sees it, hidden here)");
     push("act", "todos: ✓ List files | ● Group by type | ○ Move files");
@@ -248,28 +345,37 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
     push("act", "▸ shell: find . -maxdepth 2 | sort");
     push("obs", "img/ docs/ src/, 15 files total");
     push("agent", "img/ 4, docs/ 6, src/ 5. Flat and tidy.");
-    // Turn 6: user wants docs, agent writes a README.
+    // Turn 6: user wants docs, agent writes a README (markdown showcase:
+    // headings, bold, code fence and list render through the markdown bubble).
     push("you", "Write a short README for this layout.");
     push("think", "Describing each directory in one line.");
     push("act", "▸ shell: writing README.md");
     push("obs", "wrote 6 lines to README.md");
-    push("agent", "README.md written — img/, docs/, src/ explained.");
+    push("agent", "**README.md** written:\n- `img/` — photos\n- `docs/` — notes\n- `src/` — code\n```sh\nls img docs src\n```");
     // Turn 7: user worries about secrets, agent greps.
     push("you", "Did I leave any secrets or keys behind?");
     push("think", "Grepping for key, token and secret patterns.");
     push("act", "▸ shell: grep -ri 'key\\|token\\|secret' .");
     push("obs", "no matches");
     push("agent", "Clean — no secrets or keys found.");
-    // Turn 8: user wants backups gone (confirm-gated action).
+    // Turn 8: user wants backups gone (confirm-gated action + queued badge
+    // + a denied tool call, so ✓/▸/✗ and `[queued #N]` all render).
     push("you", "Remove the backup files.");
+    tagQueued(2);
     push("ask", "rm notes.bak");
     push("act", "▸ shell: rm notes.bak");
     push("obs", "removed 1 file");
+    markLastAct(true);
+    push("act", "▸ shell: sudo reboot");
+    markLastAct(false);
+    push("deny", "✗ denied: policy (sudo)");
     push("agent", "Backups removed. One less clutter.");
-    // Turn 9: user asks about size, agent measures.
+    // Turn 9: user asks about size, agent measures (error bubble included).
     push("you", "How big is everything now?");
     push("act", "▸ shell: du -sh img docs src");
     push("obs", "img 12M, docs 3M, src 8M");
+    markLastAct(true);
+    push("err", "error: TTS voice unavailable — reply shown as text only");
     push("agent", "23M total — images are the bulk of it.");
     // Turn 10: user wraps up arc one, agent closes out.
     push("you", "Thanks, that's tidy. One more round?");
@@ -309,22 +415,31 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
     push("act", "▸ shell: du -sh .");
     push("obs", "34M with the archive");
     push("agent", "34M total with the archive included.");
-    // Turn 17: drop the archive (confirm-gated).
+    // Turn 17: drop the archive (confirm-gated, queued behind the lock).
     push("you", "Remove the archive, keep it lean.");
+    tagQueued(2);
     push("ask", "rm img.tar.gz");
     push("act", "▸ shell: rm img.tar.gz");
     push("obs", "removed 1 file");
     push("agent", "Archive removed. Back to 23M.");
-    // Turn 18: changelog entry.
+    // Turn 18: changelog entry (compaction bubble included).
     push("you", "Write a CHANGELOG entry.");
     push("think", "Appending one dated line.");
     push("act", "▸ shell: appending to CHANGELOG.md");
     push("obs", "CHANGELOG +3 lines");
-    push("agent", "CHANGELOG updated.");
-    // Turn 19: final sweep.
+    markLastAct(true);
+    push("compact", "⚡ context compacted 12.4k → 3.1k tokens");
+    push("agent", "**CHANGELOG.md** updated:\n- `img.tar.gz` removed\n```sh\ncat CHANGELOG.md\n```");
+    // Turn 19: final sweep (timestamped thought, denied tool, error line).
     push("you", "Final check — anything left?");
+    push("think", "Re-scanning one level deep.", now);
     push("act", "▸ glob: * in /current");
     push("obs", "↳ glob evidence (9 chars — agent sees it, hidden here)");
+    markLastAct(true);
+    push("act", "▸ shell: sudo reboot");
+    markLastAct(false);
+    push("deny", "✗ denied: policy (sudo)");
+    push("err", "error: TTS voice unavailable — reply shown as text only");
     push("agent", "Nothing left. Tree is clean.");
     // Turn 20: user wraps up, agent closes out.
     push("you", "Great, session over.");
@@ -373,7 +488,7 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
     const v = next ?? !micRef;
     micRef = v;
     setMicOn(v);
-    push("sys", v ? "mic on — press v to talk" : "mic off — voice input paused");
+    note( v ? "mic on — press v to talk" : "mic off — voice input paused");
   }
 
   async function waitSilent(timeoutMs = 30000): Promise<void> {
@@ -383,14 +498,8 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
     }
   }
 
-  // Boot report: which theme won and why (probe ok / silent / forced).
-  // Template seeding at boot is commented out (backend is back, so the
-  // panel fills with live turns; /template still re-seeds on demand).
-  onMount(() => {
-    if (props.themeNote) push("sys", props.themeNote);
-    const sh = shade();
-    if (sh) push("sys", `shade: ${sh} · /shade for the list, /shade none to reset`);
-  });
+  // (Boot pushes nothing: theme/shade live in the left panel, and the
+  // backend warm sequence reports through the status line instead.)
 
   // Live mic monitor: mic ON means the equalizer hears the room. One
   // arecord stays open while idle (levels only — no STT, no turns) and
@@ -566,9 +675,14 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
     // reply starts mid-recording.
     incSpeak();
     try {
-      const r = await say(said);
-      if (r.kind !== "audio" || !r.wav_b64) throw new Error(r.message ?? "tts unavailable");
-      await playAudio(b64ToF32(r.wav_b64), r.sr ?? 24000);
+      // Streamed TTS: each sentence plays as soon as it lands,
+      // instead of after the whole reply is synthesized.
+      let any = false;
+      await sayStream(said, async (wav, sr) => {
+        any = true;
+        await playAudio(wav, sr);
+      });
+      if (!any) throw new Error("tts unavailable");
     } catch (e) {
       push("err", `server TTS failed (${String(e)}) — reply shown as text only`);
     } finally {
@@ -587,7 +701,9 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
   }
 
   // Mic primitive: records `secs` of PCM, drives the viz, returns null
-  // when nothing usable was captured. No STT, no turn — composable.
+  // when nothing usable was captured. While it runs: interim STT polls
+  // the bridge every ~300ms into the live draft, the VAD speech
+  // signal lights from chunk energy, and the dictation clock ticks.
   async function listenOnce(secs: number): Promise<Buffer | null> {
     const chunks: Buffer[] = [];
     let child: ChildProcess;
@@ -600,13 +716,36 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
       return null;
     }
     recording = true;
+    setDictating(true);
+    setRecSeconds(0);
+    if (recTimer) clearInterval(recTimer);
+    recTimer = setInterval(() => setRecSeconds((s) => s + 1), 1000);
+    // Cumulative PCM for the interim poll: Whisper re-transcribes
+    // the whole buffer each time, so the draft keeps improving.
+    // Capped to the last 8s — same window the bridge enforces.
+    let cum = Buffer.alloc(0);
+    let lastInterim = "";
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
     try {
       setViz({ mode: "user", bins: new Array(NB).fill(0) });
       child.stdout?.on("data", (d: Buffer) => {
         chunks.push(d);
         setViz({ mode: "user", bins: spectrum(pcmToF32(d)) });
-        void rmsLevel(d);
+        noteSpeech(rmsLevel(d) >= 0.12);
+        cum = Buffer.concat([cum, d]);
+        if (cum.length > 16000 * 8 * 2) cum = cum.slice(-16000 * 8 * 2);
       });
+      pollTimer = setInterval(() => {
+        if (cum.length < 1600) return;
+        void sttInterim(cum)
+          .then((r) => {
+            if (r.kind === "text" && r.text && r.text !== lastInterim) {
+              lastInterim = r.text;
+              setDraft(r.text);
+            }
+          })
+          .catch(() => {});
+      }, 300);
       await new Promise((r) => setTimeout(r, secs * 1000));
       child.kill("SIGTERM");
       calm();
@@ -614,6 +753,21 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
       return pcm.length >= 3200 ? pcm : null;
     } finally {
       recording = false;
+      setDictating(false);
+      if (recTimer) {
+        clearInterval(recTimer);
+        recTimer = null;
+      }
+      if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+      setSpeech(false);
+      if (speechTimer) {
+        clearTimeout(speechTimer);
+        speechTimer = null;
+      }
+      // Draft stays set: runText clears it once the turn runs.
     }
   }
 
@@ -626,7 +780,7 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
     if (!force && busy()) return;
     if (!micRef) {
       setBusy(false);
-      if (!force) push("sys", "mic is off — press m to enable.");
+      if (!force) note( "mic is off — press m to enable.");
       return;
     }
     await waitSilent();
@@ -640,30 +794,30 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
         quietStreak += 1;
         if (quietStreak > 12) {
           quietStreak = 0;
-          push("sys", "quiet for a while — Tab to resume the live loop.");
+          note( "quiet for a while — Tab to resume the live loop.");
           return;
         }
         chainNext();
       }
     };
-    push("sys", "recording — speak now");
+    note( "recording — speak now");
     const pcm = await listenOnce(secs);
     if (!pcm) {
-      push("sys", "nothing recorded.");
+      note( "nothing recorded.");
       keepAlive();
       return;
     }
     try {
       const r = await stt(pcm);
       if (r.kind !== "text" || !r.text?.trim()) {
-        push("sys", `STT empty (${r.message ?? "silence?"})`);
+        note( `STT empty (${r.message ?? "silence?"})`);
         keepAlive();
         return;
       }
       // Echo guard: the mic may still catch our speaker (no headphones).
       // Matches full or partial re-hearings of our last replies.
       if (isEcho(lastSpoken, r.text)) {
-        push("sys", "heard my own voice — discarded.");
+        note( "heard my own voice — discarded.");
         keepAlive();
         return;
       }
@@ -679,7 +833,7 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
   // Voice-mode confirm gate: speak the question, listen for yes/no.
   async function voiceConfirm(action: Record<string, unknown>): Promise<void> {
     if (!micRef) {
-      push("sys", "mic is off — confirm denied. Press m to enable.");
+      note( "mic is off — confirm denied. Press m to enable.");
         confirmSock(false);
       return;
     }
@@ -693,12 +847,12 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
         const r = await stt(pcm);
         const t = (r.text ?? "").toLowerCase();
         ok = /\b(yes|yeah|yep|confirm|ok|okay|sure|do it|go ahead)\b/.test(t);
-        push("sys", `heard: "${r.text ?? ""}" → ${ok ? "confirmed ✓" : "denied."}`);
+        note( `heard: "${r.text ?? ""}" → ${ok ? "confirmed ✓" : "denied."}`);
       } catch {
-        push("sys", "confirm listen failed → denied.");
+        note( "confirm listen failed → denied.");
       }
     } else {
-      push("sys", "no answer → denied.");
+      note( "no answer → denied.");
     }
     confirmSock(ok);
   }
@@ -716,6 +870,7 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
     clearStream();
     setHistOff(0);
     setPhase("thinking …");
+    setDraft("");
     push("you", text);
     sock.turn(text, sid(), cwd());
   }
@@ -740,22 +895,55 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
           const brain = r.brain === "front" ? "front" : "worker";
           const why = r.forced ? "forced" : r.reason === "backstop" ? "backstop" : "";
           setPhase(brain === "front" ? "front model …" : "worker …");
-          if (brain === "worker") push("sys", `→ worker${why ? ` (${why})` : ""}`);
+          if (brain === "worker") note( `→ worker${why ? ` (${why})` : ""}`);
+          // The turn actually started: clear any queued badge.
+          setMsgs((m) => {
+            const i = m.map((x) => x.who).lastIndexOf("you");
+            if (i < 0 || m[i]!.queued === undefined) return m;
+            const copy = m[i]!;
+            return [...m.slice(0, i), { ...copy, queued: undefined }, ...m.slice(i + 1)];
+          });
+        } else if (e.event === "queued") {
+          // The session lock is held: our text waits. Tag the last
+          // user bubble with its position so input never vanishes
+          // silently (it was queued server-side, not dropped).
+          const pos = Number((e as { position?: number }).position ?? 1) || 1;
+          setMsgs((m) => {
+            const i = m.map((x) => x.who).lastIndexOf("you");
+            if (i < 0) return m;
+            const copy = m[i]!;
+            return [...m.slice(0, i), { ...copy, queued: pos }, ...m.slice(i + 1)];
+          });
+          setPhase(`queued #${pos} …`);
         } else if (e.event === "action") {
           clearStream();
           const a = (e as { action: Record<string, unknown> }).action ?? {};
           lastOp = String(a["action"] ?? "");
           setPhase("toolcall …");
           if (String(a["action"]) === "write_todos") {
-            const todos = (a["todos"] as unknown as Array<{ content: string; status: string }>) || [];
-            if (Array.isArray(todos) && todos.length) {
-              push("act", `todos: ${todos.map((t) => `${t.status === "completed" ? "✓" : t.status === "in_progress" ? "●" : "○"} ${t.content}`).join(" | ")}`);
+            const list = (a["todos"] as unknown as Array<{ content: string; status: string }>) || [];
+            if (Array.isArray(list) && list.length) {
+              setTodos(list.slice(0, 8));
+              push("act", `todos: ${list.map((t) => `${t.status === "completed" ? "✓" : t.status === "in_progress" ? "●" : "○"} ${t.content}`).join(" | ")}`);
             }
             return;
           }
           push("act", `▸ ${String(a["action"] ?? "?")}: ${String(a["command"] ?? a["path"] ?? a["pattern"] ?? "")}`);
         } else if (e.event === "observation") {
           clearStream();
+          // Good tool call sign: the action that produced this
+          // observation is done — mark it ✓ in place.
+          setMsgs((m) => {
+            for (let i = m.length - 1; i >= 0; i--) {
+              if (m[i]!.who === "act") {
+                if (m[i]!.done) break;
+                const copy = m[i]!;
+                return [...m.slice(0, i), { ...copy, done: true }, ...m.slice(i + 1)];
+              }
+              if (m[i]!.who === "you") break;
+            }
+            return m;
+          });
           const text = String((e as { observation: string }).observation ?? "").slice(0, 800);
           // Web evidence stays agent-side: the dump floods the screen and
           // the agent already consumed it. Everything else renders capped.
@@ -765,6 +953,22 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
           } else {
             push("obs", text);
           }
+        } else if (e.event === "deny") {
+          // Policy block (or user cancel): the tool call did NOT
+          // run. Red ✗ line — previously these were invisible.
+          clearStream();
+          setMsgs((m) => {
+            for (let i = m.length - 1; i >= 0; i--) {
+              if (m[i]!.who === "act") {
+                if (m[i]!.done) break;
+                const copy = m[i]!;
+                return [...m.slice(0, i), { ...copy, done: false }, ...m.slice(i + 1)];
+              }
+              if (m[i]!.who === "you") break;
+            }
+            return m;
+          });
+          push("deny", `✗ denied: ${String((e as { reason?: string }).reason ?? "policy")}`);
         } else if (e.event === "chat") {
           clearStream();
           setPhase("answering …");
@@ -777,6 +981,7 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
         } else if (e.event === "thinking") {
           const th = String((e as { text: string }).text ?? "").slice(0, 1200);
           const append = (e as { append?: boolean }).append === true;
+          const ts = (e as { ts?: number }).ts;
           if (th) {
             setPhase("thinking …");
             if (append) {
@@ -786,26 +991,39 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
                 const last = m[m.length - 1];
                 if (last && last.who === "think") {
                   const grown = (last.text + th).slice(-800);
-                  if (grown === last.text) return m;
-                  return [...m.slice(0, -1), { ...last, text: grown }];
+                  if (grown === last.text && (last.ts ?? 0) === (ts ?? 0)) return m;
+                  return [...m.slice(0, -1), { ...last, text: grown, ts: ts ?? last.ts }];
                 }
                 const capped = capText("think", th);
                 if (!capped.trim()) return m;
-                return [...m.slice(-199), { id: uid(), who: "think" as const, text: capped }];
+                return [...m.slice(-199), { id: uid(), who: "think" as const, text: capped, ts }];
               });
-            } else push("think", th);
+            } else push("think", th, ts);
           }
+        } else if (e.event === "cancelled") {
+          // Our own ctrl+c landed mid-turn: say so instead of
+          // leaving the phase spinner running forever.
+          clearStream();
+          setBusy(false);
+          setPhase("interrupted");
+          note( "↩ turn interrupted");
         } else if (e.event === "token") {
-          // Live chips accumulate off-render; the tick flushes them to
-          // the transient line below. Raw pieces may include think tags
-          // mid-stream — the final parsed events replace this preview.
+          // Live LLM chips accumulate off-render; the tick flushes them to
+          // the streaming agent bubble below. Raw pieces may include think
+          // tags mid-stream — the final parsed events replace this preview.
+          // Phase flips to LLM so the state line reads Thinking → LLM →
+          // Tool call → Answering instead of sticking on Thinking.
           const piece = String((e as { piece: string }).piece ?? "");
           if (piece) {
             streamBuf = (streamBuf + piece).slice(-1200);
             streamDirty = true;
+            setPhase((p) => (p === "toolcall …" ? p : "LLM …"));
           }
+        } else if (e.event === "compact" || e.event === "compaction") {
+          const note = String((e as { note?: string; message?: string }).note ?? (e as { note?: string; message?: string }).message ?? "context compacted");
+          push("compact", note);
         } else if (e.event === "stuck") {
-          push("sys", `↻ stuck: ${String((e as { reason: string }).reason ?? "")}`);
+          note( `↻ stuck: ${String((e as { reason: string }).reason ?? "")}`);
         } else if (e.event === "audio") {
           if (mode() === "voice") {
             const ev = e as { wav_b64: string; sr: number };
@@ -837,22 +1055,24 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
           setBusy(false);
         }
       };
-      if (sockInst instanceof TermSocket) {
-        (sockInst as TermSocket).onConfirm = (action) => {
-          if (mode() === "voice") void voiceConfirm(action);
-          else setPending(action);
-        };
-      }
+      // Both sockets carry the confirm gate (the autonomous socket
+      // runs the same terminal tools as the fallback one).
+      sockInst.onConfirm = (action) => {
+        if (mode() === "voice") void voiceConfirm(action);
+        else setPending(action);
+      };
       sock = sockInst;
       active = sockInst;
     };
 
     // Single local app: reuse a healthy backend if one is already up,
     // else spawn bridge.py as our own child (killed with us on exit).
+    // Warm chatter goes to the left dashboard (backendNote), not the chat.
     const boot = async () => {
-      const want = await ensureBackend((m) => push("sys", m));
+      const want = await ensureBackend((m) => setBackendNote(m));
       if (cancelled) return;
       if (!want) {
+        setBackendNote("failed to start");
         push("err", "local agent backend failed to start (see terminal above)");
         return;
       }
@@ -875,13 +1095,18 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
       try {
         await (sockInst as DeepSocket).connect();
         active = sockInst;
+        // Warmed + connected: the dashboard falls back to its steady
+        // "● agent ready" (metrics-driven) from here on.
+        setBackendNote("");
       } catch {
         const fallback = new TermSocket();
         setupHandlers(fallback);
         try {
           await fallback.connect();
           active = fallback;
+          setBackendNote("");
         } catch {
+          setBackendNote("socket failed — retrying");
           push("err", "bridge unreachable after start — retrying on next turn");
         }
       }
@@ -923,28 +1148,29 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
       setSessionTitle("");
       setSid(newSessionId());
       setHistOff(0);
-      push("sys", "new session");
+      note( "new session");
       return;
     }
     if (t === "/clear") {
       setMsgs([]);
       setHistOff(0);
+      setStatus("");
       return;
     }
     if (t === "/cwd" || t.startsWith("/cwd ")) {
       const p = t.split(/\s+/, 2)[1];
       // Bare /cwd reports where we are instead of silently doing nothing.
       if (!p) {
-        push("sys", `cwd ${cwd()}`);
+        note( `cwd ${cwd()}`);
         return;
       }
       setCwd(p);
-      push("sys", `cwd ${p}`);
+      note( `cwd ${p}`);
       return;
     }
     if (t.startsWith("/voice")) {
       if (mode() !== "voice") {
-        push("sys", "voice lives in voice mode — Tab to switch.");
+        note( "voice lives in voice mode — Tab to switch.");
         return;
       }
       const s = Number(t.split(/\s+/, 2)[1]) || seconds;
@@ -955,16 +1181,24 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
       seedTemplate();
       return;
     }
+    if (t === "/panel") {
+      setShowPanel((v) => {
+        const n = !v;
+        note(`panel ${n ? "shown" : "hidden"}`);
+        return n;
+      });
+      return;
+    }
     if (t === "/mode") {
-      push("sys", `mode: ${mode()} (Tab toggles auto ↔ voice)`);
+      note( `mode: ${mode()} (Tab toggles auto ↔ voice)`);
       return;
     }
     if (t === "/opencode" || t.startsWith("/opencode ")) {
       const arg = t.slice("/opencode".length).trim();
       const targetCwd = arg || cwd();
-      push("sys", `spawning opencode in ${targetCwd}…`);
+      note( `spawning opencode in ${targetCwd}…`);
       const { spawnOpencode } = await import("./opencode.js");
-      const ok = await spawnOpencode(targetCwd, (m) => push("sys", m));
+      const ok = await spawnOpencode(targetCwd, (m) => note( m));
       if (!ok) push("err", "opencode spawn failed — is kitty/tmux installed?");
       return;
     }
@@ -972,14 +1206,16 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
       const m = t.split(/\s+/, 2)[1] as Mode;
       if (m === "auto" || m === "voice") {
         setMode(m);
-        push("sys", `mode → ${m}`);
+        note( `mode → ${m}`);
       } else push("err", "mode must be auto|voice");
       return;
     }
     if (t === "/model") {
       try {
         const mi = await getModel();
-        push("sys", mi.available.map((a) =>
+        // Verbose dumps stay in the transcript (as neutral lines): they are
+        // answers the user explicitly asked for, not status noise.
+        push("obs", mi.available.map((a) =>
           `${a.current ? "●" : "○"} ${a.name} — ${a.label} [${a.backend}]${a.ready ? "" : ` (blocked: ${a.desc})`}`).join("\n"));
       } catch {
         push("err", "could not reach /model (bridge down?)");
@@ -992,16 +1228,58 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
         push("err", "usage: /model <name> (see /model)");
         return;
       }
-      push("sys", `switching model → ${name} (re-warming LLM leg…)`);
+      note( `switching model → ${name} (re-warming LLM leg…)`);
       try {
         const r = await switchModel(name);
         if (r.kind === "ok") {
           if (r.label) setModelLabel(r.label);
-          push("sys", `model → ${r.label ?? r.current ?? name}${r.note ? ` (${r.note})` : ""}`);
+          if (r.compacted) push("compact", r.compacted);
+          note( `model → ${r.label ?? r.current ?? name}${r.note ? ` (${r.note})` : ""}${r.compacted ? ` · context ${r.compacted}` : ""}`);
         } else push("err", `model switch failed: ${r.message ?? "unknown"}`);
       } catch (e) {
         push("err", `model switch failed: ${String(e)}`);
       }
+      return;
+    }
+    if (t === "/settings") {
+      // Full legs + policy dump: the dashboard panel shows the
+      // short tags; this is the verbose form.
+      try {
+        const legs = await getLegs();
+        push("obs",
+          [
+            `model: ${legs.model.label} (${legs.model.name} · ${legs.model.backend})`,
+            `vad: ${legs.legs.vad}`,
+            `stt: ${legs.legs.stt}`,
+            `llm: ${legs.legs.llm}`,
+            `tts: ${legs.legs.tts}`,
+            `ops: ${legs.policy.ops.join(" ")}`,
+            `deny: ${legs.policy.deny.join(" ")}`,
+            `confirm: ${legs.policy.confirm.join(" ")}`,
+          ].join("\n"));
+      } catch {
+        push("err", "could not reach /legs (bridge down?)");
+      }
+      return;
+    }
+    if (t === "/dictate" || t.startsWith("/dictate ")) {
+      const s = Number(t.split(/\s+/, 2)[1]) || seconds;
+      note( "dictation listening — speak now…");
+      void (async () => {
+        const pcm = await listenOnce(s);
+        if (pcm) {
+          try {
+            const r = await stt(pcm);
+            const txt = r.text?.trim();
+            if (r.kind === "text" && txt) {
+              note( `dictated: "${txt}"`);
+              setValue((v) => (v ? `${v} ${txt}` : txt));
+            }
+          } catch (e) {
+            push("err", `dictation STT failed: ${String(e)}`);
+          }
+        }
+      })();
       return;
     }
     if (t === "/mic" || t.startsWith("/mic ")) {
@@ -1020,12 +1298,12 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
       const arg = t.slice("/shade".length).trim().toLowerCase();
       if (!arg) {
         const cur = shade() ?? "none";
-        push("sys", `shade: ${cur} · ${SHADES.map((s) => (s === cur ? `● ${s}` : `○ ${s}`)).join(" ")} · none = unshaded`);
+        note( `shade: ${cur} · ${SHADES.map((s) => (s === cur ? `● ${s}` : `○ ${s}`)).join(" ")} · none = unshaded`);
         return;
       }
       if (arg === "none" || arg === "off") {
         setShade(null);
-        push("sys", "shade → none (default palette)");
+        note( "shade → none (default palette)");
         return;
       }
       if (!isShade(arg)) {
@@ -1033,13 +1311,13 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
         return;
       }
       setShade(arg);
-      push("sys", `shade → ${arg} (monotonic; backdrop unchanged)`);
+      note( `shade → ${arg} (monotonic; backdrop unchanged)`);
       return;
     }
     if (t === "/help") {
       // Built from COMMANDS so the menu and /help can never disagree.
       const names = COMMANDS.map((c) => c.name).join(" ");
-      push("sys", `${names}\nType / for the menu · Tab completes · ↑↓ pick · enter runs`);
+      push("obs", `${names}\nType / for the menu · Tab completes · ↑↓ pick · enter runs`);
       return;
     }
     if (t.startsWith("/")) {
@@ -1076,7 +1354,33 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
         : name;
     if (key.ctrl && ctrlName === "c") {
       key.preventDefault();
-      exit();
+      // Selection wins over everything: Shift+drag selects in the chat
+      // panel, Ctrl+C copies it (OSC52) instead of interrupting/exiting.
+      try {
+        const r = renderer as unknown as {
+          hasSelection?: boolean;
+          getSelection?: () => { getSelectedText?: () => string } | null;
+          copyToClipboardOSC52?: (t: string) => boolean;
+          clearSelection?: () => void;
+        };
+        if (r.hasSelection) {
+          const text = r.getSelection?.()?.getSelectedText?.() ?? "";
+          if (text.trim()) {
+            r.copyToClipboardOSC52?.(text);
+            r.clearSelection?.();
+            note(`copied ${text.length} chars to clipboard`);
+            return;
+          }
+        }
+      } catch {
+        /* no selection support — fall through to interrupt/exit */
+      }
+      // Busy turn: interrupt it (bridge cancels the task) instead of
+      // quitting the whole app. Idle: the classic exit.
+      if (busy()) {
+        sock?.cancel();
+        note( "interrupting…");
+      } else exit();
       return;
     }
     if (name === "pageup") {
@@ -1102,7 +1406,7 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
       }
       setMode((m) => {
         const n = MODES[(MODES.indexOf(m) + 1) % MODES.length] ?? "auto";
-        push("sys", `mode → ${n}${n === "voice" ? " (live voice pipeline)" : " (text + LLM, no voice)"}`);
+        note( `mode → ${n}${n === "voice" ? " (live voice pipeline)" : " (text + LLM, no voice)"}`);
         return n;
       });
       return;
@@ -1139,12 +1443,12 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
     if (pend) {
       if (name === "y") {
         key.preventDefault();
-        push("sys", "confirmed ✓");
+        note( "confirmed ✓");
         setPending(null);
         confirmSock(true);
       } else if (name === "n" || name === "escape") {
         key.preventDefault();
-        push("sys", "denied.");
+        note( "denied.");
         setPending(null);
         confirmSock(false);
       }
@@ -1160,8 +1464,13 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
     if (key.ctrl && ctrlName === "o") {
       key.preventDefault();
       const targetCwd = cwd();
-      push("sys", `spawning opencode in ${targetCwd}…`);
-      void import("./opencode.js").then(({ spawnOpencode }) => spawnOpencode(targetCwd, (m) => push("sys", m)));
+      note( `spawning opencode in ${targetCwd}…`);
+      void import("./opencode.js").then(({ spawnOpencode }) => spawnOpencode(targetCwd, (m) => note( m)));
+      return;
+    }
+    if (key.shift && (name === "return" || name === "enter")) {
+      key.preventDefault();
+      setValue((v) => v + "\n");
       return;
     }
     // Typing into the prompt must never trigger the bare-letter shortcuts.
@@ -1170,10 +1479,15 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
       setMic();
       return;
     }
+    if (name === "d" && value().trim() === "" && !busy()) {
+      key.preventDefault();
+      void onSubmit("/dictate");
+      return;
+    }
     if (name === "v" && value().trim() === "" && !busy()) {
       key.preventDefault();
       if (mode() !== "voice") {
-        push("sys", "voice lives in voice mode — Tab to switch.");
+        note( "voice lives in voice mode — Tab to switch.");
         return;
       }
       void voiceStep(seconds);
@@ -1181,57 +1495,41 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
   });
 
   // --- derived view state -------------------------------------------------
-  const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + (b ?? 0), 0) / xs.length : 0);
-  // Agent voice as five joined bars: one solid symmetric rectangle per
-  // band, driven by five spectrum bands of live mic/agent levels and
-  // amplitude-smoothed. Idle = flat equal stubs (no motion without sound).
-  function bandsNow(): number[] {
-    void tick(); // re-run the smoothing pass on the 120ms animation clock
-    const v = viz();
-    const bins = v.bins;
-    // Live off ANY sound: mic input while recording AND agent playback.
-    // Idle holds flat equal stubs — bars only vibe on actual sound.
-    const live = v.mode !== "idle";
-    // Floors keep all five bars visible even in short terminals / quiet audio.
-    const targets = live
-      ? [
-          Math.max(avg(bins.slice(0, 5)), 0.12),
-          Math.max(avg(bins.slice(5, 10)), 0.12),
-          Math.min(1, Math.max(avg(bins.slice(10, 15)) * 1.35, 0.18)),
-          Math.max(avg(bins.slice(15, 20)), 0.12),
-          Math.max(avg(bins.slice(20, 24)), 0.12),
-        ]
-      : [0.3, 0.3, 0.3, 0.3, 0.3];
-    // Smooth amplitude: ease each band toward its target (fast attack,
-    // slow release) so bars glide instead of jumping frame to frame.
-    smoothBands = targets.map((tgt, i) => {
-      const cur = smoothBands[i] ?? tgt;
-      const rate = tgt > cur ? 0.55 : 0.3;
-      return cur + (tgt - cur) * rate;
-    });
-    return smoothBands;
+  function fmtTime(ts?: number): string {
+    if (!ts) return "";
+    const d = new Date(ts * 1000);
+    return d.toTimeString().slice(0, 8);
   }
-  const barsWidth = BW * 5 + GAP.length * 4;
-  const off = () => Math.max(0, Math.floor((Math.max(10, Math.floor(termCols() * 0.18) - 2) - barsWidth) / 2));
-  const micLabel = () => `[${micOn() ? "●" : "○"}] MIC ${micOn() ? "ON" : "OFF"} · m`;
-  const micPad = () => Math.max(0, Math.floor((barsWidth - micLabel().length) / 2));
-  const barLine = (k: number, bands: number[]) =>
-    bands.map((v) => ((v ?? 0) * HALF >= k ? "█".repeat(BW) : " ".repeat(BW))).join(GAP);
-  type RRow = { text: string; color: string; bold: boolean };
-  const rightRows = (): RRow[] => {
-    const bands = bandsNow();
-    const o = off();
-    const rows: RRow[] = [];
-    for (let k = HALF; k >= -HALF; k--) {
-      rows.push({ text: " ".repeat(o) + barLine(Math.abs(k), bands), color: theme().ink, bold: true });
+
+  const inputLines = () => {
+    const v = value();
+    if (!v) return 1;
+    const availW = Math.max(20, termCols() - leftW() - 16);
+    const parts = v.split("\n");
+    let total = 0;
+    for (const part of parts) {
+      total += Math.max(1, Math.ceil((part.length || 1) / availW));
     }
-    return rows;
+    // Grows with Shift+Enter newlines and with wrapping past the wall.
+    return Math.min(8, Math.max(1, total));
   };
-  const rw = () => Math.max(10, Math.floor(termCols() * 0.18) - 2);
-  const pad = (s: string) => (s + " ".repeat(rw())).slice(0, rw());
+
   const colorFor = (w: Msg["who"]) =>
-    w === "you" ? theme().accent : w === "agent" ? theme().ink : w === "err" ? theme().danger : w === "ask" ? theme().warn : theme().dim;
-  const labelFor = (w: Msg["who"]) => (w === "you" ? "› " : w === "ask" ? "⬡ Confirm? " : w === "think" ? "› think " : "");
+    w === "you"
+      ? theme().accent
+      : w === "agent"
+      ? theme().ink
+      : w === "err"
+      ? theme().danger
+      : w === "ask"
+      ? theme().warn
+      : w === "compact"
+      ? theme().warn
+      : theme().dim;
+
+  const labelFor = (w: Msg["who"]) =>
+    w === "you" ? "› " : w === "ask" ? "⬡ Confirm? " : w === "think" ? "› think " : "";
+
   // Visible transcript window, measured in terminal ROWS rather than messages:
   // a bordered user turn costs 3 rows (top border + text + bottom border)
   // while plain lines cost wrapped-text rows. The right column has a fixed
@@ -1243,12 +1541,24 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
   // message and fills forward, so a scrolled view always opens on the turn's
   // input with the assistant's reply below it. histOff is the message count
   // from the end to the top line (len - topIndex).
-  // Chrome rows: 2 panel borders + 1 phase + 3 input box, plus the transient
-  // stream / palette / confirm lines when they are on screen.
+  // Chrome rows: 2 panel borders + 1 phase + input box, plus the transient
+  // stream / status / palette / confirm lines when they are on screen.
   const rowBudget = () => {
+    const inputH = inputLines() > 1 ? inputLines() + 2 : 3;
+    // Streaming bubbles eat transcript rows too: estimate from wrapped
+    // length so a long LLM preview can't push the input off-screen.
+    const innerW = Math.max(20, termCols() - leftW() - 10);
+    const streamRows = streamText()
+      ? Math.min(6, Math.max(1, Math.ceil(streamText().length / innerW)))
+      : 0;
+    const draftRows = dictating() || draft()
+      ? Math.min(4, Math.max(3, Math.ceil(((draft() || "").length + 8) / innerW) + 2))
+      : 0;
     const chrome =
-      2 + 1 + 3 +
-      (streamText() ? 1 : 0) +
+      2 + 1 + inputH +
+      streamRows +
+      draftRows +
+      (status() ? 1 : 0) +
       (pending() ? 1 : 0) +
       (cmdOpen() ? cmdVisible().length + 2 : 0);
     // -1 safety row: wrapping is estimated, and one spare row degrades to a
@@ -1256,8 +1566,10 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
     return Math.max(1, termRows() - chrome - 1);
   };
   const rowsOf = (m: Msg) => {
-    const innerW = Math.max(20, termCols() - Math.floor(termCols() * 0.18) - 10);
-    return Math.max(1, Math.ceil((labelFor(m.who).length + m.text.length) / innerW)) + (m.who === "you" ? 2 : 0);
+    const innerW = Math.max(20, termCols() - leftW() - 10);
+    const textLen = (labelFor(m.who) + m.text).length;
+    const lines = m.text.split("\n").length;
+    return Math.max(lines, Math.ceil(textLen / innerW)) + (m.who === "you" ? 2 : 0);
   };
   const histVis = () => {
     const all = msgs();
@@ -1340,37 +1652,70 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
 
   return (
     <box flexDirection="row" height={termRows()} backgroundColor={theme().screen}>
+      <Show when={showPanel()}>
       <box
         flexDirection="column"
-        width="18%"
+        width="22%"
         flexShrink={0}
         height={termRows()}
         justifyContent="flex-start"
-        paddingTop={3}
         backgroundColor={theme().panel}
       >
-        <text fg={theme().ink} attributes={TextAttributes.BOLD}>
-          {pad("info & control")}
-        </text>
-        <text fg={micOn() ? theme().accent : theme().dim} attributes={micOn() ? TextAttributes.BOLD : TextAttributes.NONE}>
-          {pad(" ".repeat(off() + micPad()) + micLabel())}
-        </text>
-        <For each={rightRows()}>
-          {(l) => (
-            <text fg={l.color} attributes={l.bold ? TextAttributes.BOLD : TextAttributes.NONE}>
-              {pad(l.text)}
+        {/* Mic widget (own width, never touches the chat): squared circle
+            cell + bold status on row one, live VAD dot + voice bar on row
+            two. The cell shares the widget's left wall and adds only its
+            right wall, so it reads as one squared box. */}
+        <box
+          flexShrink={0}
+          border
+          borderStyle="heavy"
+          borderColor={theme().border}
+          flexDirection="column"
+        >
+          <box flexDirection="row" flexShrink={0}>
+            <box
+              flexShrink={0}
+              border={["right"]}
+              borderStyle="heavy"
+              borderColor={theme().border}
+              backgroundColor="#000000"
+            >
+              <text fg={micOn() ? rtColor() : theme().dim} attributes={TextAttributes.BOLD}>
+                {"⬤"}
+              </text>
+            </box>
+            <text fg={theme().ink}>{" "}</text>
+            <text fg={theme().ink} attributes={TextAttributes.BOLD}>
+              {`MIC STATUS : ${micOn() ? "ON" : "OFF"}`}
             </text>
-          )}
-        </For>
-        <text fg={theme().ink}>{pad(modelLabel())}</text>
-        <text fg={theme().dim}>{pad(`${mode()} · ${sid().slice(0, 8)}`)}</text>
-        <text fg={theme().dim}>{pad(cwd())}</text>
-        <text fg={theme().dim}>{pad(`theme: ${props.theme.mode ?? ""}`)}</text>
-        <text fg={theme().dim}>{pad(`shade: ${shade() ?? "none"}`)}</text>
-        <text fg={serverOk() ? theme().ink : theme().danger}>
-          {pad(serverOk() === null ? "…" : serverOk() ? "● bridge" : "○ bridge down")}
-        </text>
+          </box>
+          <box flexDirection="row" flexShrink={0}>
+            <text fg={vadLive() ? rtColor() : theme().dim} attributes={TextAttributes.BOLD}>
+              {vadLive() ? "● " : "○ "}
+            </text>
+            <text fg={theme().accent} attributes={TextAttributes.BOLD}>
+              {"█".repeat(barW())}
+            </text>
+          </box>
+        </box>
+        <Panel
+          theme={theme}
+          shade={shade}
+          sid={sid}
+          cwd={cwd}
+          mode={mode}
+          micOn={micOn}
+          speech={speech}
+          dictating={dictating}
+          recSeconds={recSeconds}
+          todos={todos}
+          viz={viz}
+          tick={tick}
+          busy={busy}
+          backendNote={backendNote}
+        />
       </box>
+      </Show>
       <box
         flexDirection="column"
         flexGrow={1}
@@ -1391,20 +1736,83 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
       >
         {/* Transcript owns the leftover space but can never push the input
             off-screen: it clips instead. histVis already windows newest-first
-            by rows, so clipping is only a backstop for the open palette. */}
+            by rows, so clipping is only a backstop for the open palette.
+            Empty: the home screen — wordmark (RT in the live shade) plus the
+            rules/suggestions list. Borderless by design: panel + input stay
+            the only two heavy frames. */}
         <box flexDirection="column" flexGrow={1} overflow="hidden">
+          <Show when={msgs().length === 0}>
+            <box flexDirection="column" flexGrow={1} justifyContent="center" alignItems="center">
+              {/* Original wordmark, 2 rows: "Voice" in terminal ink, "RT"
+                  in the live shade — same split as the farewell card. */}
+              <box flexDirection="row" flexShrink={0}>
+                <text fg={theme().ink} attributes={TextAttributes.BOLD}>
+                  {WORDMARK[0]?.slice(0, RT_COL)}
+                </text>
+                <text fg={rtColor()} attributes={TextAttributes.BOLD}>
+                  {` ${WORDMARK[0]?.slice(RT_COL)}`}
+                </text>
+              </box>
+              <box flexDirection="row" flexShrink={0}>
+                <text fg={theme().ink} attributes={TextAttributes.BOLD}>
+                  {WORDMARK[1]?.slice(0, RT_COL)}
+                </text>
+                <text fg={rtColor()} attributes={TextAttributes.BOLD}>
+                  {` ${WORDMARK[1]?.slice(RT_COL)}`}
+                </text>
+              </box>
+              <text fg={theme().dim}>{" "}</text>
+              <For each={SUGGESTIONS}>
+                {(s) => (
+                  <text fg={theme().dim}>
+                    {s}
+                  </text>
+                )}
+              </For>
+            </box>
+          </Show>
           <For each={histVis()}>
             {(m) => (
               <>
                 <Show when={m.who === "you"}>
                   <box border borderStyle="heavy" borderColor={theme().inputBorder} opacity={0.6}>
-                    <text fg={colorFor(m.who)}>
-                      {labelFor(m.who) + m.text}
-                    </text>
+                    <box flexDirection="row" justifyContent="space-between">
+                      <text fg={colorFor(m.who)}>
+                        {labelFor(m.who) + m.text}
+                      </text>
+                      <Show when={m.queued !== undefined}>
+                        <text fg={theme().warn} attributes={TextAttributes.BOLD}>
+                          {` [queued #${m.queued}]`}
+                        </text>
+                      </Show>
+                    </box>
                   </box>
                 </Show>
-                <Show when={m.who !== "you"}>
-                  <text fg={colorFor(m.who)} attributes={m.who === "think" ? TextAttributes.DIM : TextAttributes.NONE}>
+                <Show when={m.who === "agent"}>
+                  <markdown content={m.text} syntaxStyle={mdStyle} streaming={false} fg={theme().ink} />
+                </Show>
+                <Show when={m.who === "act"}>
+                  <text
+                    fg={m.done === true ? theme().accent : m.done === false ? theme().danger : theme().warn}
+                    attributes={m.done === true ? TextAttributes.BOLD : TextAttributes.NONE}
+                  >
+                    {m.text.startsWith("todos:")
+                      ? m.text
+                      : `${m.done === true ? "✓ " : m.done === false ? "✗ " : "▸ "}${m.text.replace(/^[▸✓✗\s]*/, "")}`}
+                  </text>
+                </Show>
+                <Show when={m.who === "think"}>
+                  <text fg={colorFor(m.who)} attributes={TextAttributes.DIM}>
+                    {`› think ${m.ts ? `[${fmtTime(m.ts)}] ` : ""}${m.text}`}
+                  </text>
+                </Show>
+                <Show when={m.who === "compact"}>
+                  <text fg={theme().warn} attributes={TextAttributes.BOLD}>
+                    {`⚡ ${m.text}`}
+                  </text>
+                </Show>
+                <Show when={m.who !== "you" && m.who !== "agent" && m.who !== "act" && m.who !== "think" && m.who !== "compact"}>
+                  <text fg={colorFor(m.who)}>
                     {labelFor(m.who) + m.text}
                   </text>
                 </Show>
@@ -1412,12 +1820,24 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
             )}
           </For>
         </box>
-        <Show when={streamText()}>
-          <text fg={theme().dim} attributes={TextAttributes.DIM}>
-            {streamText().slice(-400) + "▌"}
-          </text>
+        {/* Realtime STT draft: live user bubble while speaking — interim
+            tokens land here token-wise, then the final STT replaces it with
+            the bordered `you` message above (see runText). */}
+        <Show when={dictating() || draft()}>
+          <box border borderStyle="heavy" borderColor={theme().accent} opacity={0.7} flexShrink={0}>
+            <text fg={theme().accent} attributes={TextAttributes.BOLD}>
+              {`› ${draft() || "… speaking …"} ●live`}
+            </text>
+          </box>
         </Show>
-        <text fg={theme().warn}>{phase() || (histOff() > 0 ? "↑ scrolled back — PgDn / wheel ↓ for live" : " ")}</text>
+        {/* Realtime LLM stream: the assistant's tokens as they arrive,
+            rendered as a streaming markdown bubble (final `chat` event
+            replaces this preview with the complete message). */}
+        <Show when={streamText()}>
+          <box flexDirection="column" flexShrink={0} opacity={0.9}>
+            <markdown content={streamText().slice(-1200) + "▌"} syntaxStyle={mdStyle} streaming={true} fg={theme().ink} />
+          </box>
+        </Show>
         {/* The menu belongs to the prompt, so it renders directly above the
             input box — after the flexGrow spacer, not next to the transcript.
             An empty transcript is the common case, and placing it after the
@@ -1446,7 +1866,22 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
             </For>
           </box>
         </Show>
-        <box border borderStyle="heavy" borderColor={theme().inputBorder} flexDirection="row" flexShrink={0}>
+        {/* Status line: one row for every former sys log (mode/mic/cwd/
+            warm/confirm acks). Never scrolls, never piles up. The ›› marker
+            sets it apart from › user and › think transcript rows. */}
+        <Show when={status()}>
+          <text fg={theme().dim} attributes={TextAttributes.DIM}>
+            {`›› ${status()}`}
+          </text>
+        </Show>
+        <box
+          border
+          borderStyle="heavy"
+          borderColor={theme().inputBorder}
+          flexDirection="row"
+          flexShrink={0}
+          height={inputLines() > 1 ? inputLines() + 2 : undefined}
+        >
           <text fg={theme().ink}>{" "}</text>
           <text fg={mode() === "voice" ? theme().voiceBlue : theme().ink}>{mode() === "voice" ? "voice" : mode()}</text>
           <text fg={theme().ink}>{" -> "}</text>
@@ -1467,13 +1902,28 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
             placeholder={mode() === "voice" ? "live — just speak, no typing needed" : "Add a follow-up  ( / for commands · v for voice )"}
           />
         </box>
-        <Show when={pending()}>
-          {(p: () => Record<string, unknown>) => (
-            <text fg={theme().warn}>
-              {`Confirm ${String(p()["action"] ?? "?")}: ${String(p()["command"] ?? p()["path"] ?? "")} (y/n)`}
-            </text>
-          )}
-        </Show>
+        {/* State of execution on right corner below input + permission prompt on left */}
+        <box flexDirection="row" justifyContent="space-between" flexShrink={0} marginTop={0}>
+          <box>
+            <Show when={pending()}>
+              {(p: () => Record<string, unknown>) => (
+                <text fg={theme().warn} attributes={TextAttributes.BOLD}>
+                  {`⬡ Permission: Confirm ${String(p()["action"] ?? "?")}: ${String(p()["command"] ?? p()["path"] ?? "")} (y/n)`}
+                </text>
+              )}
+            </Show>
+          </box>
+          <box flexDirection="row" justifyContent="flex-end">
+            <Show when={phase() || busy()}>
+              <text fg={phase() === "interrupted" ? theme().danger : theme().accent} attributes={TextAttributes.BOLD}>
+                {`${spinnerFrame(tick())} ${phaseLabel(phase()) || "Thinking"}`}
+              </text>
+            </Show>
+            <Show when={!phase() && !busy() && histOff() > 0}>
+              <text fg={theme().dim}>{"↑ scrolled back — PgDn / wheel ↓ for live"}</text>
+            </Show>
+          </box>
+        </box>
       </box>
     </box>
   );

@@ -4,7 +4,8 @@ Technical documentation for `voice-pipeline`. Start here, then go deep.
 
 | Doc | What it covers |
 |---|---|
-| [architecture.md](architecture.md) | Complete system architecture: components, data flow per endpoint, module map, startup sequence, failure modes |
+| [**architecture/**](architecture/README.md) | **The system, split by part: [01 Agent](architecture/01-agent.md) · [02 Tools](architecture/02-tools.md) · [03 Memory](architecture/03-memory.md) · [04 Sessions](architecture/04-sessions.md) · [05 Models](architecture/05-models.md) · [06 Processes](architecture/06-processes.md) · [07 Inference](architecture/07-inference.md) · [08 TUI](architecture/08-tui.md)** |
+| [architecture.md](architecture.md) | Older single-file architecture: components, data flow per endpoint, module map, startup sequence, failure modes |
 | [capacity.md](capacity.md) | VRAM capacity model: probe → price → plan, queueing design, worked 4GB example, retuning guide |
 | [inference_engine.md](inference_engine.md) | Scheduling, batching, paged KV, memory mgmt, QwenRunner, integration with VoiceAgent |
 | [benchmarks.md](benchmarks.md) | All measured numbers: fused kernel microbench, inference engine features, full pipeline, cost, capacity |

@@ -14,16 +14,26 @@
 // stored verbatim rather than reassembled from a per-letter table — the two
 // rows share their space columns exactly, which is what keeps them aligned.
 // ░ (light shade) gives the strokes their bevel.
-const WORDMARK = [
+// Reused by the TUI empty state (center of the chat panel): the same two
+// rows render there with "RT" in the live shade color.
+export const WORDMARK = [
   " █░█ ▄▀▄ ▀ ▄▀▀ ██▀ █▀█ ▀█▀",
   " ▀▄▀ ▀▄▀ █ ▀▄▄ █▄▄ █▀▄ ░█░",
 ];
 /** Column where "RT" starts: 5 glyphs ("Voice") plus their gaps. */
-const RT_COL = 19;
+export const RT_COL = 19;
 
 const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
 const DIM = "\x1b[90m";
+
+/**
+ * Released version, kept in step with package.json by
+ * `check("the card matches package.json", ...)` in scripts/test-keys.mjs —
+ * that test reads both files, so bumping one without the other fails loudly
+ * rather than shipping a card that lies about which build it came from.
+ */
+export const VERSION = "0.0.1";
 
 /** "#4ade80" -> a 24-bit foreground SGR. Falls back to the default ink. */
 function ansiFg(hex: string): string {
@@ -59,6 +69,7 @@ export function sessionEpilogue(title: string, sessionId: string, shadeHex?: str
     "",
     `  ${weak("Session")}${BOLD}${title}${RESET}`,
     `  ${weak("Continue")}${BOLD}voicert -s ${sessionId}${RESET}`,
+    `  ${weak("Version")}${DIM}v${VERSION}${RESET}`,
     "",
   ].join("\n");
 }

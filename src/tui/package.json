@@ -1,6 +1,6 @@
 {
   "name": "voice-term-tui",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "private": true,
   "description": "OpenTUI (Solid) full-screen TUI for the local voice-terminal agent. Talks to bridge.py on :8004.",
   "type": "module",
