@@ -1,16 +1,19 @@
-"""Complete Whisper STT (all layers) importing fused Triton kernel.
+"""Complete Whisper STT (all layers), pure PyTorch (no Triton).
 
-1 fused decoder layer x6, batched, KV cache, VRAM check, static test.
+1 decoder layer x6, batched, KV cache, VRAM check, static test.
+Ops (LayerNorm/einsum-attention/SDPA encoder) come from
+src.models.pytorch.whisper — plain torch math, explainable line by line.
 """
 import glob, os, time
 import numpy as np
 import torch
 import torch.nn.functional as F
-from src.models.triton_kernels.whisper_fused import (
-    whisper_fused_decoder_layer, whisper_fused_encoder_layer,
-    estimate_whisper_kv_mb, layernorm
+from src.models.pytorch.whisper import (
+    whisper_decoder_layer_torch as whisper_fused_decoder_layer,
+    whisper_encoder_layer as whisper_fused_encoder_layer,
+    estimate_whisper_kv_mb, layernorm,
+    whisper_decoder_layer_torch,
 )
-from src.models.pytorch.whisper import whisper_decoder_layer_torch
 from src.models.runtime.memory import check_budget
 from src.models.runtime.device import max_allocated_mb
 
@@ -206,10 +209,9 @@ class WhisperFused(torch.nn.Module):
         Kx=(torch.randn(B,H,XN,64, device=device, dtype=torch.float32)*0.05).to(torch.float16) if B>1 else (torch.randn(H,XN,64, device=device, dtype=torch.float32)*0.05).to(torch.float16)
         Vx=(torch.randn(B,H,XN,64, device=device, dtype=torch.float32)*0.05).to(torch.float16) if B>1 else (torch.randn(H,XN,64, device=device, dtype=torch.float32)*0.05).to(torch.float16)
         try:
-            from src.models.triton_kernels.whisper_fused import whisper_fused_decoder_layer as fused
             skf=sk.clone(); svf=sv.clone()
             skt=sk.clone(); svt=sv.clone()
-            out_f = fused(x.clone(), w, "model.decoder.layers.0.", skf, svf, 10, Kx, Vx)
+            out_f = whisper_fused_decoder_layer(x.clone(), w, "model.decoder.layers.0.", skf, svf, 10, Kx, Vx)
             out_t = whisper_decoder_layer_torch(x.clone(), w, "model.decoder.layers.0.", skt, svt, 10, Kx, Vx)
             err=(out_f.float()-out_t.float()).abs().max().item()
             print(f"  max_err={err:.2e}", flush=True)

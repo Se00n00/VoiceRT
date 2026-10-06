@@ -93,11 +93,9 @@ class DelegateConfig:
     """Two-brain routing knobs. Unknown YAML keys are ignored, not fatal."""
 
     enabled: bool = True
-    # "fused" (front on CUDA) | "cpu" (front fused on CPU, 0 VRAM)
-    # | "sidecar" (front as a 0-VRAM llama.cpp CPU server).
+    # "fused" (front on CUDA) | "cpu" (front fused on CPU, 0 VRAM).
     placement: str = "fused"
     front: dict = field(default_factory=dict)
-    front_sidecar: dict = field(default_factory=dict)
     worker: dict = field(default_factory=dict)
     backstop: bool = True
     backstop_min_score: int = 2
@@ -161,13 +159,12 @@ def load_config(explicit: str | None = None) -> DelegateConfig:
         return dict(val) if isinstance(val, dict) else {}
 
     placement = str(data.get("placement", "fused") or "fused").strip().lower()
-    if placement not in ("fused", "cpu", "sidecar"):
+    if placement not in ("fused", "cpu"):
         placement = "fused"
     return DelegateConfig(
         enabled=_flag("enabled", True),
         placement=placement,
         front=_dict("front"),
-        front_sidecar=_dict("front_sidecar"),
         worker=_dict("worker"),
         backstop=_flag("backstop", True),
         backstop_min_score=max(1, _int("backstop_min_score", 2)),
@@ -186,23 +183,6 @@ def front_llm_config(cfg: DelegateConfig):
     """
     from src.models.llm import LlmConfig
 
-    if cfg.placement == "sidecar":
-        s = cfg.front_sidecar or {}
-        return LlmConfig(
-            backend=str(s.get("backend", "qwen06")),
-            model=str(s.get("model", "Qwen/Qwen3-0.6B")),
-            max_tokens=int(cfg.front.get("max_tokens", 64) or 64),
-            device="cpu",
-            use_paged=False,
-            thinking=bool(cfg.front.get("thinking", False)),
-            qwen06_gguf=str(s.get("gguf", "auto")),
-            qwen06_repo=str(s.get("repo", "Qwen/Qwen3-0.6B-GGUF")),
-            qwen06_file=str(s.get("file", "Qwen3-0.6B-Q4_K_M.gguf")),
-            qwen06_port=int(s.get("port", 8085) or 8085),
-            qwen06_ctx=int(s.get("ctx", 8192) or 8192),
-            qwen06_threads=int(s.get("threads", 0) or 0),
-            qwen06_bin=str(s.get("bin", "auto")),
-        )
     f = cfg.front or {}
     device = str(f.get("device") or "").strip()
     if not device:

@@ -65,6 +65,9 @@ memory/
 # node app build outputs (rebuild with npm install && npm run build)
 src/tui/node_modules/
 src/tui/dist/
+src/tauri/node_modules/
+src/tauri/dist/
+src/tauri/src-tauri/target/
 tui-preview/node_modules/
 wa-gate/node_modules/
 

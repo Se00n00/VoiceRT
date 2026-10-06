@@ -480,7 +480,7 @@ def parse_gemma_action(text: str) -> TerminalAction | None:
 
     Server-side template rendering (llama.cpp) emits these when OpenAI
     tools are passed; the leg re-serializes structured calls into the
-    same grammar (see :mod:`src.models.gemma_llamacpp`). The arg span
+    same grammar (see :mod:`src.models.bonsai_llamacpp`). The arg span
     runs to the block marker so nested objects survive; it must parse
     as one JSON object. First valid block wins (single-action
     contract; multi-call grading lives in the eval extractor).

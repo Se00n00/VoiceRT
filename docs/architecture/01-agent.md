@@ -199,9 +199,7 @@ extracts at most two words, and caps length at 40. `generate_title`
 | Backend | Context tokens | Step floor |
 |---|---|---|
 | `bonsai` | 16384 | 512 |
-| `gemma` | 4096 | — |
-| `gemma270` | 32768 | 256 |
-| `qwen17` | 32768 | 512 |
+| `qwen` | 8192 | 256 |
 
 `HEADROOM` 0.8 and `CHARS_PER_TOKEN` 3.5 (`budget.py:57-59`). Token counting
 prefers the server's real `/tokenize` when a URL is available

@@ -20,7 +20,7 @@ def main():
     parser.add_argument("--iterations", type=int, default=30)
     parser.add_argument("--output-dir", default="benchmarks/results")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--model", default="Qwen/Qwen2.5-0.5B-Instruct")
+    parser.add_argument("--model", default="Qwen/Qwen3-0.6B")
     parser.add_argument("--atol", type=float, default=5e-3)
     parser.add_argument("--rtol", type=float, default=5e-3)
     args = parser.parse_args()

@@ -16,7 +16,7 @@ Metrics per run:
 Usage:
   PYTHONPATH=. .venv/bin/python -u benchmarks/toolcall_eval.py [--limit N]
       [--offset N] [--subset benchmarks/toolcall_subset.json]
-      [--model openbmb/MiniCPM5-1B] [--backend minicpm] [--tag minicpm]
+      [--model Qwen/Qwen3-0.6B] [--backend qwen] [--tag qwen]
 Results: benchmarks/results/toolcall_eval_<tag>_<ts>.json
 """
 import argparse
@@ -138,10 +138,8 @@ async def main_async(args, cases):
     _be = str(getattr(getattr(llm, "config", None), "backend", ""))
     if _be == "bonsai":
         max_tokens = max(base, 512)
-    elif _be == "qwen17":
-        max_tokens = max(base, 512)
     else:
-        max_tokens = max(base, 320) if _be.startswith("minicpm") else max(base, 256)
+        max_tokens = max(base, 256)
     required = _required_args()
 
     rows = []
@@ -194,9 +192,9 @@ def summarize(rows):
 def main():
     ap = argparse.ArgumentParser(description="BFCL-style offline tool-call eval")
     ap.add_argument("--subset", default="benchmarks/toolcall_subset.json")
-    ap.add_argument("--model", default="google/gemma-4-E4B-it")
-    ap.add_argument("--backend", default="gemma")
-    ap.add_argument("--tag", default="gemma")
+    ap.add_argument("--model", default="Qwen/Qwen3-0.6B")
+    ap.add_argument("--backend", default="qwen")
+    ap.add_argument("--tag", default="qwen")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--offset", type=int, default=0)
     args = ap.parse_args()

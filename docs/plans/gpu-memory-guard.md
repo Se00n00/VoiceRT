@@ -75,7 +75,7 @@ Call sites (all cheap, cached per process where hot):
   18h hang and the bonsai refusal both happened).
 - `generate` / `transcribe` / `speak` — driver-health + tenant check
   only (no per-token math); refuse in milliseconds, not after a hang.
-- Sidecar spawn (`gemma_llamacpp` server start) — RAM fit + port clash.
+- Sidecar spawn (bonsai llama-server start) — RAM fit + port clash.
 - Bench/eval entry points — same `preflight`, so sweeps fail fast
   instead of wedging the shared box mid-run.
 

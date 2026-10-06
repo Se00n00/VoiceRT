@@ -1,13 +1,13 @@
 """VoiceAgent: ONE autonomous agent for voice, terminal, and everything else.
 
-Device placement (Gemma era — LLM on CPU, fast hands on GPU):
+Device placement (two brains: Qwen3-0.6B fused front on GPU/CPU +
+Bonsai-27B sidecar worker):
 
-- LLM  Gemma-4-E4B-it Q4_K_M via local llama.cpp sidecar (CPU-only,
-  ``backend="gemma"``). Zero VRAM by design; the paged GPU engine is
-  incoherent here and stays off.
+- LLM  Qwen3-0.6B fused Triton (``backend="qwen"``) or Bonsai 27B
+  llama.cpp sidecar (``backend="bonsai"``) for agentic work.
 - VAD  Silero ONNX (CPU, RTF ~0.01).
-- STT  Whisper-base fused (GPU when CUDA is up, CPU fallback otherwise).
-- TTS  Kokoro-82M (GPU when CUDA is up, CPU fallback otherwise).
+- STT  Whisper-base pure-torch (GPU when CUDA is up, CPU fallback otherwise).
+- TTS  Kokoro-82M + torch post (GPU when CUDA is up, CPU fallback otherwise).
 
 Pipeline: speech -> VAD spans -> STT text -> deep-agent turn (tools +
 JSON session memory) -> TTS. Text turns go through :meth:`run_text`
@@ -19,6 +19,7 @@ active turn drains.
 
 import asyncio
 import os
+import re
 import time
 from dataclasses import dataclass, field, replace
 
@@ -34,25 +35,29 @@ from src.models.vad import VadConfig, VadModel
 
 __all__ = ["VoiceAgentConfig", "VoiceAgent"]
 
-# suffix appended to the shared tool preamble per modality. Voice replies
-# must stay short enough to speak; text turns work until done.
 _VOICE_SUFFIX = "\n\n" + SYSTEM_PROMPT
-# Front-brain (two-brain mode) CHAT system prompt. Used only on the branch
-# where the boolean router said "this is conversation". Spoken aloud, so it
-# is short; the escalation question itself lives in
-# src/agent/delegate.py (BOOLEAN_SYSTEM), and the front leg is never given
-# tool specs — a 0.6B holding a tool schema answers the tool, not the user.
 _FRONT_SYSTEM = (
     "You are a voice assistant. The user is talking, not asking you to do "
-    "anything on their computer. Reply in ONE short plain sentence, under 15 "
-    "words. No tools, no preamble, no lists.")
-_VOICE_FAST_SYSTEM = ("You are a voice assistant. Reply in one very short "
-                      "sentence, under 10 words. Plain text only — no tools, "
-                      "no preamble, just the reply.")
+    "anything on their computer. Reply in plain speech, no tools, no "
+    "preamble, no lists. Do not speak more than 500 words. "
+    "You ARE the assistant answering right now: never mention delegation, "
+    "larger or bigger models, handoffs, or escalation.")
+_VOICE_FAST_SYSTEM = ("You are a voice assistant. Reply in plain speech, "
+                      "no tools, no preamble, just the reply. Do not speak "
+                      "more than 500 words.")
 _TEXT_SUFFIX = ("\n\nWork until done: use tools step by step, then give one "
                 "short final reply.")
 
 _TRIM_PAD_S = 0.15
+MAX_SPOKEN_WORDS = 500
+
+
+def _cap_words(text: str, limit: int = MAX_SPOKEN_WORDS) -> str:
+    """Hard word cap for spoken replies (model instruction is advisory)."""
+    words = str(text or "").split()
+    if len(words) <= limit:
+        return str(text or "")
+    return " ".join(words[:limit])
 
 
 def _speak_head(full: str, limit: int = 280) -> str:
@@ -81,12 +86,9 @@ class VoiceAgentConfig:
     sessions_dir: str = "sessions"
     max_inflight: int = 4
     queue_timeout_s: float = 10.0
-    # VRAM budget covers the GPU legs only (STT + TTS). The LLM is a CPU
-    # sidecar and holds zero VRAM — a sick GPU must never block a CPU turn.
     vram_budget_mb: float = 3800.0
     per_turn_mb: float = 150.0
     trim_pad_s: float = 0.15
-    # deep-agent loop + tool execution knobs.
     max_agent_steps: int = 6
     recursion_limit: int = 10
     tool_timeout_s: float = 30.0
@@ -95,52 +97,19 @@ class VoiceAgentConfig:
     exec_timeout_s: float = 30.0
     mcp_config: str | None = None
     use_tool_router: bool = True
-    # paged LLM engine (GPU Qwen/MiniCPM only). Incoherent with sidecar
-    # backends — forced off for backend="gemma"/"bonsai" (see __init__).
     llm_paged: bool = False
     llm_paged_blocks: int = 16
     llm_paged_batch_size: int = 4
-    # Text turns speak their reply (TTS alloc on GPU) by default. On 4GB
-    # cards next to a 27B LLM there is no headroom left — set False for
-    # text-only operation (TUI auto mode): no audio event, no VRAM touch,
-    # no red OOM blob next to a perfectly good reply. Voice turns and
-    # /term/say are unaffected. Bridge sets it from VOICE_TEXT_ONLY=1.
     speak_text_turns: bool = True
-    # Fast voice turns: VAD -> STT -> ONE direct LLM generate -> TTS,
-    # bypassing the deep-agent loop (graph rebuild + tool router + up to 6
-    # steps). Same four legs attached, same events out. The full agent
-    # path stays for tool-using turns; fast is the latency play (~400ms
-    # E2E budget) for conversational voice.
     fast_voice: bool = False
-    # legacy text-queue knob (kept for API compat, unused by voice turns).
     max_queue: int = 16
     sandbox: object = None
-    # Three-tier memory (all off by default — prod behavior unchanged).
-    # memory_tokens: L1 token-budget window (0 = count cap only).
-    # memory_recall: inject L2 episodes + L3 facts into the turn prompt.
-    # memory_store: consolidate evicted L1 turns into L2 on remember.
-    # memory_dir: local state root (episodic.db, facts.md — gitignored).
     memory_tokens: int = 0
     memory_recall: bool = False
     memory_store: bool = False
     memory_dir: str = "memory"
-    # Two-brain delegation (src/agent/delegate.py). On: a small front model
-    # (Qwen3-0.6B) talks to the user and is given no tools — it only answers
-    # yes/no on whether the turn needs the worker, and an escalated turn runs
-    # on the worker leg (Bonsai 27B) with the whole agentic harness. Off: the
-    # single llm leg answers everything, as before.
-    #
-    # Default OFF on purpose: turning it on builds a SECOND set of weights,
-    # so a library caller that never asked for delegation should not wake up
-    # paying for it (VRAM on a 4GB card, plus a warm). The app entry points
-    # (server.py /talk, bridge.py /term) opt in — that is where the
-    # two-brain design is the product decision, not a library detail.
     delegate: bool = False
     delegate_config: str | None = None
-    # Worker sidecar warm policy. False (default): the Bonsai worker is NOT
-    # warmed at boot — zero CPU/GPU footprint until the first delegate
-    # route boots it on demand (see _ensure_worker). True: warm eagerly as
-    # before. The delegate YAML may also set `worker_eager: true`.
     worker_eager: bool = False
 
 
@@ -161,6 +130,7 @@ def _lc_messages(history: list) -> list:
 
 
 def _chunk_pieces(chunk) -> list[str]:
+    """Extract non-empty text pieces from a streamed model chunk."""
     content = getattr(chunk, "content", "")
     if isinstance(content, str):
         return [content] if content else []
@@ -176,6 +146,7 @@ def _chunk_pieces(chunk) -> list[str]:
 
 
 def _trim(audio, sr, segs, pad_s=_TRIM_PAD_S):
+    """Cut audio to the outer speech spans plus padding on each side."""
     wav = np.asarray(audio, dtype=np.float32).ravel()
     dur = len(wav) / float(sr)
     s0 = max(0.0, float(segs[0][0]) - pad_s)
@@ -186,6 +157,7 @@ def _trim(audio, sr, segs, pad_s=_TRIM_PAD_S):
 
 
 def _vram_mb():
+    """Current process GPU allocation in MB, or None without CUDA."""
     try:
         from src.models.runtime import max_allocated_mb
 
@@ -194,26 +166,40 @@ def _vram_mb():
         return None
 
 
+_CLAUSE_SPLIT = re.compile(r"(?<=[,;:])\s+")
+
+
+def _clauses(sentence: str) -> list[str]:
+    """Split one sentence into speakable clauses on [,;:] boundaries.
+
+    Finer than the shared sentence splitter on purpose: the first clause
+    synthesizes (and starts playing) well before the sentence ends,
+    which is where pause-to-first-audio time is won. The shared splitter
+    stays untouched — clause chunking is a voice-turn concern only.
+    """
+    parts = _CLAUSE_SPLIT.split(str(sentence or ""))
+    return [p.strip() for p in parts if p.strip()]
+
+
+_DELEGATION_TALK = re.compile(
+    r"delegat|escalat|larger model|bigger model|hand(?:ing|ed|le)? "
+    r"(it|this|that|things|off)|pass(?:ing|ed)? (it|this|that) (on|off|up)|"
+    r"i(?:'| wi)ll (let|have|get) (someone|another|the) ",
+    re.IGNORECASE)
+
+
 class VoiceAgent:
     """VAD -> STT -> deep-agent LLM (Bonsai 27B sidecar) -> TTS (GPU), streaming."""
 
     def __init__(self, config: VoiceAgentConfig | None = None):
+        """Build the legs, session store and schedulers. Warms nothing."""
         self.config = config or VoiceAgentConfig()
         cfg = self.config
-        # Sidecar legs own their own inference (llama-server on CPU, or
-        # Bonsai with partial GPU offload): the paged GPU engine must
-        # never warm weights behind their back.
         llm_cfg = cfg.llm
         from src.models.llm import SIDECAR_BACKENDS
 
-        # -- two-brain routing -------------------------------------------
-        # Loaded before the legs so `worker:` overrides in the YAML land on
-        # the single existing llm leg. Delegation never forks the worker
-        # into a second instance: same graph, same tools, same memory.
         self.delegate_cfg = None
         self.front_llm = None
-        # Router-vs-regex disagreement counters, surfaced on /health. See
-        # _note_route_disagreement.
         self._route_skew: dict = {}
         if bool(getattr(cfg, "delegate", False)):
             try:
@@ -238,9 +224,6 @@ class VoiceAgent:
         self.stt = SttModel(cfg.stt)
         self.llm = LlmModel(llm_cfg)
         self.tts = TtsModel(cfg.tts)
-        # Front leg: a SECOND LlmModel, independent of the worker. Built
-        # after the worker override so a placement failure can never take
-        # the worker down with it.
         if self.delegate_cfg is not None:
             try:
                 from src.agent.delegate import front_llm_config
@@ -273,11 +256,8 @@ class VoiceAgent:
             max_sessions=cfg.max_sessions,
             max_tokens=getattr(cfg, "memory_tokens", 0) or 0,
         )
-        # Shared semantic tool router: one bge-small load per process, not
-        # one per turn (_build_agent used to construct a fresh router each
-        # turn, re-reading 199 weight tensors from disk every time).
         self._router = None
-        self._episodic = None  # lazy EpisodicStore (memory_store/recall)
+        self._episodic = None
         try:
             from src.models.runtime import FIFOScheduler
 
@@ -286,16 +266,11 @@ class VoiceAgent:
             self._sched = None
         self.missing: list = []
         self._warmed = False
-        # Lazy-worker state (see _ensure_worker): the Bonsai sidecar boots
-        # on first delegate route, not at app warm. A refusal latches so
-        # later YES turns fail fast with the same reason; an explicit
-        # /model switch to a warmed leg resets both (bridge.py).
         self._worker_unavailable: str | None = None
         self._worker_warmed = False
         self._worker_eager = bool(getattr(cfg, "worker_eager", False))
         if self.delegate_cfg is not None and bool(
                 getattr(self.delegate_cfg, "worker_eager", False)):
-            # YAML asks eager too: either source opting in enables it.
             self._worker_eager = True
         self._locks: dict[str, asyncio.Lock] = {}
         self._pending: dict[str, list[str]] = {}
@@ -303,7 +278,6 @@ class VoiceAgent:
         self._paged_engine = None
         self.agent = self._build_agent(self._extra_tools or [])
 
-    # -- construction -------------------------------------------------
     def _summarization_middleware(self, backend):
         """In-turn compaction guard (returns None when unavailable).
 
@@ -339,6 +313,7 @@ class VoiceAgent:
             return None
 
     def _build_agent(self, extra_tools):
+        """Assemble the deep agent: model, shell backend, tools, middleware."""
         from deepagents import create_deep_agent
         from langchain.agents.middleware import TodoListMiddleware
 
@@ -393,26 +368,18 @@ class VoiceAgent:
 
     @property
     def warmed(self) -> bool:
+        """Whether warm() has completed at least once."""
         return self._warmed
 
     async def warm(self) -> "VoiceAgent":
         """Build every leg; collect failures instead of raising."""
         self.missing = []
-        # Order matters. The front leg is small and must be resident BEFORE
-        # the worker warms: the Bonsai sidecar picks its layer split with
-        # `-ngl auto`, which probes *free* VRAM at startup. Warm the worker
-        # first and it claims the whole 4GB card, the front then fails to
-        # allocate, and every turn degrades to the worker. Small-and-fixed
-        # first, adaptive-and-large second.
         for name in ("vad", "stt", "tts", "front_llm", "llm"):
             if name == "tts" and not self.config.speak_text_turns:
                 self.missing.append("tts leg: skipped (text-only)")
                 continue
             if (name == "llm" and self.delegate_cfg is not None
                     and not self._worker_eager):
-                # Lazy worker: no footprint until the first delegate route
-                # boots it on demand. Deliberately NOT a missing entry —
-                # nothing failed.
                 continue
             leg = getattr(self, name, None)
             if leg is None:
@@ -438,6 +405,7 @@ class VoiceAgent:
 
     @property
     def paged_engine(self):
+        """The shared paged inference engine, resolving it lazily once."""
         if not self._warmed:
             return self._paged_engine
         if self._paged_engine is None:
@@ -449,6 +417,7 @@ class VoiceAgent:
         return self._paged_engine
 
     def engine_stats(self):
+        """Paged engine counters, or None when the engine is absent."""
         eng = self.paged_engine
         if eng is None:
             return None
@@ -457,17 +426,19 @@ class VoiceAgent:
         except Exception:
             return None
 
-    # -- sessions (app-layer helpers delegate to the same store) -------
     def history(self, session_id: str | None) -> list:
+        """Session transcript as role/content dicts, empty when unknown."""
         try:
             return self.sessions.history(session_id) if session_id else []
         except Exception:
             return []
 
     def export_session(self, session_id: str) -> list:
+        """Dump one session transcript for application-level persistence."""
         return self.history(session_id)
 
     def import_session(self, session_id: str, data: list) -> None:
+        """Load role/content dicts into a session. Never raises."""
         try:
             from langchain_core.messages import AIMessage, HumanMessage
 
@@ -489,12 +460,14 @@ class VoiceAgent:
             pass
 
     def remember_approval(self, session_id: str, command: str):
+        """Allowlist a command's first word for the rest of the session."""
         if not session_id or not command:
             return
         self.approvals.setdefault(session_id, set()).add(
             command.strip().split()[0][:40])
 
     def is_approved(self, session_id: str | None, action) -> bool:
+        """Whether the action's command or op is allowlisted this session."""
         if not session_id:
             return False
         allow = self.approvals.get(session_id, set())
@@ -504,8 +477,8 @@ class VoiceAgent:
         first = cmd.strip().split()[0] if cmd.strip() else ""
         return first in allow or getattr(action, "op", "") in allow
 
-    # -- admission ------------------------------------------------------
     async def _admit(self):
+        """Take a scheduler slot, timing out when the server is saturated."""
         if self._sched is None:
             return None
         ticket = await asyncio.to_thread(
@@ -517,14 +490,15 @@ class VoiceAgent:
         return ticket
 
     def _release(self, ticket) -> None:
+        """Hand a scheduler slot back. Never raises."""
         try:
             if ticket is not None and self._sched is not None:
                 self._sched.release(ticket)
         except Exception:
             pass
 
-    # -- shared turn machinery ------------------------------------------
     def _norm_msg(self, m):
+        """Reduce a LangChain message or dict to role, content, calls, kwargs."""
         if isinstance(m, dict):
             return (m.get("type") or m.get("role") or "",
                     m.get("content", ""), m.get("tool_calls"),
@@ -536,6 +510,7 @@ class VoiceAgent:
 
     @staticmethod
     def _think_of(ak) -> str:
+        """Pull the thinking trace out of message kwargs, else empty."""
         return str(ak.get("thinking", "") or "") if isinstance(ak, dict) else ""
 
     @staticmethod
@@ -557,7 +532,9 @@ class VoiceAgent:
         return txt
 
     def _confirm_wrapper(self, confirm_fn, sid: str | None):
+        """Adapt a raw confirm callback to allow/deny/allowlist semantics."""
         async def _wrapper(action):
+            """Resolve one tool approval through the user callback."""
             res = None
             if confirm_fn is not None:
                 res = (await confirm_fn(action)
@@ -574,7 +551,6 @@ class VoiceAgent:
 
         return _wrapper
 
-    # -- two-brain routing -------------------------------------------------
     def _front_messages(self, text: str, history: list) -> list:
         """Front-model CHAT prompt: one short spoken sentence, no tools.
 
@@ -611,14 +587,10 @@ class VoiceAgent:
             return Route("delegate", str(text), reason=reason,
                          forced=reason != "boolean")
 
-        # Front said this is conversation, so it is now free to speak.
         reply, reason2 = await self._front_chat(text, history)
         route = parse_delegate(reply, max_task_chars=cap)
         if route is not None:
             return route
-        # Backstop: the front model said "chat" but the request reads like
-        # machine work. Cheap, deterministic, and the last guard against
-        # telling the user something is done that never happened.
         if (getattr(self.delegate_cfg, "backstop", False)
                 and is_task_shaped(text, int(getattr(
                     self.delegate_cfg, "backstop_min_score", 2) or 2))):
@@ -631,11 +603,17 @@ class VoiceAgent:
         Returns ``(reply, reason)``. Never raises: a dead front leg on the
         chat path is an empty reply, and an empty chat reply falls through
         to the worker in _run_turn rather than answering with silence.
+        Delegation-talk ("I'll hand this to a larger model...") is also
+        emptied: the front model narrating a handoff instead of answering
+        is a miss, and the worker gives the real reply.
         """
         try:
             res = await self.front_llm.generate(
                 self._front_messages(text, history), 96)
-            return str(getattr(res, "text", "") or "").strip(), "chat"
+            reply = str(getattr(res, "text", "") or "").strip()
+            if reply and _DELEGATION_TALK.search(reply):
+                return "", "chat-delegating"
+            return reply, "chat"
         except Exception as exc:  # noqa: BLE001 - fall through to the worker
             return "", f"chat-error:{type(exc).__name__}"
 
@@ -694,11 +672,8 @@ class VoiceAgent:
         from src.tools.terminal import is_degenerate
 
         confirm = self._confirm_wrapper(confirm_fn, sid)
-        _ = confirm  # confirm gate lives in tool middleware for now
+        _ = confirm
         try:
-            # Rebind every turn: evals/tests hot-swap agent.llm/chat_model
-            # after construction (llm-only warm); a graph compiled in
-            # __init__ would otherwise keep calling the stale leg.
             agent = self._build_agent(self._extra_tools or [])
             self.agent = agent
         except Exception as exc:
@@ -713,11 +688,6 @@ class VoiceAgent:
         final_reply = ""
         thinking = ""
         last_think = ""
-        # True once live think deltas streamed this step: the updates-mode
-        # copy of the same trace must not re-render (it would duplicate the
-        # grown bubble — and in a different, newline-joined format).
-        # Display-only flag: `thinking`/`last_think` still update so the
-        # summary, memory and TTS gating keep correct data.
         live_think_shown = False
         did_work = False
         rl = 10 + int(getattr(self.config, "max_agent_steps", 6) or 6) * 5
@@ -737,9 +707,6 @@ class VoiceAgent:
                         for piece in _chunk_pieces(msg):
                             yield AgentEvent(node="term", kind="token",
                                              data={"piece": piece[:500]})
-                        # Live think lane: reasoning deltas stream here while
-                        # the step is still generating (the full trace lands
-                        # via the updates-mode thinking event at step end).
                         ak = getattr(msg, "additional_kwargs", None) or {}
                         if isinstance(ak, dict) and ak.get("thinking_delta"):
                             live_think_shown = True
@@ -771,7 +738,7 @@ class VoiceAgent:
                                         node="term", kind="thinking",
                                         data={"text": think[:2000]})
                             if tool_calls:
-                                live_think_shown = False  # new step
+                                live_think_shown = False
                                 for tc in tool_calls:
                                     if isinstance(tc, dict):
                                         name = tc.get("name", "?")
@@ -805,7 +772,7 @@ class VoiceAgent:
                                 yield AgentEvent(
                                     node="term", kind="observation",
                                     data={"observation": obs[:1200]})
-        except Exception as exc:  # never kill the turn on engine errors
+        except Exception as exc:
             yield AgentEvent(node="term", kind="error",
                              data={"message": str(exc)[:300]})
         thinking2, reply = split_thinking(final_reply)
@@ -856,6 +823,7 @@ class VoiceAgent:
             await lock.acquire()
         try:
             async def _one(t: str):
+                """Run one queued text through the turn pipeline."""
                 async for ev in self._run_turn(
                         t, sid=sid, cwd=cwd, confirm_fn=confirm_fn,
                         system_suffix=system_suffix, out_turns=out_turns):
@@ -910,8 +878,6 @@ class VoiceAgent:
         if route.kind == "chat":
             reply = str(route.text or "").strip()
             if not reply:
-                # Front model returned nothing. Falling through to the
-                # worker beats answering with silence.
                 reason = await self._ensure_worker()
                 if reason:
                     out_turns.append(
@@ -935,25 +901,15 @@ class VoiceAgent:
                 task, sid=sid, cwd=cwd, confirm_fn=confirm_fn,
                 system_suffix=system_suffix, out_turns=out_turns):
             yield ev
-        # "No turn appended" is not the only empty case: a failed worker
-        # still records a turn, just with an empty reply, and run_text's
-        # post-loop then clobbers last_reply with "" and emits no chat
-        # event. So test the last reply, not the turn count.
         produced = any(str(reply).strip()
                        for (_t, reply, _th) in out_turns[before:])
         if not produced:
-            # Delegated, but nothing came back. If the worker leg failed to
-            # warm, say THAT instead of returning nothing: the front model
-            # already took the request, so silence here reads as "done" and
-            # is the one outcome worse than a clear failure.
             why = self._worker_missing_reason()
             if why:
                 notice = (str(text), (
                     "I handed that to the worker agent, but it could not "
                     f"start, so nothing was done: {why}"), "")
                 if len(out_turns) > before:
-                    # Replace the empty placeholder rather than adding a
-                    # second entry for the same turn.
                     out_turns[-1] = notice
                 else:
                     out_turns.append(notice)
@@ -1000,7 +956,6 @@ class VoiceAgent:
                 return text.split(":", 1)[1].strip()[:200]
         return ""
 
-    # -- three-tier memory ------------------------------------------------
     def _episodic_store(self):
         """Lazy L2 store (None unless memory_store/recall enabled)."""
         if self._episodic is None and (
@@ -1061,7 +1016,6 @@ class VoiceAgent:
         except Exception:
             return ""
 
-    # -- text turns (TUI, bridge, CLI, evals) ----------------------------
     async def run_text(self, text: str, session_id: str | None = None,
                        cwd: str | None = None, confirm_fn=None):
         """Run one text turn, yielding term/audio/summary events."""
@@ -1101,7 +1055,6 @@ class VoiceAgent:
             "text": str(text), "reply": last_reply,
             "thinking": (last_think or "")[:2000], "session_id": sid})
 
-    # -- dual call: text in -> reply string; audio in -> event stream --
     def __call__(self, audio_or_text, sr: int = 16000,
                  session_id: str | None = None):
         """Text or voice dispatch (both transports share one object).
@@ -1114,11 +1067,6 @@ class VoiceAgent:
         if isinstance(audio_or_text, str):
             return self._text_reply(str(audio_or_text),
                                     session_id=session_id)
-        # fast_voice is the one-shot voice path and is incompatible with
-        # delegation: it calls llm.generate directly, so a task would be
-        # answered by whichever leg happens to be the worker with no tools
-        # in front of it. Delegation wins — the front brain still keeps
-        # chat turns cheap, just via the router instead of the short path.
         if (bool(getattr(self.config, "fast_voice", False))
                 and self.delegate_cfg is None):
             return self._voice_fast(audio_or_text, sr=sr,
@@ -1141,8 +1089,6 @@ class VoiceAgent:
         if self.front_llm is not None and self.delegate_cfg is not None:
             route = await self._front_decide(str(text), hist)
             if getattr(self.delegate_cfg, "emit_route", True):
-                # No event stream on this path; keep the decision visible
-                # on stdout for the CLI/eval callers that read it.
                 print(f"[route] {'front' if route.kind == 'chat' else 'worker'}"
                       f" ({route.reason})", flush=True)
             if route.kind == "chat" and str(route.text or "").strip():
@@ -1197,7 +1143,6 @@ class VoiceAgent:
                 pass
         return reply
 
-    # -- voice turns (server /talk) ---------------------------------------
     async def _voice_fast(self, audio, sr: int = 16000,
                           session_id: str | None = None):
         """Latency fast path: VAD -> STT -> ONE llm.generate -> TTS.
@@ -1233,6 +1178,7 @@ class VoiceAgent:
                 import uuid as _uuid
 
                 def new_session_id():  # type: ignore
+                    """Hex session id when the engine helper is unavailable."""
                     return _uuid.uuid4().hex
             sid = session_id or new_session_id()
             remember = bool(session_id)
@@ -1240,10 +1186,6 @@ class VoiceAgent:
             t0 = time.perf_counter()
             node_s: dict = {}
             stop_keep = keepalive_start()
-            # Rev CPU+GPU clocks once per turn: after idle both sit at
-            # minimum frequency and every phase re-pays ramp (~50-100 ms
-            # each). One ~5 ms burst up front + the keepalive thread holds
-            # P-state for the rest of the turn.
             try:
                 from src.models.runtime.device import gpu_rev
 
@@ -1253,7 +1195,6 @@ class VoiceAgent:
             except Exception:
                 pass
 
-            # -- VAD: speech spans (+ STT-window trim) -------------------
             t_vad = time.perf_counter()
             try:
                 segs = await self.vad.segments(wav, int(sr))
@@ -1277,7 +1218,6 @@ class VoiceAgent:
                     "vram_mb": _vram_mb(), "session_id": sid})
                 return
 
-            # -- STT ------------------------------------------------------
             t_stt = time.perf_counter()
             try:
                 res = await self.stt.transcribe(audio_wav, int(sr))
@@ -1296,7 +1236,6 @@ class VoiceAgent:
                     "vram_mb": _vram_mb(), "session_id": sid})
                 return
 
-            # -- LLM: one direct generate (no agent loop) -----------------
             t_llm = time.perf_counter()
             try:
                 hist = []
@@ -1330,8 +1269,8 @@ class VoiceAgent:
                 except Exception:
                     pass
 
-            # -- TTS: single speak of the short reply ---------------------
             first_audio_at = None
+            reply = _cap_words(reply)
             if (reply or "").strip():
                 t_tts = time.perf_counter()
                 try:
@@ -1376,7 +1315,6 @@ class VoiceAgent:
         if dur_s > self.config.max_audio_s:
             raise ValueError(
                 f"audio {dur_s:.1f}s exceeds {self.config.max_audio_s:.0f}s cap")
-        # VRAM guard covers GPU legs only (STT/TTS); the CPU LLM never trips it.
         if check_budget is not None:
             check_budget(self.config.per_turn_mb, self.config.vram_budget_mb,
                          what="voice turn")
@@ -1389,13 +1327,13 @@ class VoiceAgent:
                 import uuid as _uuid
 
                 def new_session_id():  # type: ignore
+                    """Hex session id when the engine helper is unavailable."""
                     return _uuid.uuid4().hex
             sid = session_id or new_session_id()
             remember = bool(session_id)
             t0 = time.perf_counter()
             node_s: dict = {}
 
-            # -- VAD: speech spans (+ STT-window trim) -------------------
             t_vad = time.perf_counter()
             try:
                 segs = await self.vad.segments(wav, int(sr))
@@ -1419,7 +1357,6 @@ class VoiceAgent:
                     "vram_mb": _vram_mb(), "session_id": sid})
                 return
 
-            # -- STT ------------------------------------------------------
             t_stt = time.perf_counter()
             try:
                 res = await self.stt.transcribe(audio_wav, int(sr))
@@ -1438,7 +1375,6 @@ class VoiceAgent:
                     "vram_mb": _vram_mb(), "session_id": sid})
                 return
 
-            # -- LLM: the unified deep-agent turn (tools + memory) --------
             t_llm = time.perf_counter()
             first_audio_at = None
             first_piece = True
@@ -1459,17 +1395,17 @@ class VoiceAgent:
                 elif ev.kind in ("action", "observation", "confirm", "deny",
                                  "error", "queued", "route"):
                     yield ev
-                # chat/summary left to the tails below (voice speaks + done)
             node_s["llm"] = node_s.get("llm", 0.0) + time.perf_counter() - t_llm
 
-            # -- TTS: speak every reply sentence as it completes -----------
             for (_t, reply, _th) in turns:
+                reply = _cap_words(reply)
                 if not (reply or "").strip():
                     continue
                 splitter = SentenceSplitter()
                 pending: list[str] = []
 
                 async def _speak_sentence(sent):
+                    """Speak one sentence and emit its audio event."""
                     nonlocal first_audio_at
                     t_tts = time.perf_counter()
                     try:
@@ -1487,19 +1423,25 @@ class VoiceAgent:
                     })
 
                 async def _feed(sentences, speak):
+                    """Speak each non-blank sentence through the synth."""
                     for sent in sentences:
                         if (sent or "").strip():
                             async for ev in speak(sent):
                                 yield ev
 
-                # feed whole reply through the splitter, then flush
                 for sent in splitter.push(reply):
                     pending.append(sent)
                 tail = splitter.flush()
                 if tail:
                     pending.append(tail)
+                # Clause fan-out: each sentence speaks in [,;:] chunks so
+                # the first audio starts after the first clause, not the
+                # first sentence. Client-side playback already overlaps
+                # synth of later chunks with play of earlier ones.
+                clauses = [c for sent in pending
+                           for c in _clauses(sent)]
                 async for audio_ev in _feed(
-                        [s for s in pending if (s or "").strip()],
+                        [c for c in clauses if (c or "").strip()],
                         _speak_sentence):
                     yield audio_ev
                 yield AgentEvent(node="llm", kind="done", data={"text": reply})

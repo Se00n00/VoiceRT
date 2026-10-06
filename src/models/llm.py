@@ -13,7 +13,7 @@ SYSTEM_PROMPT = "You are a voice assistant. Reply in one short spoken sentence."
 # weights. They own their own inference, so they need no local tokenizer,
 # hold no VRAM we manage, and are incompatible with the paged GPU engine.
 # Single source of truth: adding a sidecar backend means adding it HERE.
-SIDECAR_BACKENDS = ("gemma", "bonsai", "gemma270", "qwen17", "qwen06")
+SIDECAR_BACKENDS = ("bonsai",)
 
 _THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE)
 _THINK_OPEN_RE = re.compile(r"<think\s*>", re.IGNORECASE)
@@ -92,7 +92,7 @@ def assert_ready_leg(llm, what: str = "model") -> str:
     """Backend-aware readiness gate. Returns a status string.
 
     GPU weight legs go through :func:`assert_cuda_leg` (a sick driver
-    fails fast); sidecar legs (``backend="gemma"`` / ``"bonsai"``) must be
+    fails fast); the bonsai sidecar (``backend="bonsai"``) must be
     healthy instead — they own their inference (llama-server), so the
     CUDA assert would wrongly abort them.
     """
@@ -155,64 +155,15 @@ class LlmConfig:
     #  - "bonsai" = Ternary Bonsai 2 27B via Prism-fork llama.cpp sidecar
     #    (-ngl auto from free VRAM, 16K ctx) — the WORKER brain for the
     #    full tool harness; STT/TTS keep the GPU, the rest offloads.
-    #  - "gemma" = Gemma-4-E4B-it Q4_K_M via local llama.cpp sidecar
-    #    (CPU-only, no VRAM) — fallback: big brain on CPU, fast hands stay
-    #    available via the switches below.
-    #  - "minicpm" = BF16 eager (stock transformers, no Triton) — switch
-    #    option while mixed-quant (4-bit bulk + BF16 important layers) is
-    #    trialled.
-    #  - "minicpm_q4k" = Q4_K_M GGUF via src/models/minicpm.py (packed, fused).
     backend: str = "qwen"
-    # GGUF file/dir for the q4k backend ("auto" = HF cache download).
-    gguf_path: str = "auto"
     max_tokens: int = 48
     max_seq: int = 8192
     device: str = "cuda"
     system_prompt: str = SYSTEM_PROMPT
     thinking: bool = False  # Qwen3 <think> traces (stripped from output)
-    # Gemma-4-E4B-it Q4_K_M via local llama.cpp sidecar (CPU-only, no VRAM).
-    # Fallback backend (select with backend="gemma"; Bonsai is the default).
-    gemma_gguf: str = "auto"  # explicit GGUF path or "auto" (HF cache)
-    gemma_file: str = "gemma-4-E4B-it-Q4_K_M.gguf"
-    gemma_port: int = 8080
-    gemma_ctx: int = 4096
-    gemma_threads: int = 0  # 0 = server default
-    gemma_bin: str = "auto"  # explicit llama-server path or "auto"
-    # FunctionGemma-270M sidecar (context lab: 0.25GB weights, CPU-only,
-    # 0 VRAM; native Gemma3 128K ctx — experiments start at 32K).
-    # Select with backend="gemma270". Served by the same llama.cpp
-    # sidecar pattern (stock server fine — standard GGUF, no fork).
-    gemma270_gguf: str = "auto"  # explicit path or "auto" (HF cache)
-    gemma270_repo: str = "bartowski/google_functiongemma-270m-it-GGUF"
-    gemma270_file: str = "google_functiongemma-270m-it-Q4_K_M.gguf"
-    gemma270_port: int = 8083
-    gemma270_ctx: int = 32768
-    gemma270_threads: int = 0  # 0 = server default
-    gemma270_bin: str = "auto"
-    # Qwen3-1.7B sidecar (eval-grade small brain: ~1.1GB Q4_K_M, CPU-only,
-    # 0 VRAM, native tool calling, real chat). Select backend="qwen17".
-    qwen17_gguf: str = "auto"
-    qwen17_repo: str = "unsloth/Qwen3-1.7B-GGUF"
-    qwen17_file: str = "Qwen3-1.7B-Q4_K_M.gguf"
-    qwen17_port: int = 8084
-    qwen17_ctx: int = 32768
-    qwen17_threads: int = 0
-    qwen17_bin: str = "auto"
-    # Qwen3-0.6B CPU sidecar: the two-brain FRONT model. ~0.4GB Q4_K_M,
-    # 0 VRAM — freeing the whole 4GB card for the Bonsai worker's
-    # -ngl auto. Select with backend="qwen06". Same generic sidecar as
-    # qwen17 (standard GGUF, stock llama-server fine).
-    qwen06_gguf: str = "auto"
-    qwen06_repo: str = "Qwen/Qwen3-0.6B-GGUF"
-    qwen06_file: str = "Qwen3-0.6B-Q4_K_M.gguf"
-    qwen06_port: int = 8085
-    qwen06_ctx: int = 8192
-    qwen06_threads: int = 0
-    qwen06_bin: str = "auto"
     # Ternary Bonsai 2 27B via Prism-fork llama.cpp sidecar (OFFLOAD:
     # -ngl auto from free VRAM — partial on 4GB, full on T4+).
-    # Select with backend="bonsai" (Gemma stays the fallback until the
-    # M4 baselines prove Bonsai). Needs prism-b10658+ server binary.
+    # Select with backend="bonsai". Needs prism-b10658+ server binary.
     bonsai_gguf: str = "auto"  # explicit GGUF path or "auto" (HF cache)
     bonsai_packing: str = "ptq1_0"  # or "pq2_0" (bigger, faster prefill)
     bonsai_mmproj: str = "auto"  # vision tower, or "skip" for text-only
@@ -277,94 +228,10 @@ class LlmModel:
     def _backend(self):
         if self._leg is None:
             backend = getattr(self.config, "backend", "qwen") or "qwen"
-            if backend == "gemma":
-                # CPU sidecar (llama-server, no VRAM, no tokenizer files in
-                # the GGUF repo — the leg takes (messages, tools) directly).
-                # NOTE: resolved BEFORE any torch/CUDA probe — a sick
-                # driver can hang torch.cuda.is_available() itself, and a
-                # CPU leg must never touch CUDA init at all.
-                from src.models.gemma_llamacpp import GemmaLlamaCpp
-
-                self._leg = GemmaLlamaCpp(
-                    gguf_path=getattr(self.config, "gemma_gguf", "auto"),
-                    port=getattr(self.config, "gemma_port", 8080),
-                    n_ctx=getattr(self.config, "gemma_ctx", 4096),
-                    threads=getattr(self.config, "gemma_threads", 0),
-                    server_bin=getattr(self.config, "gemma_bin", "auto"),
-                )
-                return self._leg
-            if backend == "gemma270":
-                # 270M context-lab sidecar: same leg, small GGUF, no size
-                # pin, own port. Resolved BEFORE any torch/CUDA probe.
-                from src.models.gemma_llamacpp import (
-                    GemmaLlamaCpp, resolve_small_gguf)
-
-                gguf = getattr(self.config, "gemma270_gguf", "auto")
-                if gguf == "auto":
-                    gguf = resolve_small_gguf(
-                        getattr(self.config, "gemma270_repo",
-                                "bartowski/google_functiongemma-270m-it-GGUF"),
-                        getattr(self.config, "gemma270_file",
-                                "google_functiongemma-270m-it-Q4_K_M.gguf"))
-                self._leg = GemmaLlamaCpp(
-                    gguf_path=gguf,
-                    expect_bytes=None,
-                    port=getattr(self.config, "gemma270_port", 8083),
-                    n_ctx=getattr(self.config, "gemma270_ctx", 32768),
-                    threads=getattr(self.config, "gemma270_threads", 0),
-                    server_bin=getattr(self.config, "gemma270_bin", "auto"),
-                )
-                return self._leg
-            if backend == "qwen17":
-                # Same generic sidecar leg, Qwen weights (standard GGUF).
-                from src.models.gemma_llamacpp import (
-                    GemmaLlamaCpp, resolve_small_gguf)
-
-                gguf = getattr(self.config, "qwen17_gguf", "auto")
-                if gguf == "auto":
-                    gguf = resolve_small_gguf(
-                        getattr(self.config, "qwen17_repo",
-                                "unsloth/Qwen3-1.7B-GGUF"),
-                        getattr(self.config, "qwen17_file",
-                                "Qwen3-1.7B-Q4_K_M.gguf"))
-                self._leg = GemmaLlamaCpp(
-                    gguf_path=gguf,
-                    expect_bytes=None,
-                    port=getattr(self.config, "qwen17_port", 8084),
-                    n_ctx=getattr(self.config, "qwen17_ctx", 32768),
-                    threads=getattr(self.config, "qwen17_threads", 0),
-                    server_bin=getattr(self.config, "qwen17_bin", "auto"),
-                )
-                return self._leg
-            if backend == "qwen06":
-                # Two-brain FRONT leg: Qwen3-0.6B as a 0-VRAM CPU sidecar so
-                # the whole 4GB card stays available for the Bonsai worker's
-                # -ngl auto. Same generic sidecar as qwen17.
-                from src.models.gemma_llamacpp import (
-                    GemmaLlamaCpp, resolve_small_gguf)
-
-                gguf = getattr(self.config, "qwen06_gguf", "auto")
-                if gguf == "auto":
-                    gguf = resolve_small_gguf(
-                        getattr(self.config, "qwen06_repo",
-                                "Qwen/Qwen3-0.6B-GGUF"),
-                        getattr(self.config, "qwen06_file",
-                                "Qwen3-0.6B-Q4_K_M.gguf"))
-                self._leg = GemmaLlamaCpp(
-                    gguf_path=gguf,
-                    expect_bytes=None,
-                    port=getattr(self.config, "qwen06_port", 8085),
-                    n_ctx=getattr(self.config, "qwen06_ctx", 8192),
-                    threads=getattr(self.config, "qwen06_threads", 0),
-                    server_bin=getattr(self.config, "qwen06_bin", "auto"),
-                )
-                return self._leg
             if backend == "bonsai":
                 # 27B-ternary sidecar (Prism-fork llama-server, -ngl auto).
-
-                # 27B-ternary sidecar (Prism-fork llama-server, -ngl auto).
-                # NOTE: resolved BEFORE any torch/CUDA probe, like gemma —
-                # ngl probing reads VRAM without initializing torch state.
+                # NOTE: resolved BEFORE any torch/CUDA probe — ngl probing
+                # reads VRAM without initializing torch state.
                 from src.models.bonsai_llamacpp import BonsaiLlamaCpp
 
                 self._leg = BonsaiLlamaCpp(
@@ -387,33 +254,7 @@ class LlmModel:
             device = self.config.device
             if device.startswith("cuda") and not torch.cuda.is_available():
                 device = "cpu"
-            if backend == "minicpm_q4k":
-                # MiniCPM5-1B Q4_K_M: src/models/minicpm.py (packed GGUF
-                # + fused decode, fp16 KV). gguf_path "auto" = HF cache.
-                from src.models.minicpm import MiniCPMFused
-
-                gguf = getattr(self.config, "gguf_path", "auto") or "auto"
-                self._leg = MiniCPMFused(
-                    gguf_path=None if gguf == "auto" else gguf,
-                    device=device,
-                    model=self.config.model,
-                    max_len=max(8192, self.config.max_seq),
-                    max_new_tokens=self.config.max_tokens,
-                )
-                return self._leg
-            if backend in ("minicpm", "minicpm_hf", "minicpm_bf16"):
-                # BF16 eager (stock transformers, no Triton) — default while
-                # mixed-quant (4-bit bulk + BF16 important layers) is trialled.
-                from src.models.minicpm_hf import MiniCPMHF
-
-                self._leg = MiniCPMHF(
-                    model=self.config.model,
-                    device=device,
-                    max_len=max(self.config.max_seq, 8192),
-                    max_new_tokens=self.config.max_tokens,
-                )
-                return self._leg
-            # fused single-file model: src/models/qwen.py (1 fused layer x28, batched, KV-cache)
+            # fused Qwen3 model: src/models/qwen.py (1 fused layer x28, batched, KV-cache)
             from src.models.qwen import QwenFused
 
             self._leg = QwenFused(
@@ -583,10 +424,7 @@ class LlmModel:
 
     async def encode(self, messages: list, tools: list | None = None) -> list:
         tok = self._tokenizer()
-        # MiniCPM thinks + uses native XML tools; Qwen stays as configured.
-        # All minicpm variants (bf16, q4k, hf) think — do not compromise.
-        thinking = bool(self.config.thinking) or str(
-            getattr(self.config, "backend", "")).startswith("minicpm")
+        thinking = bool(self.config.thinking)
 
         def _run():
             kw: dict = {}

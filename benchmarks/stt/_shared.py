@@ -70,16 +70,7 @@ def run_stt_benchmark(args, backend: str):
     engine, is_synth = _get_stt_engine(model_id, device)
     print(f"STT benchmark {backend} synthetic={is_synth} device={device}")
 
-    # Try to handle triton vs pytorch mode: monkeypatch HAVE_TRITON_KERNELS
-    if backend == "pytorch":
-        try:
-            import src.models.triton_kernels.whisper as wsurf
-            wsurf.HAVE_TRITON_KERNELS = False
-            import src.models.engines.whisper as engm
-            engm.HAVE_TRITON_KERNELS = False
-        except Exception:
-            pass
-    # else triton stays as is
+    # Pure-torch STT ops throughout (no kernel variants to switch).
 
     # Warmup once per duration
     all_rows = []

@@ -39,26 +39,18 @@ from output by `split_thinking` (`llm.py:23`).
 
 ## 5.3 Backends
 
-`SIDECAR_BACKENDS = ("gemma", "bonsai", "gemma270", "qwen17", "qwen06")`
-(`llm.py:16`). These run as a llama.cpp server on a port and speak HTTP;
-anything else is fused in-process.
+Two survive: `qwen` (fused in-process) and `bonsai` (llama.cpp sidecar on
+a port, speaking HTTP). `SIDECAR_BACKENDS = ("bonsai",)` (`llm.py:16`).
 
 | Backend | Default port | Weights |
 |---|---|---|
 | `qwen` | — (fused) | `Qwen/Qwen3-0.6B` on CUDA/CPU |
 | `bonsai` | 8081 | `prism-ml/Ternary-Bonsai-2-27B` GGUF |
-| `gemma` | 8080 | Gemma, CPU |
-| `gemma270` | 8083 | FunctionGemma-270M, ctx 32768 |
-| `qwen17` | 8084 | Qwen 1.7B class, ctx 32768 |
-| `qwen06` | 8085 | `Qwen/Qwen3-0.6B` GGUF, ctx 8192 |
-| `minicpm_q4k` | — (fused) | MiniCPM Q4_K |
 
-Branch order in `_backend()`: `gemma` (`llm.py:280`), `gemma270` (`llm.py:296`),
-`qwen17` (`llm.py:318`), `qwen06` (`llm.py:339`), `bonsai` (`llm.py:362`),
-`minicpm_q4k` (`llm.py:390`).
-
-GGUF resolution goes through `resolve_small_gguf`, so `gguf: auto` means
-"download from the configured repo on first warm" rather than a hard path.
+Retired 2026-10-05: `gemma`/`gemma270`/`qwen17`/`qwen06` sidecars,
+`minicpm`/`minicpm_q4k`, and Qwen2.5 bench defaults (now Qwen3-0.6B).
+STT is pure-torch Whisper-base, TTS is Kokoro + torch post — neither
+uses custom kernels anymore.
 
 ## 5.4 Readiness
 

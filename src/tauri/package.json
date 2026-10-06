@@ -1,0 +1,32 @@
+{
+  "name": "voicert-tauri",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tauri GUI (fresh rewrite, Tailwind) for the local voice-terminal agent. Pure client to bridge.py on :8004.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.1.1",
+    "solid-js": "1.9.12",
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "@tauri-apps/cli": "^2.12.1",
+    "@tauri-apps/cli-linux-x64-gnu": "^2.12.1",
+    "@types/three": "^0.186.0",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.8.0",
+    "vite": "^6.0.0",
+    "vite-plugin-solid": "^2.11.0"
+  },
+  "allowScripts": {
+    "esbuild@0.25.12": true
+  }
+}

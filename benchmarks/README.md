@@ -2,7 +2,7 @@
 
 Rigorous PyTorch vs Triton benchmark suite for the voice-pipeline inference engine.
 
-Covers **LLM (Qwen2.5-0.5B-Instruct)**, **STT (Whisper-base)** and **TTS (Kokoro-82M)** + individual Triton kernels, with kernel-level parity checks, CUDA-event timing, peak-VRAM, concurrency, roofline and Nsight profiling.
+Covers **LLM (Qwen3-0.6B)**, **STT (Whisper-base)** and **TTS (Kokoro-82M)** + individual Triton kernels (Qwen pile only), with op-level parity checks, CUDA-event timing, peak-VRAM, concurrency, roofline and Nsight profiling.
 
 ## 1. Hardware
 
@@ -50,7 +50,7 @@ Results: `*correctness.json`.
 
 ## 7. LLM metrics
 
-Model `Qwen/Qwen2.5-0.5B-Instruct` (`benchmarks/llm/_shared.py:1`).
+Model `Qwen/Qwen3-0.6B` (`benchmarks/llm/_shared.py:1`).
 
 - **Prefill vs Decode** measured separately via `engine.generate_stream` per-token timestamps. Not mixed.
 - Input `64,128,256,512,1024,2048`; batch `1,2,4,8`; output `32,64,128`. Default sweep `--seq-lengths`/`--batch-sizes`.

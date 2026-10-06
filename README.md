@@ -106,10 +106,9 @@
   STT  —           —      Whisper-base, RTF 0.02
   LLM  qwen        fused  Qwen3-0.6B, max_tokens 48, max_seq 8192
   LLM  bonsai      8081   Ternary-Bonsai-2-27B GGUF  ← the worker
-  LLM  qwen06      8085   Qwen3-0.6B GGUF          ← the front, if sidecar
   TTS  —           —      Kokoro-82M, RTF 0.045
 
-  sidecars (gemma 8080, gemma270 8083, qwen17 8084) speak HTTP; the rest are fused.
+  bonsai speaks HTTP as a sidecar; qwen is fused in-process.
   assert_cuda_leg() fails fast, so a CPU fallback can never fake a benchmark.
   ONE GPU process at a time - two models on a 4GB card is an OOM, not a slowdown.
 
@@ -404,9 +403,7 @@ truncates mid-thought). Per-backend rows (`src/agent/budget.py:BUDGETS`):
 ```
 backend    ctx    think cap   floor   history ≈
 bonsai     16K    128         512     ~9K
-qwen17     32K    512         512     ~22K
-gemma270   32K    256         256     ~22K
-gemma      4K     256         256     0 by caps (measured system ~0.5K → ~2K real room)
+qwen       8K     256         256     ~4K
 ```
 
 `pack_prompt` cuts obs → history, never system/facts. L1 window, L2
@@ -435,19 +432,35 @@ All commands assume `PYTHONPATH=.` from inside `voice-pipeline/`.
 .venv/bin/python benchmarks/engine_bench.py --num-requests 8 --max-tokens 32
 ```
 
+### Fused Triton speedup (measured 2026-10-05, same box, real weights)
+
+How many × faster the paged engine runs with fused Triton vs pure torch
+(same workload both sides, steady state, warmup excluded):
+
+![Fused Triton speedup per model](benchmarks/results/plots/triton_speedup.png)
+
+Raw pairs (torch → triton): LLM leg 18.5 → 65.9 tok/s (Qwen3-0.6B,
+64+16, TTFT 407ms → 17ms) · paged engine 25.2 → 58.9 tok/s (Qwen3-0.6B,
+8×32, torch side from the purge-era run). Only Qwen keeps Triton now — STT/TTS are pure torch by design, so
+there is no Triton bar for them (their last paired runs tied at 1.0×:
+encoder-dominated Whisper, synthesis-dominated Kokoro). Reproduce:
+`benchmark_pytorch.py` vs `benchmark_triton.py` in `benchmarks/llm/`
+(same flags both sides), engine via `benchmarks/engine_bench.py`;
+regenerate the chart with `benchmarks/plot_triton_speedup.py` (extend
+`ROWS`, raw leg CSVs under `benchmarks/results/quick_20261005_qwen3/`).
+
 ### LLM: inference engine features (Qwen3-0.6B, real QwenRunner, `num_blocks=16`)
 
-Re-run 2026-10-03 after fixing the `engine.py:431` indentation (the file
-imports again). Real `QwenRunner` only — isolated subprocess per config;
-`DummyRunner` removed. Workload: 8 requests × 32 tokens (256 total).
+Re-run 2026-10-05 post cold boot. Real `QwenRunner` only — isolated
+subprocess per config. Workload: 8 requests × 32 tokens (256 total).
 
 | config | tok/s | delta vs base |
 |---|---|---|
-| base (no features) | 39.5 | — |
-| + prefix caching | 35.9 | -9.1% |
-| + chunked prefill | 34.4 | -12.8% |
-| + CUDA graph | 37.8 | -4.2% |
-| all features | 34.7 | -12.0% |
+| base (no features) | 58.9 | — |
+| + prefix caching | 58.9 | +0.0% |
+| + chunked prefill | 59.1 | +0.3% |
+| + CUDA graph | 56.6 | -3.9% |
+| all features | 56.3 | -4.5% |
 
 Honest read: on this all-distinct-prompts workload the features do not
 pay — prefix cache records 0 hits and CUDA graphs stay enabled-but-never-
@@ -564,7 +577,7 @@ Historical steady-state claims kept for reference: TTFT 14–30 ms band
 59 ms / 3 s (RTF 0.020), TTS 141 ms (RTF 0.045). Today's box reads
 slower across the board than those rows.
 
-### Larger legs (2026-10-02)
+### Larger legs (2026-10-02 — retired backends, kept for reference)
 
 | Leg | Latency / throughput |
 |---|---|

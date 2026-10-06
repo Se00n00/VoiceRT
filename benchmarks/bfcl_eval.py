@@ -498,10 +498,8 @@ async def main_async(args, cases):
     _be = str(getattr(getattr(llm, "config", None), "backend", ""))
     if _be == "bonsai":
         max_tokens = max(base, 512)
-    elif _be == "qwen17":
-        max_tokens = max(base, 512)
     else:
-        max_tokens = max(base, 320) if _be.startswith("minicpm") else max(base, 256)
+        max_tokens = max(base, 256)
 
     rows = []
     for case in cases:
@@ -575,9 +573,9 @@ def main():
     ap.add_argument("--manifests", nargs="+",
                     default=["benchmarks/bfcl_v1.json", "benchmarks/bfcl_v2.json",
                              "benchmarks/bfcl_v3.json"])
-    ap.add_argument("--model", default="google/gemma-4-E4B-it")
-    ap.add_argument("--backend", default="gemma")
-    ap.add_argument("--tag", default="gemma")
+    ap.add_argument("--model", default="Qwen/Qwen3-0.6B")
+    ap.add_argument("--backend", default="qwen")
+    ap.add_argument("--tag", default="qwen")
     ap.add_argument("--k", type=int, default=3)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--offset", type=int, default=0)

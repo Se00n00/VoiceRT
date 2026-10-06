@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"VoiceRT is a pure localhost client: allow the window only.","local":true,"windows":["main"],"permissions":["core:window:allow-show","core:window:allow-close"]}}

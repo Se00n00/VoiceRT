@@ -7,7 +7,7 @@ script. Reports retention@N, correction-win, overflow count.
 
 Usage:
   PYTHONPATH=. .venv/bin/python -u benchmarks/memory_eval.py \\
-      --backend gemma270 --model google/functiongemma-270m-it --tag m1
+      --backend qwen --model Qwen/Qwen3-0.6B --tag m1
 """
 import argparse
 import asyncio
@@ -214,8 +214,8 @@ async def main_async(args):
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", default="google/functiongemma-270m-it")
-    ap.add_argument("--backend", default="gemma270")
+    ap.add_argument("--model", default="Qwen/Qwen3-0.6B")
+    ap.add_argument("--backend", default="qwen")
     ap.add_argument("--tag", default="m1")
     args = ap.parse_args(argv)
     asyncio.run(main_async(args))

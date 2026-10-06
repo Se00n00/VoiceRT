@@ -13,8 +13,8 @@ exec  exec_bg  poll  read  write  edit  grep  list  python_exec  fetch  searxng 
 ```
 
 `TERMINAL_TOOLS` (`terminal.py:47-109`) declares eleven JSON-Schema specs for
-models whose chat template supports tools natively (MiniCPM renders them into
-`<tools>` XML).
+models whose chat template supports tools natively (Qwen renders them into
+`<tools>` XML, Bonsai takes OpenAI-style `tools[]`).
 
 | Op | Params | Notes |
 |---|---|---|
@@ -55,8 +55,8 @@ The accepted shapes:
 | FunctionGemma | ditto, different envelope |
 | toolcall dict as text | `{"name": "read", "arguments": {"path": "x"}}` |
 
-Stop tokens follow the same branching (`chat_model.py:260-268`): gemma270 uses
-`<end_function_call>`, everything else uses `</function>` when tools are bound.
+Stop token is `</function>` when tools are bound (single path — the
+gemma270 `<end_function_call>` branch was retired with that backend).
 
 `_looks_like_call` (`chat_model.py:220-231`) sniffs for `<|tool_call>`,
 `<function`, `<start_function_call>`, `action`, or a paired `"name"`/`"arguments"`
@@ -93,9 +93,9 @@ returns `None` on any failure, which degrades to showing every op.
 
 `InjectToolMiddleware` (`tool_router.py:177-206`) publishes the selection
 through a `ContextVar`, `current_ops()` (`tool_router.py:63-66`), which
-`LocalChatModel._prompt_tools` (`chat_model.py:107-138`) reads. On backends
-where routing is pointless (`minicpm*`, `bonsai`, `qwen17`) it skips the
-embeddings entirely (`chat_model.py:112`) and shows the full set.
+`LocalChatModel._prompt_tools` (`chat_model.py:107-138`) reads. On native-spec
+backends (`bonsai`, `qwen`) it skips the embedding router entirely
+(`chat_model.py:112`) and uses the keyword shortlist instead.
 
 ## 2.4 Policy
 

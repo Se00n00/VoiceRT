@@ -1,9 +1,9 @@
 """Download all voice-pipeline weights.
 
-- whisper-base + Qwen3-0.6B + Kokoro-82M + MiniCPM5-1B (tokenizer) via
+- whisper-base + Qwen3-0.6B + Kokoro-82M via
   huggingface_hub.snapshot_download (HF cache)
-- MiniCPM5-1B Q4_K_M GGUF (default LLM backend) via snapshot_download
-  with allow-list (657MB, not the full repo)
+- Ternary Bonsai 2 27B GGUF (worker LLM backend) via snapshot_download
+  with allow-list (PTQ pack, not the full repo)
 - Silero VAD ONNX via stdlib urllib to src/models/engines/silero_vad/silero_vad.onnx
    (matches the ``VadConfig.onnx_path`` default)
 
@@ -20,15 +20,11 @@ HF_REPOS = [
     "openai/whisper-base",
     "Qwen/Qwen3-0.6B",
     "hexgrad/Kokoro-82M",
-    "openbmb/MiniCPM5-1B",  # tokenizer + config (weights come from GGUF below)
 ]
 
 HF_PATTERNS = {
-    # repo -> allow_patterns (keep the default-LLM fetch small)
-    "openbmb/MiniCPM5-1B-GGUF": ["*Q4_K_M*"],
-    # Ternary Bonsai 2 27B (M1 ingestion leg; filenames verified at M0
+    # Ternary Bonsai 2 27B (worker leg; filenames verified at M0
     # fetch — HF repo: prism-ml/Ternary-Bonsai-2-27B-gguf)
-    "unsloth/Qwen3-1.7B-GGUF": ["*Q4_K_M*"],
     "prism-ml/Ternary-Bonsai-2-27B-gguf": [
         "*PTQ1_0*",  # 5.93GB small pack (4GB-box default)
         "*PQ2_0*",  # 7.25GB fast-prefill pack (T4+ default)

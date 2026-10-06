@@ -27,13 +27,9 @@ COMPILE_RESERVE_MB = 400.0
 # need to be sane enough to stop a doomed warm before it starts.
 LEG_VRAM_MB = {
     "qwen": 2000.0,
-    "minicpm": 2600.0,
-    "minicpm_q4k": 1200.0,
 }
 LEG_RAM_MB = {
     "qwen": 1500.0,
-    "minicpm": 2400.0,
-    "minicpm_q4k": 1000.0,
 }
 STT_VRAM_MB = 800.0
 STT_RAM_MB = 800.0
@@ -192,10 +188,9 @@ def release_tenant_lock() -> None:
 
 
 def sidecar_gpu_estimate(backend: str, config=None) -> tuple[bool, float]:
-    """(needs_gpu, vram_mb) for llama-server sidecar backends.
+    """(needs_gpu, vram_mb) for the llama-server sidecar backend.
 
-    CPU-only sidecars (gemma/qwen06/qwen17) need no GPU: (False, 0).
-    Bonsai parks ``-ngl`` transformer blocks in VRAM, so a nonzero layer
+    Only bonsai remains: it parks ``-ngl`` transformer blocks in VRAM, so a nonzero layer
     count prices VRAM (weights share + context reserve); ``ngl=0`` is
     pure CPU and needs none. Estimates are conservative by design — the
     sidecar's own checks stay authoritative, this only stops a blind

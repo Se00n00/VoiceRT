@@ -57,12 +57,12 @@ class LocalChatModel(BaseChatModel):
 
     @property
     def _llm_type(self) -> str:
-        return "local-minicpm"
+        return "local-qwen"
 
     def bind_tools(self, tools, **kwargs):
         # Only dict specs pass through untouched. StructuredTools bound by
         # the agent stay execution-side: the prompt half is decided by
-        # backend in _prompt_tools (native TERMINAL_TOOLS for minicpm,
+        # backend in _prompt_tools (native TERMINAL_TOOLS for bonsai,
         # JSON-preamble path otherwise) — rendering foreign schemas into
         # the chat template would silently change model behavior.
         defs = [t for t in tools or []
@@ -109,9 +109,9 @@ class LocalChatModel(BaseChatModel):
             return None
         tools = self.bound_tools
         backend = str(getattr(getattr(self.llm, "config", None), "backend", ""))
-        if tools is None and (backend.startswith("minicpm") or backend in ("bonsai", "qwen17")):
+        if tools is None and backend in ("bonsai", "qwen"):
             # Native-spec legs get the narrowed defs as REAL function specs
-            # (minicpm: chat-template tools=; bonsai: OpenAI tools[]). Small
+            # (qwen: chat-template tools=; bonsai: OpenAI tools[]). Small
             # models drown in 11 — the semantic shortlist wins when
             # InjectToolMiddleware set one, else the keyword router decides.
             from src.agent.tool_router import current_ops
@@ -127,7 +127,7 @@ class LocalChatModel(BaseChatModel):
             # step plausibly needs (small models drown in 9). The harness
             # appends a "CWD: ... SHELL: ..." trailer to every turn — strip
             # it for routing (else "shell" forces exec into every set).
-            # None (or non-minicpm) keeps the full set / preamble path.
+            # None (or another backend) keeps the full set / preamble path.
             import re
 
             from src.tools.terminal import tools_for_request
@@ -257,14 +257,7 @@ class LocalChatModel(BaseChatModel):
         (per-piece decodes can split BPE pairs), else joined pieces, else
         one blocking generate.
         """
-        backend = str(getattr(getattr(self.llm, "config", None), "backend", ""))
-        if backend == "gemma270":
-            # FunctionGemma rambles call/response/call chains without a
-            # stop: end generation at the first call close so exactly one
-            # action materializes per step.
-            stop = ["<end_function_call>"] if tools else None
-        else:
-            stop = ["</function>"] if tools else None
+        stop = ["</function>"] if tools else None
         acc["raw"] = ""
         acc["live"] = False
         stream = getattr(self.llm, "stream", None)

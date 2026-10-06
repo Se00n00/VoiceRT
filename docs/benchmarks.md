@@ -22,17 +22,16 @@ All commands assume `PYTHONPATH=.` from inside `voice-pipeline/`.
 
 ## LLM: inference engine features (Qwen3-0.6B, real QwenRunner, `num_blocks=16`)
 
-Re-run 2026-10-03 after fixing the `engine.py:431` indentation (the file
-imports again). Real `QwenRunner` only — isolated subprocess per config;
-`DummyRunner` removed. Workload: 8 requests × 32 tokens (256 total).
+Re-run 2026-10-05 post cold boot. Real `QwenRunner` only — isolated
+subprocess per config. Workload: 8 requests × 32 tokens (256 total).
 
 | config | tok/s | delta vs base |
 |---|---|---|
-| base (no features) | 39.5 | — |
-| + prefix caching | 35.9 | -9.1% |
-| + chunked prefill | 34.4 | -12.8% |
-| + CUDA graph | 37.8 | -4.2% |
-| all features | 34.7 | -12.0% |
+| base (no features) | 58.9 | — |
+| + prefix caching | 58.9 | +0.0% |
+| + chunked prefill | 59.1 | +0.3% |
+| + CUDA graph | 56.6 | -3.9% |
+| all features | 56.3 | -4.5% |
 
 Honest read: on this all-distinct-prompts workload the features do not pay —
 prefix cache records 0 hits and CUDA graphs stay enabled-but-never-captured,

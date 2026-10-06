@@ -242,6 +242,9 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
   let speakCount = 0;
   let speaking = false;
   let lastSpeakEnd = 0;
+  // Speech generation: bumped on interrupt so queued TTS sentences from
+  // the killed turn never start a new player after it.
+  let speakGen = 0;
   let lastSpoken: string[] = [];
   let curPlayer: ChildProcess | null = null;
   // True while listenOnce owns the mic (voice turn / spoken confirm).
@@ -674,11 +677,14 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
     // otherwise a v-press during the HTTP call opens the mic and the
     // reply starts mid-recording.
     incSpeak();
+    const gen = speakGen;
     try {
       // Streamed TTS: each sentence plays as soon as it lands,
       // instead of after the whole reply is synthesized.
       let any = false;
       await sayStream(said, async (wav, sr) => {
+        // Killed turn: never start new audio after an interrupt.
+        if (gen !== speakGen) return;
         any = true;
         await playAudio(wav, sr);
       });
@@ -1378,6 +1384,15 @@ export function App(props: { seconds?: number; theme: Theme; themeNote?: string;
       // Busy turn: interrupt it (bridge cancels the task) instead of
       // quitting the whole app. Idle: the classic exit.
       if (busy()) {
+        // Stop the voice first: the killed turn's queued sentences must
+        // never reach a new player (see speakGen in speakAgent).
+        speakGen += 1;
+        try {
+          curPlayer?.kill("SIGKILL");
+        } catch {
+          /* dead */
+        }
+        curPlayer = null;
         sock?.cancel();
         note( "interrupting…");
       } else exit();

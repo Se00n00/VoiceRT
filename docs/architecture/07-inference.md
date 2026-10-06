@@ -35,15 +35,15 @@ The fix was the predicted 11-line re-indent (body to 20 spaces):
 ## 7.2 What the re-run showed
 
 `benchmarks/engine_bench.py --num-requests 8 --max-tokens 32` on the real
-`QwenRunner`, 8 requests × 32 tokens:
+`QwenRunner`, 8 requests × 32 tokens (re-run 2026-10-05 post cold boot):
 
 | config | tok/s | delta vs base |
 |---|---|---|
-| base (no features) | 39.5 | — |
-| + prefix caching | 35.9 | -9.1% |
-| + chunked prefill | 34.4 | -12.8% |
-| + CUDA graph | 37.8 | -4.2% |
-| all features | 34.7 | -12.0% |
+| base (no features) | 58.9 | — |
+| + prefix caching | 58.9 | +0.0% |
+| + chunked prefill | 59.1 | +0.3% |
+| + CUDA graph | 56.6 | -3.9% |
+| all features | 56.3 | -4.5% |
 
 Honest read: on this all-distinct-prompts workload the features do not pay —
 prefix cache records 0 hits and CUDA graphs stay enabled-but-never-captured,

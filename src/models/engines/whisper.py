@@ -1,15 +1,8 @@
 """Whisper-base leg in one file: weights + mel + encoder + decoder + engine.
 
-Single model class :class:`WhisperEngine`. All Triton kernels come from
-:mod:`src.models.triton_kernels.whisper` (layernorm, row_softmax, decode_attn,
-batched_decode_attn, fused_qkv) with exact torch fallbacks. Every exported
-kernel is in the hot path:
-
-- ``layernorm``: every encoder/decoder layer + final norms.
-- ``row_softmax``: inside ``enc_self_attention`` (CUDA path).
-- ``decode_attn``: decoder self-attention steps.
-- ``batched_decode_attn``: decoder cross-attention steps (B=1 slice).
-- ``fused_qkv``: decoder self-attention QKV projection.
+Single model class :class:`WhisperEngine`. All ops (layernorm, softmax,
+einsum decode attention, 3x-linear QKV) are pure PyTorch from
+:mod:`src.models.pytorch.whisper` — no custom kernels.
 """
 import glob
 import os
@@ -20,8 +13,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from src.models.triton_kernels.whisper import (
-    HAVE_TRITON_KERNELS,
+from src.models.pytorch.whisper import (
     batched_decode_attn,
     decode_attn,
     decode_cross_attention_step,
@@ -31,6 +23,8 @@ from src.models.triton_kernels.whisper import (
     layernorm,
     row_softmax,
 )
+
+HAVE_TRITON_KERNELS = False
 
 __all__ = [
     "D", "H", "DH", "FF", "XN", "MAXN", "SCALE",
@@ -425,7 +419,7 @@ def greedy_decode(w, cross, device, max_tokens=MAXN, sot=SOT, eot=EOT,
 
 # -- engine ---------------------------------------------------------------
 class WhisperEngine:
-    """Working whisper-base inference engine (Triton kernels + cuBLAS).
+    """Working whisper-base inference engine (pure torch + cuBLAS).
 
     Takes explicit kwargs (``model``, ``language``, ``max_new_tokens``,
     ...).

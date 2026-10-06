@@ -187,7 +187,7 @@ async def main() -> None:
     ap = argparse.ArgumentParser(description="plain LLM REPL (no TUI)")
     ap.add_argument("--model", default="Qwen/Qwen3-0.6B")
     ap.add_argument("--backend", default="qwen",
-                    help="qwen | bonsai | gemma | minicpm | minicpm_q4k")
+                    help="qwen | bonsai")
     ap.add_argument("--cwd", default=".")
     ap.add_argument("--max-tokens", type=int, default=256)
     ap.add_argument("--no-tools", action="store_true", help="raw generate, skip harness tool loop")

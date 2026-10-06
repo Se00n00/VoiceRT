@@ -72,7 +72,7 @@ class TestNewKernels(unittest.TestCase):
     def test_conv1d_silu(self):
         """Kokoro-ish conv C=512/L=200: parity vs conv1d+silu; FAIL if bf16>1e-2."""
         _need_cuda(self)
-        from src.models.triton_kernels.conv1d import conv1d_silu
+        from src.models.pytorch.tts import conv1d_silu
         torch.manual_seed(2)
         dev = "cuda:0"
         # Small shape for speed + one realistic Kokoro-ish shape.
@@ -92,7 +92,7 @@ class TestNewKernels(unittest.TestCase):
     def test_in1d_silu(self):
         """Fused InstanceNorm1d+SiLU: parity vs instance_norm+silu; FAIL if bf16>1e-2."""
         _need_cuda(self)
-        from src.models.triton_kernels.conv1d import in1d_silu
+        from src.models.pytorch.tts import in1d_silu
         torch.manual_seed(3)
         dev = "cuda:0"
         for (N, C, L) in ((2, 8, 32), (1, 64, 200)):

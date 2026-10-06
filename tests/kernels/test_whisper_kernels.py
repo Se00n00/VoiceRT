@@ -1,7 +1,6 @@
-"""Parity: STT (Whisper) Triton kernels vs torch reference.
+"""Parity: STT (Whisper) pure-torch ops vs textbook reference.
 
-Ported from STT/triton/test_kernels.py onto the new `triton_kernels`
-layout. Skips when torch/triton/cuda or the ported kernels are missing.
+Skips when torch is missing. Runs on CUDA when available, else CPU.
 """
 import unittest
 
@@ -15,28 +14,23 @@ except Exception:
 
 
 def _load_stt_kernels():
-    candidates = ("src.models.triton_kernels.whisper", "triton_kernels.stt",
-                  "triton_kernels.whisper_kernels", "triton_kernels")
-    last = None
-    for name in candidates:
-        try:
-            mod = __import__(name, fromlist=["*"])
-            fns = [getattr(mod, n, None) for n in
-                   ("layernorm", "row_softmax", "decode_attn",
-                    "batched_decode_attn")]
-            if all(callable(f) for f in fns):
-                return tuple(fns)
-            last = f"{name} missing symbols"
-        except Exception as exc:
-            last = f"{name}: {exc}"
-    raise unittest.SkipTest(f"STT triton kernels not ported yet ({last})")
+    from src.models.pytorch import whisper as mod
+
+    fns = [getattr(mod, n, None) for n in
+           ("layernorm", "row_softmax", "decode_attn",
+            "batched_decode_attn")]
+    if all(callable(f) for f in fns):
+        return tuple(fns)
+    raise unittest.SkipTest("STT torch ops missing symbols")
+
+
+def _dev():
+    return "cuda:0" if torch.cuda.is_available() else "cpu"
 
 
 def _need_cuda(tc):
     if not _HAS_TORCH:
         tc.skipTest("torch missing")
-    if not torch.cuda.is_available():
-        tc.skipTest("needs cuda")
 
 
 class TestWhisperKernels(unittest.TestCase):
@@ -44,7 +38,7 @@ class TestWhisperKernels(unittest.TestCase):
         _need_cuda(self)
         layernorm, _, _, _ = _load_stt_kernels()
         torch.manual_seed(0)
-        dev = "cuda:0"
+        dev = _dev()
         x = torch.randn(32, 512, device=dev)
         w = torch.randn(512, device=dev)
         b = torch.randn(512, device=dev)
@@ -57,7 +51,7 @@ class TestWhisperKernels(unittest.TestCase):
         _need_cuda(self)
         _, row_softmax, _, _ = _load_stt_kernels()
         torch.manual_seed(0)
-        s = torch.randn(8, 1500, device="cuda:0")
+        s = torch.randn(8, 1500, device=_dev())
         err = (row_softmax(s).float() - torch.softmax(s, -1).float()
                ).abs().max().item()
         self.assertLess(err, 1e-5, f"row_softmax maxerr={err:.2e}")
@@ -66,7 +60,7 @@ class TestWhisperKernels(unittest.TestCase):
         _need_cuda(self)
         _, _, decode_attn, _ = _load_stt_kernels()
         torch.manual_seed(0)
-        dev = "cuda:0"
+        dev = _dev()
         for n in (7, 128, 1500):
             H, dh = 8, 64
             q = torch.randn(H, dh, device=dev)
@@ -82,7 +76,7 @@ class TestWhisperKernels(unittest.TestCase):
         _need_cuda(self)
         _, _, _, batched_decode_attn = _load_stt_kernels()
         torch.manual_seed(0)
-        dev = "cuda:0"
+        dev = _dev()
         for B, n in ((4, 7), (4, 64)):
             H, dh = 8, 64
             q = torch.randn(B, H, dh, device=dev)

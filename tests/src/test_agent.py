@@ -447,7 +447,7 @@ class TestSummarizationIntegration(unittest.TestCase):
 
         self.assertIs(mw.token_counter, count_messages)
         self.assertTrue(mw.model.no_tools)
-        ag2 = self._agent("gemma270")
+        ag2 = self._agent("qwen")
         mw2 = ag2._summarization_middleware(ag2.backend)
         self.assertIsInstance(mw2, SummarizationMiddleware)
 

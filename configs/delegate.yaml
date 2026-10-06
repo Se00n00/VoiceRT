@@ -31,15 +31,8 @@ worker_eager: false
 #   fused  front fused in-process on CUDA. Fastest chit-chat (14ms TTFT,
 #          the 336ms fast path). Costs ~1.4GB VRAM, which starves the
 #          worker's -ngl auto. DEFAULT.
-#   cpu    front fused on CPU (exact-torch kernel fallbacks, 0 VRAM).
-#          No new download. Slower chit-chat, worker keeps the whole card.
-#   sidecar  front as a 0-VRAM llama.cpp CPU sidecar (port 8085). Best
-#          worker offload; downloads Qwen3-0.6B-Q4_K_M.gguf (~0.4GB) on
-#          first warm.
-#
-# gpu_offload: how much of the front model the sidecar puts on the GPU
-# (only read for placement: sidecar). "auto" = probe free VRAM. Keep this
-# small (0) when the worker needs the card.
+#   cpu    front fused on CPU (pure-torch ops, 0 VRAM). No new download.
+#          Slower chit-chat, worker keeps the whole card.
 placement: fused
 
 front:
@@ -48,18 +41,6 @@ front:
   max_tokens: 64             # a routing decision is short; do not let it ramble
   max_seq: 4096
   thinking: false            # <think> traces only add tokens to a binary choice
-
-# Read only when placement: sidecar. Stock GGUF, CPU by default.
-front_sidecar:
-  backend: qwen06
-  model: Qwen/Qwen3-0.6B
-  gguf: auto                 # "auto" = download from front_sidecar.repo
-  repo: Qwen/Qwen3-0.6B-GGUF
-  file: Qwen3-0.6B-Q4_K_M.gguf
-  port: 8085
-  ctx: 8192
-  threads: 0                 # 0 = llama-server default
-  gpu_offload: 0             # 0 = keep the card for the worker
 
 # --- worker model ----------------------------------------------------------
 #

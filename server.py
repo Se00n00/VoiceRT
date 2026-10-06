@@ -114,7 +114,7 @@ def get_agent():
     by availability, front as small as the config allows.
 
     Env overrides (same pattern as VOICE_TEXT_ONLY in bridge.py):
-    ``VOICE_LLM_BACKEND`` (e.g. qwen17, gemma270, qwen, bonsai),
+    ``VOICE_LLM_BACKEND`` (qwen or bonsai),
     ``VOICE_LLM_MODEL`` (HF id for GPU-fused backends),
     ``VOICE_FAST_VOICE=1`` (one direct generate per turn, no agent loop),
     ``VOICE_DELEGATE=0`` (single brain: the llm leg answers everything),
@@ -131,6 +131,7 @@ def get_agent():
         fast = os.environ.get("VOICE_FAST_VOICE", "").strip() == "1"
         delegate = os.environ.get("VOICE_DELEGATE", "").strip()
         dpath = os.environ.get("VOICE_DELEGATE_CONFIG", "").strip() or None
+        tts_voice = os.environ.get("VOICE_TTS_VOICE", "").strip()
         from dataclasses import replace
 
         from src.models.llm import LlmConfig
@@ -147,6 +148,13 @@ def get_agent():
                 model=model or LlmConfig.model))
         if fast:
             cfg = replace(cfg, fast_voice=True)
+        if tts_voice:
+            from src.models.tts import TtsConfig
+
+            cfg = replace(cfg, tts=TtsConfig(
+                voice=tts_voice, lang=cfg.tts.lang,
+                sample_rate=cfg.tts.sample_rate, speed=cfg.tts.speed,
+                device=cfg.tts.device))
         _agent = VoiceAgent(cfg)
     return _agent
 
@@ -266,6 +274,17 @@ def vad_page():
 
     here = os.path.dirname(os.path.abspath(__file__))
     return FileResponse(os.path.join(here, "web", "vad_asr.html"))
+
+
+@router.get("/latency", include_in_schema=False)
+def latency_page():
+    """Speech-to-speech page with end-to-end latency readout."""
+    import os
+
+    from fastapi.responses import FileResponse
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    return FileResponse(os.path.join(here, "web", "latency.html"))
 
 
 @router.get("/metrics")
@@ -523,6 +542,49 @@ def tg_qr():
             "bot": st.get("bot", "")}
 
 
+def prefill_messages(agent, sid, text):
+    """Prompt sharing the real turn's prefix, for KV priming.
+
+    Same builder the worker decodes with (system + history + CWD
+    trailer), only the tail is the still-growing partial. The decode
+    that follows reuses the matched prefix from the leg's cache, so
+    only genuinely new words cost prompt time. None when unusable —
+    prefill is best-effort and must never break a turn.
+    """
+    try:
+        llm = getattr(agent, "llm", None)
+        if llm is None or not str(text or "").strip():
+            return None
+        try:
+            hist = agent.sessions.history(sid) if sid else []
+        except Exception:
+            hist = []
+        return llm.messages_for_terminal(str(text)[:600], hist, ".", "")
+    except Exception:
+        return None
+
+
+async def prime_prefill(llm, msgs):
+    """Process one prefill prompt without generating; return prompt ms.
+
+    Fused legs fall back to encode() (client template + tokenizer warm;
+    paged prefix blocks prime on encode). Single-slot CPU sidecars are
+    SKIPPED outright: a prime costs seconds of prompt processing there
+    (measured 2.4s), longer than the pause window, and it would hold the
+    server's only slot while the real turn waits. None on any failure
+    or skip — the turn decodes unprimed, exactly as before.
+    """
+    try:
+        leg = llm._backend() if hasattr(llm, "_backend") else None
+        if (leg is not None and hasattr(leg, "_payload")
+                and hasattr(leg, "_post")):
+            return None
+        await llm.encode(msgs)
+        return 0.0
+    except Exception:
+        return None
+
+
 @router.websocket("/talk")
 async def talk(ws: WebSocket):
     await ws.accept()
@@ -541,6 +603,12 @@ async def talk(ws: WebSocket):
     last_partial_at = 0.0
     partial_busy = False
     turn_seq = 0
+    turn_task = None
+    prefill_task = None
+    try:
+        agent.vad.reset()
+    except Exception:
+        pass  # fresh socket starts with clean VAD state, always
     await ws.send_json({"event": "ready", "session_id": sid, "sr": 16000,
                         "nodes": ["vad", "stt", "llm", "tts"]})
 
@@ -552,6 +620,47 @@ async def talk(ws: WebSocket):
         nonlocal last_partial, last_partial_at, turn_seq
         turn_seq += 1
         last_partial, last_partial_at = "", 0.0
+        prefill_abort()
+
+    def prefill_abort():
+        """Drop the in-flight prime; its server-side KV stays cached."""
+        nonlocal prefill_task
+        task, prefill_task = prefill_task, None
+        if task is not None and not task.done():
+            task.cancel()
+
+    def prefill_prime(text):
+        """Prime the decode leg with the growing transcript, if idle.
+
+        Cancels the previous prime (its KV is still useful server-side)
+        and starts one for the latest words. Skipped mid-turn: decode
+        owns the leg then. Fire-and-forget; completion reports ms.
+        """
+        nonlocal prefill_task
+        prefill_abort()
+        if turn_running() or not str(text or "").strip():
+            return
+        llm = getattr(agent, "llm", None)
+        if llm is None:
+            return
+        msgs = prefill_messages(agent, sid, text)
+        if not msgs:
+            return
+        seq = turn_seq
+
+        async def _prime():
+            ms = await prime_prefill(llm, msgs)
+            if ms is None or seq != turn_seq or turn_running():
+                return  # superseded, failed, or turn started: stay silent
+            _record_event("llm")
+            try:
+                await ws.send_json({"event": "node", "node": "llm",
+                                    "kind": "prefill",
+                                    "data": {"prompt_ms": round(ms, 1)}})
+            except Exception:
+                pass  # disconnect races must never kill the task
+
+        prefill_task = asyncio.create_task(_prime())
 
     def maybe_partial():
         """Launch one rolling-window transcribe; never overlaps, never raises.
@@ -594,6 +703,25 @@ async def talk(ws: WebSocket):
                                              "buffer_s": round(snap_s, 2)}})
             except Exception:
                 pass  # disconnect races must never kill the task
+            # Streaming prefill: the new words prime the decode leg
+            # while the user keeps talking (see prefill_prime).
+            prefill_prime(text)
+            # Prefill: the decode that follows re-encodes this same prefix
+            # (history + trailer get prepended at commit, the tail matches),
+            # so tokenizing it now warms the encode path and primes the
+            # paged prefix cache while the user is still speaking.
+            # Fire-and-forget, never raises, skipped mid-turn.
+            if not turn_running():
+                async def _prefill():
+                    try:
+                        llm = getattr(agent, "llm", None)
+                        if llm is not None:
+                            await llm.encode(
+                                [{"role": "user",
+                                  "content": text[:600]}])
+                    except Exception:
+                        pass  # prefill is best-effort, never a turn
+                asyncio.create_task(_prefill())
 
         asyncio.create_task(_run())
 
@@ -614,6 +742,50 @@ async def talk(ws: WebSocket):
                                 "kind": "speech",
                                 "data": {"speech": bool(speech),
                                          "buffer_s": len(buf) / 16000.0}})
+
+    def turn_running():
+        return turn_task is not None and not turn_task.done()
+
+    def launch_turn(audio: np.ndarray):
+        """Run a turn in the background so the mic loop keeps scoring.
+
+        Returns False when a turn is already running (caller reports it).
+        """
+        nonlocal turn_task
+        if turn_running():
+            return False
+
+        async def _wrap():
+            try:
+                await run_turn(audio)
+            finally:
+                pass  # turn_running() reads task.done(); nothing to clear
+
+        turn_task = asyncio.create_task(_wrap())
+        return True
+
+    async def barge_in():
+        """Speech started mid-turn: kill the turn, stop client playback.
+
+        The user's interruption stays in the buffer (it is the next turn's
+        input); only the stale turn dies. In-flight partials go stale via
+        the sequence bump.
+        """
+        nonlocal turn_task
+        task, turn_task = turn_task, None
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+        reset_partials()
+        _record_event("tts")
+        try:
+            await ws.send_json({"event": "barge",
+                                "reason": "speech-during-playback"})
+        except Exception:
+            pass  # disconnect races must never kill the task
 
     async def run_turn(audio: np.ndarray):
         t0 = time.perf_counter()
@@ -663,6 +835,7 @@ async def talk(ws: WebSocket):
         except (WebSocketDisconnect, RuntimeError):
             # RuntimeError: starlette raises 'Cannot call receive once a
             # disconnect message has been received' on client-close races.
+            prefill_abort()
             break
         data = msg.get("bytes")
         chunk, sr = None, client_sr
@@ -711,6 +884,7 @@ async def talk(ws: WebSocket):
                                     "data": {"buffer_s": 0.0}})
                 continue
             if kind == "close":
+                prefill_abort()
                 break
             if kind == "audio":
                 try:
@@ -725,10 +899,14 @@ async def talk(ws: WebSocket):
                     await ws.send_json({"event": "error",
                                         "message": "empty buffer"})
                     continue
+                if turn_running():
+                    await ws.send_json({"event": "error",
+                                        "message": "turn already running"})
+                    continue
                 audio, buf = buf, np.zeros(0, dtype=np.float32)
                 speech_seen, trailing_sil = False, 0.0
                 reset_partials()
-                await run_turn(audio)
+                launch_turn(audio)
                 continue
             else:
                 continue
@@ -743,15 +921,20 @@ async def talk(ws: WebSocket):
         await emit_vad(speech)
         if speech:
             speech_seen, trailing_sil = True, 0.0
+            # Barge-in: the user started talking over the reply. Kill the
+            # stale turn first; this chunk stays buffered as the next turn.
+            if turn_running():
+                await barge_in()
         else:
             trailing_sil += dur
         if speech_seen:
             maybe_partial()
-        if speech_seen and trailing_sil >= end_silence_s:
+        if (speech_seen and trailing_sil >= end_silence_s
+                and not turn_running()):
             audio, buf = buf, np.zeros(0, dtype=np.float32)
             speech_seen, trailing_sil = False, 0.0
             reset_partials()
-            await run_turn(audio)
+            launch_turn(audio)
 
 
 @browser_router.get("/browser/tools")

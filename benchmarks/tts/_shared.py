@@ -66,15 +66,7 @@ def run_tts_benchmark(args, backend: str):
     engine, is_synth = _get_tts_engine(model_id, device)
     print(f"TTS benchmark {backend} synthetic={is_synth} device={device}")
 
-    # handle triton vs pytorch: monkeypatch HAVE_TRITON_KERNELS for tts
-    if backend == "pytorch":
-        try:
-            import src.models.triton_kernels.tts as tts_surf
-            tts_surf.HAVE_TRITON_KERNELS = False
-            import src.models.engines.tts as engm
-            engm.HAVE_TRITON_KERNELS = False
-        except Exception:
-            pass
+    # Pure-torch TTS ops throughout (no kernel variants to switch).
 
     all_rows = []
     correctness_rows = []

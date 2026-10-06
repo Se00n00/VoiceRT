@@ -22,7 +22,7 @@ rotated weight basis needs a runtime Walsh-Hadamard transform that is not
 upstream. Stock builds refuse PTQ1_0/PQ2_0, and a Q2_0 file loads silent
 + outputs gibberish. :func:`resolve_server_bin` enforces the fork tag.
 
-Tool-call grammar: same composed raw text as the Gemma leg (contract for
+Tool-call grammar: composed raw text (contract for
 ``parse_gemma_action`` in :mod:`src.tools.terminal`) — optional chat
 ``content``, then zero or more ``<|tool_call>call:NAME ARGS <tool_call|>``
 blocks. One parser serves both sidecars.
@@ -364,7 +364,7 @@ def compose_raw(content, tool_calls, reasoning=""):
     wrapping it in ``<think>`` here is what lets :func:`split_thinking`
     downstream turn it into ``thinking`` events (otherwise Bonsai's
     thoughts are silently dropped and the TUI shows no think trace).
-    Same grammar as the Gemma leg — one parser serves both sidecars.
+    Same raw-text grammar the sidecar parser consumes.
     """
     parts = []
     if reasoning and str(reasoning).strip():

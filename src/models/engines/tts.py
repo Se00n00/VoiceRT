@@ -1,12 +1,8 @@
 """Kokoro-82M TTS leg in one file: voices + text frontend + engine.
 
-Single model class :class:`KokoroEngine`. Triton kernels from
-:mod:`src.models.triton_kernels.tts` accelerate the audio post-processing around the
-opaque Kokoro pipeline (peak-normalize + optional ``enhance`` filter +
-resampling), so the kernels run in the hot path on every ``speak()``:
-
-- ``postprocess`` (uses ``in1d_silu_fwd`` when ``enhance=True``)
-- ``resample_linear`` (when a non-native sample rate is requested)
+Single model class :class:`KokoroEngine`. Audio post-processing
+(peak-normalize + optional ``enhance`` filter + resampling) is pure
+PyTorch/numpy from :mod:`src.models.pytorch.tts` — no custom kernels.
 
 Main synthesis stays eager Kokoro by measured decision (RTF 0.09;
 full-model ``torch.compile`` is broken in this env).
@@ -18,13 +14,14 @@ import time
 import numpy as np
 import torch
 
-from src.models.triton_kernels.tts import (
-    HAVE_TRITON_KERNELS,
+from src.models.pytorch.tts import (
     conv1d_silu_fwd,
     in1d_silu_fwd,
     postprocess,
     resample_linear,
 )
+
+HAVE_TRITON_KERNELS = False
 
 __all__ = [
     "SAMPLE_RATE", "DEFAULT_VOICE", "KNOWN_VOICES", "LANG_CODE",
@@ -135,7 +132,7 @@ def phonemize(text, lang="en-us", backend="auto"):
 
 # -- engine -----------------------------------------------------------------
 class KokoroEngine:
-    """Working Kokoro wrapper with Triton post-processing in the hot path.
+    """Working Kokoro wrapper with torch post-processing in the hot path.
 
     Takes explicit kwargs (``model``, ``lang``, ``voice``,
     ``sample_rate``, ``torch_compile``, ``speed``, ``enhance``, ...).
@@ -159,7 +156,7 @@ class KokoroEngine:
         self._pipeline = None
         self._compiled = False
         self._phonemize = phonemize_fn or (lambda t: phonemize(t))
-        # Exercise the Triton conv path at warmup so a broken kernel
+        # Exercise the torch conv path at warmup so a broken op
         # surfaces here, not mid-conversation (CPU-safe no-op otherwise).
         try:
             x = torch.randn(1, 4, 32)
@@ -185,7 +182,7 @@ class KokoroEngine:
         # - submodule compile, dynamic=True: SLOWER than eager (RTF 0.37
         #   vs 0.09 on varying sentences).
         # Eager RTF 0.09 is 11x real-time; the honest win stays in
-        # STT/LLM kernels + the Triton audio post-processing below.
+        # STT/LLM torch ops + the torch audio post-processing below.
         try:
             list(pipe("warmup.", voice=self.voice))
             if self.device.startswith("cuda"):
@@ -214,7 +211,7 @@ class KokoroEngine:
             return np.zeros(0, dtype=np.float32)
         arr = [np.asarray(c, dtype=np.float32).ravel() for c in chunks]
         wav = np.concatenate(arr)
-        # Triton-accelerated post-processing runs on every sentence.
+        # Torch post-processing runs on every sentence.
         wav = postprocess(wav, sr=SAMPLE_RATE, enhance=self.enhance)
         if self.sample_rate != SAMPLE_RATE:
             wav = resample_linear(wav, SAMPLE_RATE, self.sample_rate)

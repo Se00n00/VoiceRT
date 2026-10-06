@@ -1,12 +1,13 @@
-"""Complete TTS (Kokoro) importing fused Triton kernel, batched, VRAM check, static test."""
+"""Complete TTS (Kokoro), pure PyTorch (no Triton). Batched, VRAM check, static test."""
 import os, time
 import numpy as np
 import torch
 import torch.nn.functional as F
-from src.models.triton_kernels.tts_fused import (
-    postprocess, postprocess_batched, conv1d_silu, in1d_silu, estimate_tts_mb
+from src.models.pytorch.tts import (
+    postprocess, postprocess_batched, conv1d_silu, in1d_silu, estimate_tts_mb,
+    resample_linear,
+    postprocess_torch, in1d_silu_torch,
 )
-from src.models.pytorch.tts import postprocess_torch, in1d_silu_torch
 from src.models.runtime.memory import check_budget
 from src.models.runtime.device import max_allocated_mb
 import re
@@ -83,7 +84,6 @@ class KokoroFused(torch.nn.Module):
                     parts.append(wav)
                 wav_out=np.concatenate(parts) if parts else np.zeros(0,dtype=np.float32)
                 if sr!=SAMPLE_RATE and wav_out.size:
-                    from src.models.triton_kernels.tts_fused import resample_linear
                     wav_out=resample_linear(wav_out, SAMPLE_RATE, sr)
                 chunk_wavs.append((wav_out.astype(np.float32), sr))
             all_wavs.extend(chunk_wavs)

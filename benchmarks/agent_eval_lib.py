@@ -14,7 +14,7 @@ import time
 CONFIRM_LOG = "auto-approve (deny verdicts still block)"
 
 
-async def warm_agent(model="google/gemma-4-E4B-it", backend="gemma",
+async def warm_agent(model="Qwen/Qwen3-0.6B", backend="qwen",
                      sessions_dir=None):
     """Build VoiceAgent with warmed LLM leg, TTS disabled."""
     from src.main import VoiceAgent, VoiceAgentConfig

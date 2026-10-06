@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "VoiceRT is a pure localhost client: allow the window only.",
+  "windows": ["main"],
+  "permissions": ["core:window:allow-show", "core:window:allow-close", "core:window:allow-minimize", "core:window:allow-toggle-maximize", "core:window:allow-is-fullscreen", "core:window:allow-set-fullscreen"]
+}

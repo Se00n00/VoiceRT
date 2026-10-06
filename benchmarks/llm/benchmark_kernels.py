@@ -198,7 +198,7 @@ def main():
         print("CUDA not available, falling back to CPU (timings will be CPU)")
 
     _init_registry(device, dtype)
-    env = get_environment(model_name="Qwen/Qwen2.5-0.5B-Instruct", dtype=args.dtype)
+    env = get_environment(model_name="Qwen/Qwen3-0.6B", dtype=args.dtype)
 
     selected = args.kernels if args.kernels else list(KERNELS.keys())
     results = []

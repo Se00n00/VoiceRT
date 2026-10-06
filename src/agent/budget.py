@@ -38,19 +38,14 @@ __all__ = [
 ]
 
 # Native context per backend. Bonsai ships 262K but runs at 16K here
-# (measured: prefill ~100 tok/s to 13.5K, decode ~1.1 tok/s at ngl=6);
-# gemma270 runs 32K on CPU (25.6K tokens in 4s).
+# (measured: prefill ~100 tok/s to 13.5K, decode ~1.1 tok/s at ngl=6).
 CONTEXT_TOKENS = {
     "bonsai": 16384,
-    "gemma": 4096,
-    "gemma270": 32768,
-    "qwen17": 32768,
+    "qwen": 8192,
 }
 # Think + tool call must fit in ONE step (matches chat_model floors).
 STEP_FLOORS = {
     "bonsai": 512,
-    "gemma270": 256,
-    "qwen17": 512,
 }
 DEFAULT_STEP_FLOOR = 256
 # Fraction of ctx reserved for generation + safety margin.
@@ -79,12 +74,6 @@ class BudgetConfig:
 BUDGETS = {
     # 16K reference row: matches the README diagram exactly.
     "bonsai": BudgetConfig(ctx=16384, think_cap=128, step_floor=512),
-    "qwen17": BudgetConfig(ctx=32768, think_cap=512, step_floor=512),
-    "gemma270": BudgetConfig(ctx=32768, think_cap=256, step_floor=256),
-    # small/legacy legs: same caps, tighter room — the router MUST narrow.
-    "gemma": BudgetConfig(ctx=4096, think_cap=256, step_floor=256),
-    "minicpm": BudgetConfig(ctx=8192, think_cap=320, step_floor=320),
-    "minicpm_q4k": BudgetConfig(ctx=8192, think_cap=320, step_floor=320),
     "qwen": BudgetConfig(ctx=8192, think_cap=256, step_floor=256),
 }
 
@@ -92,11 +81,11 @@ DEFAULT_BUDGET = BudgetConfig(ctx=4096)
 
 
 def for_backend(name: str) -> BudgetConfig:
-    """Budget row by backend id (prefix match: minicpm_q4k -> minicpm)."""
+    """Budget row by backend id (prefix match: qwen06 -> qwen)."""
     name = str(name or "")
     if name in BUDGETS:
         return BUDGETS[name]
-    for key in ("minicpm", "gemma", "qwen", "bonsai"):
+    for key in ("qwen", "bonsai"):
         if name.startswith(key):
             return BUDGETS[key]
     return DEFAULT_BUDGET

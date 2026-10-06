@@ -64,8 +64,6 @@ def _lock():
 # loads, so `/model` starting there adds no download and no VRAM. Switch to
 # bonsai for the 27B tool harness — that is the leg delegation escalates to,
 # and it is what a bare `LlmConfig()` caller wants for agentic work.
-# Gemma stays as the 0-VRAM CPU fallback; MiniCPM variants stay as
-# GPU-weight switches (M3 deletion pending).
 MODEL_PROFILES = {
     "qwen": {
         "name": "qwen",
@@ -75,68 +73,12 @@ MODEL_PROFILES = {
         "desc": "0.6B fused on CUDA — DEFAULT: same weights as the two-brain front leg, chat/routing only",
         "ready": True,
     },
-    "gemma": {
-        "name": "gemma",
-        "label": "gemma-4-E4B-it-Q4_K_M",
-        "model": "google/gemma-4-E4B-it",
-        "backend": "gemma",
-        "desc": "default CPU sidecar via llama-server (0 VRAM, needs ~6GB RAM)",
-        "ready": True,
-    },
-    "minicpm": {
-        "name": "minicpm",
-        "label": "minicpm5-1b-bf16",
-        "model": "openbmb/MiniCPM5-1B",
-        "backend": "minicpm",
-        "desc": "BF16 eager GPU fallback (plain torch, most faithful)",
-        "ready": True,
-    },
-    "minicpm-q4k": {
-        "name": "minicpm-q4k",
-        "label": "minicpm5-1b-q4k",
-        "model": "openbmb/MiniCPM5-1B",
-        "backend": "minicpm_q4k",
-        "desc": "Q4_K_M GGUF (~651MB, 4.5bpw, fastest, more hallucinations)",
-        "ready": True,
-    },
-    "minicpm-bf16": {
-        "name": "minicpm-bf16",
-        "label": "minicpm5-1b-bf16",
-        "model": "openbmb/MiniCPM5-1B",
-        "backend": "minicpm",
-        "desc": "BF16 eager alias of default",
-        "ready": True,
-    },
-    "minicpm-q8": {
-        "name": "minicpm-q8",
-        "label": "minicpm5-1b-q8",
-        "model": "openbmb/MiniCPM5-1B-GGUF",
-        "backend": "minicpm_q4k",
-        "desc": "Q8_0 (773MB, 8.5bpw, near-BF16, needs Q8 kernel — lands next)",
-        "ready": False,
-    },
     "bonsai": {
         "name": "bonsai",
         "label": "bonsai-2-27b-ptq1_0",
         "model": "prism-ml/Ternary-Bonsai-2-27B",
         "backend": "bonsai",
         "desc": "27B ternary sidecar via Prism-fork llama-server (ngl auto, 16K ctx)",
-        "ready": True,
-    },
-    "gemma270": {
-        "name": "gemma270",
-        "label": "functiongemma-270m-q4_k_m",
-        "model": "google/functiongemma-270m-it",
-        "backend": "gemma270",
-        "desc": "270M function-calling sidecar, CPU-only 0 VRAM, 32K ctx (context lab)",
-        "ready": True,
-    },
-    "qwen17": {
-        "name": "qwen17",
-        "label": "qwen3-1.7b-q4_k_m",
-        "model": "Qwen/Qwen3-1.7B",
-        "backend": "qwen17",
-        "desc": "1.7B eval-grade sidecar, CPU-only 0 VRAM, 32K ctx (chat+tools)",
         "ready": True,
     },
 }
@@ -307,7 +249,7 @@ async def switch_model(name: str) -> dict:
         try:  # smoke: leg alive before we commit to the swap
             leg = new_llm._backend()
             if getattr(leg, "is_sidecar", False):
-                # CPU sidecar (Gemma): no local tokenizer/encode path —
+                # Bonsai sidecar: no local tokenizer/encode path —
                 # warm() already proved /health, nothing more to smoke.
                 pass
             else:
@@ -320,8 +262,8 @@ async def switch_model(name: str) -> dict:
             compact_note = ""
         old = getattr(agent, "llm", None)
         try:
-            # Sidecar legs own a server subprocess (llama-server on :8080 /
-            # :8081). `del` alone would orphan it — a gemma→bonsai→gemma
+            # The bonsai sidecar owns a server subprocess (llama-server on
+            # :8081). `del` alone would orphan it — a bonsai→qwen→bonsai
             # ping-pong would leak one server per switch. Read the already-
             # constructed leg only (never trigger a fresh _backend() build).
             old_leg = getattr(old, "_leg", None)
@@ -458,6 +400,48 @@ def create_app(agent=None):
         except Exception:
             title = ""
         return {"title": title or "", "session_id": sid}
+
+    @app.get("/term/history")
+    def term_history(sid: str = ""):
+        """Full persisted transcript for a session (past conversations).
+
+        Reads ``sessions/<sid>.json`` straight off disk — no model, no
+        TTL prune — so the UI can restore user/assistant turns plus the
+        richer ``thinking`` / ``tool`` / ``cot`` roles the agent never
+        feeds back into the LLM window (see ``_lc_messages``: user and
+        assistant only). Touches the file so the session sweeper does
+        not reap it while it is being viewed.
+        """
+        import json as _json
+        import os as _os
+
+        from src.agent.memory import _safe_sid
+
+        sid = str(sid or "").strip()
+        if not sid:
+            return {"session_id": "", "title": "", "messages": []}
+        try:
+            base = getattr(get_agent().sessions, "sessions_dir", "sessions") or "sessions"
+            path = _os.path.join(str(base), _safe_sid(sid) + ".json")
+            with open(path, "r", encoding="utf-8") as f:
+                payload = _json.load(f)
+            try:
+                _os.utime(path, None)
+            except Exception:
+                pass
+            msgs = payload.get("messages", []) or []
+            msgs = [
+                {"role": str(m.get("role", "user")), "content": str(m.get("content", ""))}
+                for m in msgs
+                if isinstance(m, dict) and str(m.get("content", "") or "").strip()
+            ]
+            return {
+                "session_id": str(payload.get("session_id", sid) or sid),
+                "title": str(payload.get("title", "") or ""),
+                "messages": msgs,
+            }
+        except Exception:
+            return {"session_id": sid, "title": "", "messages": []}
 
     @app.post("/term/stt")
     async def term_stt(payload: dict):

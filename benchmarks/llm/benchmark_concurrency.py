@@ -40,7 +40,7 @@ def main():
     parser.add_argument("--iterations", type=int, default=20)
     parser.add_argument("--output-dir", default="benchmarks/results")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--model", default="Qwen/Qwen2.5-0.5B-Instruct")
+    parser.add_argument("--model", default="Qwen/Qwen3-0.6B")
     args = parser.parse_args()
 
     seed_everything(args.seed)

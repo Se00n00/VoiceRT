@@ -1,0 +1,212 @@
+@import "tailwindcss";
+
+/* ---- stage: blue aurora backdrop ---- */
+.stage {
+  background:
+    radial-gradient(900px 480px at 12% 0%, rgba(226, 232, 255, 0.9), transparent 60%),
+    radial-gradient(1100px 700px at 85% 20%, rgba(59, 110, 246, 0.85), transparent 65%),
+    linear-gradient(180deg, #7ea0f8 0%, #2f5fe0 38%, #123a9e 72%, #0a2470 100%);
+}
+
+/* ---- hero: near-black card, live dither canvas paints over this ---- */
+.hero {
+  background: #07090e;
+}
+.hero-grid {
+  background-image: repeating-linear-gradient(90deg, rgba(147, 183, 255, 0.13) 0 1px, transparent 1px 72px);
+  mask-image: linear-gradient(180deg, transparent 0%, black 35%);
+}
+.headline {
+  font-family: Georgia, "Times New Roman", serif;
+  letter-spacing: -0.01em;
+}
+
+/* ---- frosted prompt box ---- */
+.prompt-frost {
+  background: rgba(238, 242, 255, 0.78);
+  backdrop-filter: blur(18px);
+  box-shadow:
+    0 24px 60px -12px rgba(8, 20, 80, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+.rawicon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.thin-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+.thin-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.25);
+  border-radius: 8px;
+}
+
+/* ---------- light theme (toggled from the bottom bar) ---------- */
+.theme-light .hero {
+  background: #dbe0ec;
+}
+.theme-light .topnav {
+  color: #3c4560 !important;
+}
+.theme-light .topnav a:hover,
+.theme-light .topnav button:hover {
+  color: #0c1226 !important;
+}
+.theme-light .topnav .logo {
+  border-color: rgba(20, 26, 46, 0.6) !important;
+}
+.theme-light .topnav .mlabel {
+  color: rgba(20, 26, 46, 0.45) !important;
+}
+.theme-light .greet h1 {
+  color: #10162a !important;
+}
+.theme-light .greet p {
+  color: rgba(16, 22, 42, 0.55) !important;
+}
+.theme-light .greet svg {
+  color: #10162a !important;
+}
+.theme-light .askcard {
+  background: #ffffff !important;
+}
+.theme-light .askcard input {
+  color: #1c2438 !important;
+}
+.theme-light .askcard input::placeholder,
+.theme-light .askcard textarea::placeholder {
+  color: rgba(28, 36, 56, 0.35) !important;
+}
+.theme-light .askcard textarea {
+  color: #1c2438 !important;
+}
+.theme-light .askcard .ctxline {
+  border-color: rgba(20, 30, 60, 0.1) !important;
+  color: rgba(28, 36, 56, 0.6) !important;
+}
+.theme-light .askcard .ctxline button {
+  color: inherit;
+}
+.theme-light .askcard .pillbtn {
+  color: rgba(28, 36, 56, 0.55) !important;
+}
+.theme-light .askcard .pillbtn:hover {
+  background: rgba(20, 30, 60, 0.06) !important;
+  color: #141a2e !important;
+}
+.theme-light .askcard .pillbtn-on {
+  background: #141a2e !important;
+  color: #fff !important;
+}
+.theme-light .askcard .sendbtn {
+  background: #141a2e !important;
+  color: #fff !important;
+}
+.theme-light .askcard .toolchip {
+  background: rgba(20, 30, 60, 0.06) !important;
+  color: rgba(28, 36, 56, 0.5) !important;
+}
+.theme-light .askcard .disclaim {
+  color: rgba(28, 36, 56, 0.4) !important;
+}
+.theme-light .askcard .ghostpill {
+  border-color: rgba(20, 30, 60, 0.14) !important;
+  color: rgba(28, 36, 56, 0.6) !important;
+}
+.theme-light .askcard .ghostpill:hover {
+  background: rgba(20, 30, 60, 0.06) !important;
+}
+.theme-light .askcard .ghostpill-on {
+  background: #141a2e !important;
+  color: #fff !important;
+}
+.theme-light .askcard .iconbtn {
+  color: rgba(28, 36, 56, 0.55) !important;
+}
+.theme-light .askcard .iconbtn:hover {
+  background: rgba(20, 30, 60, 0.07) !important;
+  color: #141a2e !important;
+}
+.theme-light .dropbtn {
+  color: rgba(28, 36, 56, 0.6) !important;
+}
+.theme-light .dropbtn:hover {
+  background: rgba(20, 30, 60, 0.07) !important;
+  color: #141a2e !important;
+}
+.theme-light .ainmenu {
+  background: rgba(255, 255, 255, 0.96) !important;
+}
+.theme-light .ainmenu .ainitem {
+  color: rgba(28, 36, 56, 0.75) !important;
+}
+.theme-light .ainmenu .ainitem:hover {
+  background: rgba(20, 30, 60, 0.07) !important;
+  color: #141a2e !important;
+}
+.theme-light .bub-you {
+  background: rgba(20, 26, 46, 0.07) !important;
+  color: #1c2438 !important;
+}
+.theme-light .bub-sys {
+  color: rgba(28, 36, 56, 0.5) !important;
+}
+/* drawer panels + bottom bar */
+.dpanel {
+  --pl: rgba(255, 255, 255, 0.45);
+  --pv: #fff;
+}
+.dpanel .lbl {
+  color: var(--pl);
+}
+.dpanel .val {
+  color: var(--pv);
+}
+.dpanel-input {
+  background: rgba(0, 0, 0, 0.4);
+  color: #fff;
+}
+.dpanel-btn {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.8);
+}
+.dpanel-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+}
+.theme-light .dpanel {
+  --pl: rgba(28, 36, 56, 0.55);
+  --pv: #1c2438;
+  background: rgba(255, 255, 255, 0.8) !important;
+}
+.theme-light .dpanel-input {
+  background: rgba(20, 30, 60, 0.07) !important;
+  color: #1c2438 !important;
+}
+.theme-light .dpanel-btn {
+  background: rgba(20, 30, 60, 0.07) !important;
+  color: rgba(28, 36, 56, 0.75) !important;
+}
+.theme-light .dpanel-btn:hover {
+  background: rgba(20, 30, 60, 0.14) !important;
+  color: #141a2e !important;
+}
+.theme-light .winbar {
+  color: rgba(28, 36, 56, 0.6) !important;
+}
+.theme-light .winbar-btn {
+  color: rgba(28, 36, 56, 0.65) !important;
+}
+.theme-light .winbar-btn:hover {
+  background: rgba(20, 30, 60, 0.1) !important;
+  color: #141a2e !important;
+}
+.theme-light .winbar-btn.winclose:hover {
+  background: #dc2626 !important;
+  color: #fff !important;
+}
+.theme-light .barmini {
+  color: rgba(28, 36, 56, 0.45) !important;
+}
