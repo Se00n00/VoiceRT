@@ -12,5 +12,8 @@ export default defineConfig({
   build: {
     outDir: "dist",
     target: "es2021",
+    // Never inline the AudioWorklet as a data: URL — it must load as a
+    // same-origin file module inside the WebView.
+    assetsInlineLimit: 0,
   },
 });

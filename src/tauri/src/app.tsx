@@ -3,13 +3,14 @@ import { AskCard, Greeting, Transcript, suggestTypo, type AgentMode, type Msg, t
 import { SAMPLES, SAMPLE_CONVERSATION, SAMPLE_NAMES } from "./components/samples.js";
 import { DitherBg } from "./components/DitherBg.js";
 import { ReactVoiceMode } from "./components/ReactVoiceMode.js";
+import { KbdCombo } from "./components/Kbd.js";
 import { WarpOrb } from "./components/WarpOrb.js";
 import collapseSvg from "./assets/collapse.svg?raw";
 import expandSvg from "./assets/expand.svg?raw";
-import { API, TurnSocket, fetchHistory, fetchTitle, getLegs, getMetrics, getMetricsContext, getModel, health, say, setAPI, stt, switchModel, type Legs, type Metrics, type TurnEvent } from "./api/client.js";
+import { API, TurnSocket, fetchHistory, fetchTitle, getLegs, getMetrics, getMetricsContext, getModel, health, openSttStream, say, setAPI, stt, switchModel, type Legs, type Metrics, type TurnEvent } from "./api/client.js";
 import type { CotStepData } from "./components/chain-of-thought.js";
 import { b64ToF32 } from "./audio/dsp.js";
-import { createRecorder, playF32, recordSecs, type Recorder } from "./audio/webaudio.js";
+import { createRecorder, playF32, primeVoiceMix, recordSecs, startVoiceCapture, tapTtsIntoMix, type Recorder, type VoiceCapture } from "./audio/webaudio.js";
 
 const uid = () => Math.random().toString(16).slice(2, 10);
 const newSessionId = () => `ses_${uid()}${uid().slice(0, 2)}`;
@@ -92,6 +93,149 @@ export function App() {
   const [recSecs, setRecSecs] = createSignal(0);
   // Full voice mode: voice-glow overlay, composer hidden, no dictation.
   const [voiceMode, setVoiceMode] = createSignal(false);
+  // Voice mode owns its mic: PCM frames stream live to the backend voice
+  // pipeline (`/term/stt-stream`), partials show in the overlay, and the
+  // final transcript is sent as a user message on stop.
+  const [voiceStream, setVoiceStream] = createSignal<MediaStream | null>(null);
+  const [voicePartial, setVoicePartial] = createSignal("");
+  const VOICE_WINDOW_SECS = 60;
+  let voiceCap: VoiceCapture | null = null;
+  let voiceSock: { sendPcm: (pcm: Uint8Array) => void; stop: () => void; close: () => void } | null = null;
+  let voiceTimer = 0;
+  let voiceStreamFailed = false;
+  let voiceFinalText = "";
+  let voiceFinalResolve: ((text: string) => void) | null = null;
+  // Set when a voice turn is sent: the agent's reply is spoken aloud.
+  let voiceReplyPending = false;
+
+  function f32ToI16(pcm: Float32Array): Uint8Array {
+    const out = new Uint8Array(pcm.length * 2);
+    const view = new DataView(out.buffer);
+    for (let i = 0; i < pcm.length; i++) {
+      const v = Math.max(-1, Math.min(1, pcm[i] ?? 0));
+      view.setInt16(i * 2, Math.round(v * 32767), true);
+    }
+    return out;
+  }
+
+  async function enterVoiceMode(): Promise<void> {
+    if (voiceMode()) return;
+    if (recState()) cancelDictate();
+    let cap: VoiceCapture;
+    try {
+      cap = await startVoiceCapture({
+        onChunk: (pcm) => {
+          try {
+            voiceSock?.sendPcm(f32ToI16(pcm));
+          } catch {
+            /* streaming tap is best-effort */
+          }
+        },
+      });
+    } catch (e) {
+      push("err", `mic: ${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
+    voiceCap = cap;
+    voiceFinalText = "";
+    voiceFinalResolve = null;
+    voiceStreamFailed = false;
+    setVoicePartial("");
+    voiceSock = openSttStream(16000, {
+      onPartial: (t) => {
+        if (t.trim()) setVoicePartial(t.trim().slice(0, 220));
+      },
+      onFinal: (t) => {
+        voiceFinalText = (t ?? "").trim();
+        voiceFinalResolve?.(voiceFinalText);
+        voiceFinalResolve = null;
+      },
+      onError: (m) => {
+        voiceStreamFailed = true;
+        push("err", `voice stream: ${m}`);
+      },
+    });
+    setVoiceStream(cap.mixed);
+    setVoiceMode(true);
+    primeVoiceMix();
+    window.clearTimeout(voiceTimer);
+    voiceTimer = window.setTimeout(() => void stopVoiceMode(), VOICE_WINDOW_SECS * 1000);
+  }
+
+  /** End the voice window: await the streamed final (or fall back to one
+      full transcribe) and send the result as a user message. */
+  async function stopVoiceMode(): Promise<void> {
+    if (!voiceMode()) return;
+    window.clearTimeout(voiceTimer);
+    setVoiceMode(false);
+    setVoiceStream(null);
+    setVoicePartial("");
+    const cap = voiceCap;
+    voiceCap = null;
+    const sock = voiceSock;
+    voiceSock = null;
+    let fallback: { pcm: Uint8Array } | null = null;
+    try {
+      fallback = cap ? cap.snapshotPcm() : null;
+    } catch {
+      fallback = null;
+    }
+    try {
+      cap?.stop();
+    } catch {
+      /* ignore */
+    }
+    // Let straggler frames flush down the socket before finalizing.
+    await new Promise((r) => setTimeout(r, 400));
+    let text = "";
+    if (sock && !voiceStreamFailed) {
+      text = await new Promise<string>((resolve) => {
+        const to = window.setTimeout(() => {
+          voiceFinalResolve = null;
+          resolve(voiceFinalText);
+        }, 15000);
+        voiceFinalResolve = (t) => {
+          window.clearTimeout(to);
+          voiceFinalResolve = null;
+          resolve(t);
+        };
+        try {
+          sock.stop();
+        } catch {
+          window.clearTimeout(to);
+          voiceFinalResolve = null;
+          resolve(voiceFinalText);
+        }
+      });
+      try {
+        sock.close();
+      } catch {
+        /* ignore */
+      }
+    }
+    if (!text.trim() && voiceStreamFailed && fallback && fallback.pcm.byteLength >= 3200) {
+      setPhase("working");
+      try {
+        const r = await stt(fallback.pcm, 16000, { timeoutMs: 60000 });
+        if ((r.kind === "ok" || r.kind === "text") && r.text?.trim()) {
+          text = r.text.trim();
+        } else {
+          push("err", `stt: ${r.message ?? "no speech"}`);
+        }
+      } catch (e) {
+        push("err", `stt: ${e instanceof Error ? e.message : String(e)}`);
+      } finally {
+        setPhase("idle");
+      }
+    }
+    if (text.trim()) {
+      push("sys", `heard: ${text.trim().slice(0, 200)}`);
+      await sendText(text.trim());
+      voiceReplyPending = true;
+    } else if (!voiceStreamFailed) {
+      push("err", "stt: no speech");
+    }
+  }
   let recTimer = 0;
   const [metricsOpen, setMetricsOpen] = createSignal(false);
   const [metrics, setMetrics] = createSignal<Metrics | null>(null);
@@ -99,6 +243,7 @@ export function App() {
   const [legs, setLegs] = createSignal<Legs | null>(null);
   const [isTauri, setIsTauri] = createSignal(false);
   const [convOpen, setConvOpen] = createSignal(false);
+  const [shortcutsOpen, setShortcutsOpen] = createSignal(false);
   const [recents, setRecents] = createSignal<Recent[]>(loadRecents());
   const [hist, setHist] = createSignal<{ vram: number; gpu: number; cpu: number; ctx: number }[]>([]);
   const [theme, setTheme] = createSignal<"dark" | "light">(
@@ -135,7 +280,7 @@ export function App() {
 
   async function switchRecent(id: string): Promise<void> {
     setConvOpen(false);
-    if (id === sessionId()) return;
+    if (id === sessionId() && msgs().length > 0) return;
     setSessionId(id);
     setMsgs([]);
     setBusy(false);
@@ -165,7 +310,6 @@ export function App() {
     const name = t.trim() || "Untitled session";
     setSessionName(name);
     touchRecent(id, name);
-    push("sys", `switched to ${id}`);
   }
 
   async function winAction(a: "min" | "max" | "close"): Promise<void> {
@@ -194,6 +338,62 @@ export function App() {
   }
   function noZoomKeys(e: KeyboardEvent): void {
     if ((e.ctrlKey || e.metaKey) && ["+", "-", "=", "0"].includes(e.key)) e.preventDefault();
+  }
+
+  const SHORTCUTS: { label: string; keys: string[] }[] = [
+    { label: "Voice mode", keys: ["Ctrl", "V"] },
+    { label: "Sessions", keys: ["Ctrl", "S"] },
+    { label: "Dictation", keys: ["T"] },
+    { label: "New session", keys: ["Ctrl", "Shift", "N"] },
+    { label: "Metrics drawer", keys: ["E"] },
+    { label: "Shortcuts", keys: ["?"] },
+    { label: "Close panels", keys: ["Esc"] },
+  ];
+
+  function isTypingTarget(): boolean {
+    const el = document.activeElement as HTMLElement | null;
+    return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+  }
+
+  /** Global shortcuts. Chords work everywhere; bare keys only outside text
+      fields so typing (and paste) is never hijacked. */
+  function onGlobalKeys(e: KeyboardEvent): void {
+    if (e.key === "Escape") {
+      setShortcutsOpen(false);
+      setConvOpen(false);
+      return;
+    }
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && (e.key === "v" || e.key === "V")) {
+      if (isTypingTarget()) return; // let paste work
+      e.preventDefault();
+      if (voiceMode()) setVoiceMode(false);
+      else enterVoiceMode();
+      return;
+    }
+    if (mod && (e.key === "s" || e.key === "S")) {
+      e.preventDefault();
+      setConvOpen((v) => !v);
+      return;
+    }
+    if (mod && e.shiftKey && (e.key === "N" || e.key === "n")) {
+      e.preventDefault();
+      void sendText("/new");
+      return;
+    }
+    if (isTypingTarget()) return;
+    if (e.key === "t" || e.key === "T") {
+      void startDictate();
+      return;
+    }
+    if (e.key === "e" || e.key === "E") {
+      setMetricsOpen((v) => !v);
+      void refresh();
+      return;
+    }
+    if (e.key === "?") {
+      setShortcutsOpen((v) => !v);
+    }
   }
 
   const sock = new TurnSocket("/term");
@@ -242,6 +442,12 @@ export function App() {
     } else if (e.event === "chat" || e.event === "summary") {
       const reply = String((e as { reply: string }).reply ?? "");
       if (reply.trim()) push("agent", reply);
+      if (voiceReplyPending && reply.trim()) {
+        voiceReplyPending = false;
+        void speak(reply);
+      } else if (voiceReplyPending) {
+        voiceReplyPending = false;
+      }
       setPhase("idle");
       setBusy(false);
     } else if (e.event === "title") {
@@ -251,10 +457,12 @@ export function App() {
         touchRecent(sessionId(), t.trim());
       }
     } else if (e.event === "stuck") {
+      voiceReplyPending = false;
       push("err", `stuck: ${String((e as { reason: string }).reason ?? "")}`);
       setBusy(false);
       setPhase("idle");
     } else if (e.event === "error") {
+      voiceReplyPending = false;
       push("err", String((e as { message: string }).message ?? "error"));
       setBusy(false);
       setPhase("idle");
@@ -564,10 +772,14 @@ export function App() {
   }
 
   async function speak(text: string): Promise<void> {
+    primeVoiceMix();
     try {
       const r = await say(text);
-      if (r.kind === "audio" && r.wav_b64) await playF32(b64ToF32(r.wav_b64), r.sr ?? 24000);
-      else push("err", `tts: ${r.message ?? "failed"}`);
+      if (r.kind === "audio" && r.wav_b64) {
+        const f32 = b64ToF32(r.wav_b64);
+        tapTtsIntoMix(f32, r.sr ?? 24000);
+        await playF32(f32, r.sr ?? 24000);
+      } else push("err", `tts: ${r.message ?? "failed"}`);
     } catch (e) {
       push("err", `tts: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -575,9 +787,23 @@ export function App() {
 
   onMount(() => {
     setIsTauri("__TAURI_INTERNALS__" in window);
+    // Restore the session from the URL path (?sid=...) so a refresh or a
+    // shared link reopens the same conversation.
+    let restoredSid = "";
+    try {
+      const sid = new URLSearchParams(window.location.search).get("sid")?.trim();
+      if (sid) {
+        setSessionId(sid);
+        restoredSid = sid;
+      }
+    } catch {
+      /* ignore */
+    }
     touchRecent(sessionId(), sessionName());
+    if (restoredSid) void switchRecent(restoredSid);
     window.addEventListener("wheel", noZoomWheel, { passive: false });
     window.addEventListener("keydown", noZoomKeys);
+    window.addEventListener("keydown", onGlobalKeys);
     void refresh();
     void fetchTitle(sessionId()).then((t) => {
       if (t.trim()) setSessionName(t.trim());
@@ -588,6 +814,14 @@ export function App() {
   onCleanup(() => {
     window.clearInterval(pollTimer);
     window.clearInterval(recTimer);
+    window.clearTimeout(voiceTimer);
+    try {
+      voiceStream()
+        ?.getTracks()
+        .forEach((t) => t.stop());
+    } catch {
+      /* ignore */
+    }
     try {
       recState()?.rec.cancel();
     } catch {
@@ -595,21 +829,29 @@ export function App() {
     }
     window.removeEventListener("wheel", noZoomWheel);
     window.removeEventListener("keydown", noZoomKeys);
+    window.removeEventListener("keydown", onGlobalKeys);
     sock.close();
   });
   createEffect(() => {
     document.title = `VoiceRT — ${sessionName()}`;
   });
+  // Keep the session in the URL path (?sid=...) on every switch.
+  createEffect(() => {
+    const sid = sessionId();
+    try {
+      const url = new URL(window.location.href);
+      if (url.searchParams.get("sid") !== sid) {
+        url.searchParams.set("sid", sid);
+        window.history.replaceState(null, "", url.toString());
+      }
+    } catch {
+      /* ignore */
+    }
+  });
 
   // Centered until the first real turn; docked at the bottom afterwards.
   const hasReal = createMemo(() => msgs().some((m) => m.who === "you" || m.who === "agent"));
   const notices = createMemo(() => msgs().filter((m) => m.who === "sys" || m.who === "err"));
-
-  /** Enter full voice mode: glow overlay only — dictation stays off. */
-  function enterVoiceMode(): void {
-    if (recState()) cancelDictate();
-    setVoiceMode(true);
-  }
 
   function composer() {
     return (
@@ -624,7 +866,7 @@ export function App() {
           recLevels={recState()?.levels ?? []}
           recSecs={recSecs()}
           onMicToggle={() => void startDictate()}
-          onVoiceMode={enterVoiceMode}
+          onVoiceMode={() => void enterVoiceMode()}
           onRecCancel={cancelDictate}
           autoMode={autoMode()}
           onToggleAuto={toggleAuto}
@@ -668,7 +910,9 @@ export function App() {
 
           <Show when={!hasReal()}>
             <div class="mx-auto flex min-h-full w-full max-w-4xl flex-col justify-center px-6 py-8">
-              <Greeting />
+              <Show when={!voiceMode()}>
+                <Greeting />
+              </Show>
               <Show when={!voiceMode()}>
                 <div class="mt-8">{composer()}</div>
               </Show>
@@ -745,6 +989,8 @@ export function App() {
             }}
           >
             <ReactVoiceMode
+              stream={() => voiceStream()}
+              partial={() => voicePartial()}
               processing={() => busy() || phase() !== "idle"}
               onMicError={(m) => push("err", `mic: ${m}`)}
             />
@@ -910,7 +1156,7 @@ export function App() {
           <button
             title={voiceMode() ? "Exit voice mode" : "Enter voice mode"}
             aria-label="Toggle voice mode"
-            onClick={() => (voiceMode() ? setVoiceMode(false) : enterVoiceMode())}
+            onClick={() => void (voiceMode() ? stopVoiceMode() : enterVoiceMode())}
             class={`relative h-6 w-6 shrink-0 overflow-hidden rounded-full transition active:scale-95 ${
               voiceMode()
                 ? "opacity-100 ring-2 ring-blue-400"
@@ -987,6 +1233,17 @@ export function App() {
           </div>
         </div>
         <div class="flex min-w-0 shrink-0 items-center gap-2">
+          <button
+            title="Keyboard shortcuts (?)"
+            aria-label="Open keyboard shortcuts"
+            onClick={() => setShortcutsOpen((v) => !v)}
+            class="winbar-btn flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-white/70 transition-colors duration-200 hover:bg-white/10 hover:text-white"
+          >
+            <svg viewBox="0 0 20 20" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+              <rect x="2" y="6" width="16" height="10" rx="2" />
+              <path d="M6 10h.01M10 10h.01M14 10h.01M7 13h6" />
+            </svg>
+          </button>
           <span class="barmini truncate font-mono text-[11px] text-white/30">{metricsMini()}</span>
           <Show when={isTauri()}>
             <div class="flex shrink-0 items-center gap-1">
@@ -1025,6 +1282,38 @@ export function App() {
         </div>
       </div>
       </div>
+      <Show when={shortcutsOpen()}>
+        <div class="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={() => setShortcutsOpen(false)}>
+          <div
+            class="w-full max-w-sm overflow-hidden rounded-2xl bg-black/90 ring-1 ring-white/15 backdrop-blur"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div class="flex items-center justify-between px-4 pb-1 pt-3.5">
+              <p class="text-[10px] uppercase tracking-widest text-white/40">Keyboard shortcuts</p>
+              <button
+                title="Close (Esc)"
+                aria-label="Close shortcuts"
+                onClick={() => setShortcutsOpen(false)}
+                class="flex h-6 w-6 items-center justify-center rounded-full text-white/55 transition hover:bg-white/10 hover:text-white"
+              >
+                <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+                  <path d="M4 4l8 8M12 4l-8 8" />
+                </svg>
+              </button>
+            </div>
+            <div class="p-2">
+              <For each={SHORTCUTS}>
+                {(s) => (
+                  <div class="flex items-center justify-between rounded-xl px-2.5 py-2">
+                    <span class="text-xs text-white/75">{s.label}</span>
+                    <KbdCombo keys={s.keys} />
+                  </div>
+                )}
+              </For>
+            </div>
+          </div>
+        </div>
+      </Show>
     </div>
   );
 }

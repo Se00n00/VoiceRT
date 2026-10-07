@@ -308,13 +308,17 @@ export function DitherBg(props: { scrollId: string; light: boolean }) {
         if (r.bottom < canvasRect.top || r.top > canvasRect.bottom || r.right < canvasRect.left || r.left > canvasRect.right) {
           continue;
         }
+        // Per-element pad override (e.g. data-erase-pad="12" for a tight
+        // mouse-sized spot); otherwise the wide conversation pad.
+        const padAttr = el.getAttribute("data-erase-pad");
+        const pad = padAttr ? Math.max(0, parseInt(padAttr, 10) || 0) : ERASE_PAD;
         const cx = r.left - canvasRect.left + r.width / 2;
         const cy = r.top - canvasRect.top + r.height / 2;
         const v = arr[n]!;
         v.x = (cx / W - 0.5) * aspect;
         v.y = 0.5 - cy / H;
-        v.z = ((r.width / 2 + ERASE_PAD) / W) * aspect;
-        v.w = (r.height / 2 + ERASE_PAD) / H;
+        v.z = ((r.width / 2 + pad) / W) * aspect;
+        v.w = (r.height / 2 + pad) / H;
         n++;
       }
       for (let i = n; i < MAX_ERASE; i++) arr[i]!.set(0, 0, -1, -1);

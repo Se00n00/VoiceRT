@@ -46,9 +46,13 @@ export async function health(): Promise<{ ok: boolean; agent_loaded?: boolean; m
   return { ok: !!j.ok, agent_loaded: j.agent_loaded, missing: j.missing ?? [] };
 }
 
-export async function stt(pcm: Uint8Array, sr = 16000): Promise<{ kind: string; text?: string; message?: string }> {
+export async function stt(
+  pcm: Uint8Array,
+  sr = 16000,
+  opts?: { timeoutMs?: number },
+): Promise<{ kind: string; text?: string; message?: string }> {
   const ctrl = new AbortController();
-  const timer = window.setTimeout(() => ctrl.abort(), 120000);
+  const timer = window.setTimeout(() => ctrl.abort(), opts?.timeoutMs ?? 120000);
   try {
     const r = await fetch(`${API}/term/stt`, {
       method: "POST",
@@ -59,12 +63,100 @@ export async function stt(pcm: Uint8Array, sr = 16000): Promise<{ kind: string; 
     return json(r);
   } catch (e) {
     if (e instanceof DOMException && e.name === "AbortError") {
-      return { kind: "error", message: "timed out after 120s (model overloaded?)" };
+      return { kind: "error", message: "timed out (model overloaded?)" };
     }
     throw e;
   } finally {
     window.clearTimeout(timer);
   }
+}
+
+/** Live voice pipeline: PCM16 mono frames to `/term/stt-stream`, partials
+    and one final transcript back. One socket per utterance. */
+export type SttStreamEvents = {
+  onPartial?: (text: string) => void;
+  onFinal?: (text: string) => void;
+  onError?: (message: string) => void;
+  onClose?: () => void;
+};
+
+export function openSttStream(sr: number, events: SttStreamEvents): {
+  sendPcm: (pcm: Uint8Array) => void;
+  stop: () => void;
+  close: () => void;
+} {
+  const ws = new WebSocket(`${wsURL()}/term/stt-stream`);
+  let open = false;
+  let closed = false;
+  const queue: Uint8Array[] = [];
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => {
+    open = true;
+    try {
+      ws.send(JSON.stringify({ type: "hello", sr }));
+    } catch {
+      /* ignore */
+    }
+    for (const chunk of queue.splice(0)) {
+      try {
+        ws.send(chunk);
+      } catch {
+        /* ignore */
+      }
+    }
+  };
+  ws.onmessage = (ev) => {
+    try {
+      const msg = JSON.parse(String(ev.data ?? ""));
+      if (msg?.event === "partial" && typeof msg.text === "string") {
+        events.onPartial?.(msg.text);
+      } else if (msg?.event === "final") {
+        events.onFinal?.(typeof msg.text === "string" ? msg.text : "");
+      } else if (msg?.event === "error") {
+        events.onError?.(String(msg.message ?? "stream error"));
+      }
+    } catch {
+      /* ignore non-JSON frames */
+    }
+  };
+  const finish = () => {
+    if (closed) return;
+    closed = true;
+    try {
+      ws.close();
+    } catch {
+      /* ignore */
+    }
+    events.onClose?.();
+  };
+  ws.onerror = () => {
+    if (!open) events.onError?.("stream unreachable (bridge down?)");
+  };
+  ws.onclose = () => finish();
+  return {
+    sendPcm: (pcm) => {
+      if (closed || pcm.byteLength === 0) return;
+      if (!open) {
+        queue.push(pcm);
+        return;
+      }
+      try {
+        ws.send(pcm);
+      } catch {
+        /* ignore */
+      }
+    },
+    stop: () => {
+      if (closed) return;
+      try {
+        if (open) ws.send(JSON.stringify({ type: "stop" }));
+        else closed = true;
+      } catch {
+        /* ignore */
+      }
+    },
+    close: () => finish(),
+  };
 }
 
 export async function say(text: string): Promise<{ kind: string; wav_b64?: string; sr?: number; message?: string }> {
