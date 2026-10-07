@@ -9,7 +9,7 @@ first, then point the UI at it.
 
 ```bash
 # 1) backend (one GPU process at a time)
-PYTHONPATH=. .venv/bin/python bridge.py   # :8004
+PYTHONPATH=. .venv/bin/python -m src.server  # :8004
 
 # 2) UI
 cd src/tauri && npm install && npm run dev

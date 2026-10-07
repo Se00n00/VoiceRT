@@ -15,32 +15,33 @@ holds its own `VoiceAgent` and therefore its own copy of the weights.
 **Run one at a time.** Two agents = two weight copies = CUDA OOM on a 4 GB
 card.
 
-## 6.2 `bridge.py` — the TUI backend
+## 6.2 `src/server` — the TUI backend
 
-Endpoints (`bridge.py`):
+Endpoints (`src/server/routes/`):
 
-| Route | Line | Purpose |
+| Route | File | Purpose |
 |---|---|---|
-| `GET /health` | 419 | liveness, warm state, missing legs |
-| `GET /model` | 431 | current model profile |
-| `POST /model/switch` | 441 | hot-swap the LLM leg |
-| `GET /term/title` | 445 | session title |
-| `POST /term/stt` | 462 | audio → text |
-| `POST /term/say` | 488 | text → audio |
-| `WS /term` | 502 | the terminal turn stream |
-| `WS /deep` | 605 | the deep-agent turn stream |
+| `GET /health` | `system.py` | liveness, warm state, missing legs |
+| `GET /model` | `system.py` | current model profile |
+| `POST /model/switch` | `system.py` | hot-swap the LLM leg |
+| `GET /term/title` | `sessions.py` | session title |
+| `GET /term/history` | `sessions.py` | past session transcript |
+| `POST /term/stt` | `voice.py` | audio → text |
+| `WS /term/stt-stream` | `voice.py` | live partial transcripts |
+| `POST /term/say` | `voice.py` | text → audio |
+| `WS /term` | `turns.py` | the terminal turn stream |
+| `WS /deep` | `turns.py` | the deep-agent turn stream |
 
-Supporting pieces: `_build_llm` (150), `_free_llm_gpu` (158),
-`_maybe_title` (187), `_compact_sessions` (232), `switch_model` (285),
-`get_agent` (368), `_wav_b64` (401), `create_app` (406).
+Supporting pieces (`src/server/state.py`): `_build_llm`, `_free_llm_gpu`,
+`_maybe_title`, `_compact_sessions`, `switch_model`, `get_agent`,
+`_wav_b64`; `create_app` lives in `src/server/__init__.py`.
 
 `/term` runs one turn at a time per session and keeps a pending queue with a
-`Queue` plus per-turn `Event`s (`bridge.py:508-524`), timing out at 120 s.
-Turn work is dispatched with `asyncio.create_task` (`bridge.py:558`, `597`,
-`658`).
+`Queue` plus per-turn `Event`s (`turns.py`, timing out at 120 s).
+Turn work is dispatched with `asyncio.create_task`.
 
 `/model/switch` to an explicitly warmed leg resets the lazy-worker latch
-(`bridge.py:343-349`); if the new sidecar only attached to the old server,
+(`state.py: switch_model`); if the new sidecar only attached to the old server,
 it re-warms after the old close so the swap never commits a dead port.
 
 `/health` must stay liveness-safe — it answers before the agent exists, which
@@ -78,7 +79,7 @@ This one bit us and is worth writing down.
 
 ```python
 @app.on_event("startup")
-async def _warm():        # bridge.py:646-647
+async def _warm():        # src/server/__init__.py
     await agent.warm()
 ```
 
@@ -102,7 +103,7 @@ Model subprocesses (`arecord`, `aplay`, docker clients) die with their parents.
 When in doubt:
 
 ```bash
-ps aux | grep -E 'llm_chat|test_toolcall|server.py|bridge.py'
+ps aux | grep -E 'llm_chat|test_toolcall|src.server'
 ```
 
 ## 6.6 See also

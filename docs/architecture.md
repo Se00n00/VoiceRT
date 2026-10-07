@@ -49,14 +49,14 @@ voice-pipeline/
 - `src/models/*.py` (clean facades) import their `models.*` leg lazily
   inside `_backend()` only, so `import src.models.vad` never loads
   weights.
-- `server.py` (one module, not a package) imports `src.main`, `engine.*`,
+- `src/server` (package, not a module) imports `src.main`, `engine.*`,
   `src.models.runtime.*` — never `models.*` at top level, keeping
   `/health` liveness-safe.
 
 ## 2. Startup sequence
 
-`python server.py` → `uvicorn.run(app)` → FastAPI `startup` event
-(`server.py:_warm`):
+`python -m src.server` → `uvicorn.run(app)` → FastAPI `startup` event
+(`src/server/__init__.py:_warm`):
 
 ```
 1. VoiceAgent() → await agent.warm()              (~2 min first boot)

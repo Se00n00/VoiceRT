@@ -173,7 +173,7 @@
 cd VoiceAgent/voice-pipeline
 pip install -r requirements.txt          # get CUDA torch first: https://pytorch.org/get-started/locally/
 PYTHONPATH=. python -m src.models.download   # first time: ~5GB weights
-PYTHONPATH=. python server.py                # warms 4 legs (~2 min first boot) → voice-agent ready
+PYTHONPATH=. python -m src.server          # warms 4 legs (~2 min first boot) → voice-agent ready
 curl http://localhost:8003/health            # {ok, agent_loaded, missing:[], vram_mb, engine:{active}}
 curl http://localhost:8003/metrics
 # talk: ws://localhost:8003/talk  (see docs/architecture.md for protocol)
@@ -654,7 +654,7 @@ See it live (one command — the TUI spawns its own local agent backend; `server
 cd src/tui && npm install && npm run dev
 ```
 
-First boot warms legs (~1-2 min). Headphones (or speakers down) avoid the mic re-ingesting replies; without them the app still works — it pauses listening while speaking and discards its own echo. Advanced: run the backend separately (`PYTHONPATH=. python bridge.py`) and point the TUI at it with `VOICE_BRIDGE=http://127.0.0.1:8004`.
+First boot warms legs (~1-2 min). Headphones (or speakers down) avoid the mic re-ingesting replies; without them the app still works — it pauses listening while speaking and discards its own echo. Advanced: run the backend separately (`PYTHONPATH=. python -m src.server`) and point the TUI at it with `VOICE_BRIDGE=http://127.0.0.1:8004`.
 
 On quit (`ctrl+c` or `/quit`) a farewell card prints a two-word name for the session and the command to resume it:
 
