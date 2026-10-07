@@ -1,6 +1,10 @@
 import { createEffect, onCleanup, onMount } from "solid-js";
 import * as THREE from "three";
 
+// Chat panels cleared per frame (transcript only, when a conversation
+// exists) with the same flatten-to-background as the mouse hover.
+const MAX_ERASE = 8;
+
 // Exact wave shaders from the react-bits Dither snippet, plus one additive
 // `scrollPhase` uniform (wired to the transcript scroll = layer 3 parallax).
 const waveVertexShader = `
@@ -26,6 +30,12 @@ uniform vec3 backgroundColor;
 uniform vec2 mousePos;
 uniform int enableMouseInteraction;
 uniform float mouseRadius;
+// Conversation erase: same flatten-to-background as the mouse hover, pinned
+// to the transcript panel rect so chat sits on clean ground.
+uniform vec4 uErase[${MAX_ERASE}];
+uniform int uEraseCount;
+uniform float uEraseRadius;
+uniform float uEraseFeather;
 
 vec4 mod289(vec4 x) { return x - floor(x * (1.0/289.0)) * 289.0; }
 vec4 permute(vec4 x) { return mod289(((x * 34.0) + 1.0) * x); }
@@ -78,6 +88,12 @@ float pattern(vec2 p) {
   return fbm(p + fbm(p2));
 }
 
+// Rounded-box SDF (uv space, y-up, x aspect-scaled like the mouse math).
+float sdRoundBox(vec2 p, vec2 c, vec2 b, float r) {
+  vec2 q = abs(p - c) - b + r;
+  return length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0) - r;
+}
+
 void main() {
   vec2 uv = gl_FragCoord.xy / resolution.xy;
   uv -= 0.5;
@@ -89,6 +105,21 @@ void main() {
     float dist = length(uv - mouseNDC);
     float effect = 1.0 - smoothstep(0.0, mouseRadius, dist);
     f -= 0.5 * effect;
+  }
+  // Same erase pinned to the conversation panel: fully clean inside, with
+  // a wide feathered border where the dither escapes back in. The left
+  // border gets a wider + weaker erase so no straight edge survives there.
+  for (int i = 0; i < ${MAX_ERASE}; i++) {
+    if (i < uEraseCount) {
+      vec4 e = uErase[i];
+      float d = sdRoundBox(uv, e.xy, e.zw, uEraseRadius);
+      float leftness = clamp((e.x - uv.x) / max(1e-4, e.z + uEraseFeather), 0.0, 1.0);
+      leftness = leftness * leftness * (3.0 - 2.0 * leftness);
+      float feather = mix(uEraseFeather, uEraseFeather * 2.6, leftness);
+      float strength = mix(0.5, 0.3, leftness);
+      float eff = 1.0 - smoothstep(0.0, feather, d);
+      f -= strength * eff;
+    }
   }
   vec3 col = mix(backgroundColor, waveColor, clamp(f, 0.0, 1.0));
   gl_FragColor = vec4(col, 1.0);
@@ -177,6 +208,14 @@ export function DitherBg(props: { scrollId: string; light: boolean }) {
       enableMouseInteraction: { value: 1 },
       mouseRadius: { value: 0.3 },
       scrollPhase: { value: 0 },
+      // Conversation erase rects: xy = center, zw = half extents (uv space,
+      // same NDC mapping as the mouse). Degenerate (-1 half-size) = unused.
+      uErase: {
+        value: Array.from({ length: MAX_ERASE }, () => new THREE.Vector4(0, 0, -1, -1)),
+      },
+      uEraseCount: { value: 0 },
+      uEraseRadius: { value: 0.03 },
+      uEraseFeather: { value: 0.08 },
     };
 
     const ditherUniforms: Record<string, THREE.IUniform> = {
@@ -240,16 +279,57 @@ export function DitherBg(props: { scrollId: string; light: boolean }) {
     let scrollPhase = 0;
     const scroller = document.getElementById(props.scrollId);
     const onScroll = () => {
-      scrollTarget = scroller ? scroller.scrollTop * 0.0015 : 0;
+      scrollTarget = scroller ? scroller.scrollTop * 0.0002 : 0;
     };
     scroller?.addEventListener("scroll", onScroll, { passive: true });
+
+    // Pin the mouse-style erase to every [data-erase] panel (transcript
+    // with a real conversation). Element list refreshes periodically;
+    // rects re-measure every frame so scrolling stays glued.
+    const ERASE_PAD = 96;
+    let eraseEls: Element[] = [];
+    let eraseTick = 0;
+    const updateErase = () => {
+      if (eraseTick % 15 === 0) {
+        eraseEls = Array.from(document.querySelectorAll("[data-erase]"));
+      }
+      eraseTick++;
+      const canvasRect = canvas.getBoundingClientRect();
+      const res = waveUniforms.resolution!.value as THREE.Vector2;
+      const W = Math.max(1, res.x);
+      const H = Math.max(1, res.y);
+      const aspect = W / H;
+      const arr = waveUniforms.uErase!.value as THREE.Vector4[];
+      let n = 0;
+      for (const el of eraseEls) {
+        if (n >= MAX_ERASE) break;
+        const r = el.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) continue;
+        if (r.bottom < canvasRect.top || r.top > canvasRect.bottom || r.right < canvasRect.left || r.left > canvasRect.right) {
+          continue;
+        }
+        const cx = r.left - canvasRect.left + r.width / 2;
+        const cy = r.top - canvasRect.top + r.height / 2;
+        const v = arr[n]!;
+        v.x = (cx / W - 0.5) * aspect;
+        v.y = 0.5 - cy / H;
+        v.z = ((r.width / 2 + ERASE_PAD) / W) * aspect;
+        v.w = (r.height / 2 + ERASE_PAD) / H;
+        n++;
+      }
+      for (let i = n; i < MAX_ERASE; i++) arr[i]!.set(0, 0, -1, -1);
+      waveUniforms.uEraseCount!.value = n;
+      waveUniforms.uEraseRadius!.value = 20 / H;
+      waveUniforms.uEraseFeather!.value = 130 / H;
+    };
 
     const clock = new THREE.Clock();
     let raf = 0;
     const frame = () => {
-      scrollPhase += (scrollTarget - scrollPhase) * 0.08;
+      scrollPhase += (scrollTarget - scrollPhase) * 0.025;
       waveUniforms.time!.value = clock.getElapsedTime();
       waveUniforms.scrollPhase!.value = scrollPhase;
+      updateErase();
       renderer.setRenderTarget(rt);
       renderer.render(waveScene, cam);
       renderer.setRenderTarget(null);

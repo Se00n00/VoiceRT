@@ -1,23 +1,82 @@
 @import "tailwindcss";
+@import "@fontsource/jetbrains-mono/index.css";
+@import "@fontsource/jetbrains-mono/500.css";
+@import "@fontsource/jetbrains-mono/700.css";
 
-/* ---- stage: blue aurora backdrop ---- */
+body {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* ---- stage: transparent — dither canvas is the only backdrop (no violet wash) ---- */
 .stage {
-  background:
-    radial-gradient(900px 480px at 12% 0%, rgba(226, 232, 255, 0.9), transparent 60%),
-    radial-gradient(1100px 700px at 85% 20%, rgba(59, 110, 246, 0.85), transparent 65%),
-    linear-gradient(180deg, #7ea0f8 0%, #2f5fe0 38%, #123a9e 72%, #0a2470 100%);
+  background: transparent;
 }
 
-/* ---- hero: near-black card, live dither canvas paints over this ---- */
+/* ---- hero: transparent card, live dither canvas paints over this ---- */
 .hero {
-  background: #07090e;
+  background: transparent;
 }
+/* ---- voice-mode blob orb: gradient blob with a slow morph (no layout shift) ---- */
+.voice-blob {
+  background: radial-gradient(circle at 32% 30%, #7dd3fc 0%, #38bdf8 28%, #2563eb 62%, #1e3a8a 100%);
+  border-radius: 58% 42% 55% 45% / 45% 52% 48% 55%;
+  box-shadow:
+    0 0 18px 2px rgba(56, 189, 248, 0.55),
+    0 4px 14px rgba(37, 99, 235, 0.5),
+    inset -3px -4px 8px rgba(0, 0, 0, 0.35),
+    inset 3px 4px 8px rgba(255, 255, 255, 0.35);
+  animation: blob-morph 6s ease-in-out infinite;
+}
+.voice-blob:hover {
+  filter: brightness(1.12);
+}
+@keyframes blob-morph {
+  0%,
+  100% {
+    border-radius: 58% 42% 55% 45% / 45% 52% 48% 55%;
+  }
+  33% {
+    border-radius: 45% 55% 48% 52% / 55% 45% 58% 42%;
+  }
+  66% {
+    border-radius: 52% 48% 42% 58% / 48% 58% 45% 55%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .voice-blob {
+    animation: none;
+  }
+}
+
+/* ---- warp orb pulse (cult ai-blob-warp motion loop as CSS, transforms only) ---- */
+.warp-pulse {
+  animation: warp-pulse 5.2s ease-in-out infinite;
+  transform-origin: center;
+}
+@keyframes warp-pulse {
+  0%,
+  100% {
+    transform: scale(1) rotate(0deg);
+  }
+  33% {
+    transform: scale(1.055) rotate(2deg);
+  }
+  66% {
+    transform: scale(0.99) rotate(-1.5deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .warp-pulse {
+    animation: none;
+  }
+}
+
 .hero-grid {
   background-image: repeating-linear-gradient(90deg, rgba(147, 183, 255, 0.13) 0 1px, transparent 1px 72px);
   mask-image: linear-gradient(180deg, transparent 0%, black 35%);
 }
 .headline {
-  font-family: Georgia, "Times New Roman", serif;
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   letter-spacing: -0.01em;
 }
 
@@ -45,7 +104,7 @@
 
 /* ---------- light theme (toggled from the bottom bar) ---------- */
 .theme-light .hero {
-  background: #dbe0ec;
+  background: transparent;
 }
 .theme-light .topnav {
   color: #3c4560 !important;

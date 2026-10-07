@@ -1,7 +1,9 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
-import { AskCard, Greeting, Nav, Transcript, suggestTypo, type AgentMode, type Msg, type Perf } from "./components/Hero.js";
+import { AskCard, Greeting, Transcript, suggestTypo, type AgentMode, type Msg, type Perf } from "./components/Hero.js";
 import { SAMPLES, SAMPLE_CONVERSATION, SAMPLE_NAMES } from "./components/samples.js";
 import { DitherBg } from "./components/DitherBg.js";
+import { ReactVoiceMode } from "./components/ReactVoiceMode.js";
+import { WarpOrb } from "./components/WarpOrb.js";
 import collapseSvg from "./assets/collapse.svg?raw";
 import expandSvg from "./assets/expand.svg?raw";
 import { API, TurnSocket, fetchHistory, fetchTitle, getLegs, getMetrics, getMetricsContext, getModel, health, say, setAPI, stt, switchModel, type Legs, type Metrics, type TurnEvent } from "./api/client.js";
@@ -71,6 +73,8 @@ export function App() {
   const [sessionName, setSessionName] = createSignal("New session");
   const [cwd, setCwd] = createSignal("/");
   const [msgs, setMsgs] = createSignal<Msg[]>([]);
+  // Composer text lives here so attachments and /dictate can insert into
+  // the island's input from the outside.
   const [input, setInput] = createSignal("");
   const [busy, setBusy] = createSignal(false);
   const [phase, setPhase] = createSignal("idle");
@@ -86,6 +90,8 @@ export function App() {
   const [showHistory, setShowHistory] = createSignal(true);
   const [recState, setRecState] = createSignal<{ rec: Recorder; levels: number[] } | null>(null);
   const [recSecs, setRecSecs] = createSignal(0);
+  // Full voice mode: voice-glow overlay, composer hidden, no dictation.
+  const [voiceMode, setVoiceMode] = createSignal(false);
   let recTimer = 0;
   const [metricsOpen, setMetricsOpen] = createSignal(false);
   const [metrics, setMetrics] = createSignal<Metrics | null>(null);
@@ -438,7 +444,7 @@ export function App() {
       push("sys", `recording ${secs}s…`);
       const { pcm, sr } = await recordSecs(secs);
       const r = await stt(pcm, sr);
-      if (r.kind !== "ok" || !r.text?.trim()) {
+      if ((r.kind !== "ok" && r.kind !== "text") || !r.text?.trim()) {
         push("err", `stt: ${r.message ?? "no speech"}`);
         setPhase("idle");
         return;
@@ -462,7 +468,7 @@ export function App() {
     try {
       setPhase("working");
       const r = await stt(pcm, 16000);
-      if (r.kind !== "ok" || !r.text?.trim()) {
+      if ((r.kind !== "ok" && r.kind !== "text") || !r.text?.trim()) {
         push("err", `stt: ${r.message ?? "no speech"}`);
       } else {
         setInput((v) => `${v}${v.trim() ? " " : ""}${r.text!.trim()}`);
@@ -503,6 +509,12 @@ export function App() {
     if (!s) return;
     try {
       const { pcm } = await s.rec.stop();
+      const secs = pcm.byteLength / 2 / 16000;
+      if (secs < 0.5) {
+        push("err", `mic captured only ${secs.toFixed(1)}s — check the input device`);
+        setPhase("idle");
+        return;
+      }
       await dictateDone(pcm);
     } catch (e) {
       push("err", `mic: ${e instanceof Error ? e.message : String(e)}`);
@@ -593,6 +605,12 @@ export function App() {
   const hasReal = createMemo(() => msgs().some((m) => m.who === "you" || m.who === "agent"));
   const notices = createMemo(() => msgs().filter((m) => m.who === "sys" || m.who === "err"));
 
+  /** Enter full voice mode: glow overlay only — dictation stays off. */
+  function enterVoiceMode(): void {
+    if (recState()) cancelDictate();
+    setVoiceMode(true);
+  }
+
   function composer() {
     return (
       <div class="w-full">
@@ -606,6 +624,7 @@ export function App() {
           recLevels={recState()?.levels ?? []}
           recSecs={recSecs()}
           onMicToggle={() => void startDictate()}
+          onVoiceMode={enterVoiceMode}
           onRecCancel={cancelDictate}
           autoMode={autoMode()}
           onToggleAuto={toggleAuto}
@@ -644,16 +663,15 @@ export function App() {
       <div class="stage flex min-h-0 w-full flex-1 overflow-hidden rounded-[18px]">
         <section class="hero relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl ring-1 ring-black">
         <DitherBg scrollId="hero-scroll" light={theme() === "light"} />
-        <div class="relative z-10 shrink-0">
-          <Nav ok={bridgeOk()} model={modelCurrent()} settingsOpen={metricsOpen()} onLogin={() => setMetricsOpen((v) => !v)} />
-        </div>
 
         <div id="hero-scroll" class="thin-scroll relative z-10 min-h-0 flex-1 overflow-y-auto">
 
           <Show when={!hasReal()}>
-            <div class="mx-auto flex min-h-full w-full max-w-2xl flex-col justify-center px-6 py-8">
+            <div class="mx-auto flex min-h-full w-full max-w-4xl flex-col justify-center px-6 py-8">
               <Greeting />
-              <div class="mt-8">{composer()}</div>
+              <Show when={!voiceMode()}>
+                <div class="mt-8">{composer()}</div>
+              </Show>
               <Show when={notices().length > 0}>
                 <div class="mt-4">
                   <Transcript msgs={notices()} onSpeak={(t) => void speak(t)} />
@@ -665,7 +683,7 @@ export function App() {
           <Show when={hasReal()}>
 
           <Show when={!bridgeOk()}>
-            <p class="mx-auto mt-3 max-w-2xl px-6 text-center text-xs text-red-300/80">
+            <p class="mx-auto mt-3 max-w-4xl px-6 text-center text-xs text-red-300/80">
               Bridge is down at <span class="font-mono">{bridgeUrl()}</span> — start{" "}
               <span class="font-mono">bridge.py</span> first. This window never spawns the model itself.
             </p>
@@ -676,7 +694,8 @@ export function App() {
           </Show>
 
           <Show when={confirmAction()}>
-            <div class="mx-auto mt-4 max-w-2xl rounded-2xl bg-[#241304] p-4 text-white ring-1 ring-amber-300/30">
+            <div class="mx-auto mt-4 max-w-4xl rounded-[20px] bg-black/25 p-1.5 backdrop-blur-lg">
+            <div class="rounded-2xl bg-[#241304]/80 p-4 text-white ring-1 ring-amber-300/30 backdrop-blur-xl">
               <p class="text-sm font-semibold text-amber-200">Confirm this action?</p>
               <pre class="thin-scroll mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-words font-mono text-xs text-white/75">
                 {JSON.stringify(confirmAction(), null, 2)}
@@ -702,18 +721,34 @@ export function App() {
                 </button>
               </div>
             </div>
+            </div>
           </Show>
 
             <Show when={showHistory()}>
-              <div class="mx-auto mt-4 w-full px-6 pb-2 md:max-w-2xl md:px-0">
+              <div class="mx-auto mt-4 w-full px-6 pb-2 md:max-w-4xl md:px-0">
                 <Transcript msgs={msgs()} onSpeak={(t) => void speak(t)} />
               </div>
             </Show>
           </Show>
         </div>
 
-        <Show when={hasReal()}>
-          <div class="relative z-10 shrink-0 px-6 pb-3 md:mx-auto md:w-full md:max-w-2xl md:px-0">{composer()}</div>
+        <Show when={hasReal() && !voiceMode()}>
+          <div class="relative z-10 shrink-0 px-6 pb-3 md:mx-auto md:w-full md:max-w-4xl md:px-0">{composer()}</div>
+        </Show>
+
+        <Show when={voiceMode()}>
+          <div
+            class="pointer-events-none absolute inset-x-0 bottom-0 z-30 backdrop-blur-lg"
+            style={{
+              "mask-image": "linear-gradient(to top, black 55%, transparent 100%)",
+              "-webkit-mask-image": "linear-gradient(to top, black 55%, transparent 100%)",
+            }}
+          >
+            <ReactVoiceMode
+              processing={() => busy() || phase() !== "idle"}
+              onMicError={(m) => push("err", `mic: ${m}`)}
+            />
+          </div>
         </Show>
 
         </section>
@@ -872,6 +907,31 @@ export function App() {
               </svg>
             </Show>
           </button>
+          <button
+            title={voiceMode() ? "Exit voice mode" : "Enter voice mode"}
+            aria-label="Toggle voice mode"
+            onClick={() => (voiceMode() ? setVoiceMode(false) : enterVoiceMode())}
+            class={`relative h-6 w-6 shrink-0 overflow-hidden rounded-full transition active:scale-95 ${
+              voiceMode()
+                ? "opacity-100 ring-2 ring-blue-400"
+                : "opacity-70 ring-1 ring-white/20 hover:opacity-100"
+            }`}
+          >
+            <WarpOrb />
+          </button>
+          <button
+            title="Sample conversation"
+            aria-label="Open sample conversation"
+            onClick={() => void switchRecent(SAMPLE_SID)}
+            class={`winbar-btn flex h-6 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[11px] transition-colors duration-200 hover:bg-white/10 hover:text-white ${
+              sessionId() === SAMPLE_SID ? "bg-white/10 text-white" : "text-white/70"
+            }`}
+          >
+            <svg viewBox="0 0 20 20" class="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M5 3h7l3 3v11H5zM12 3v3h3M8.5 12h4M8.5 14.5h4" />
+            </svg>
+            <span>Sample</span>
+          </button>
           <div class="group relative flex shrink-0 items-center">
             <div class="pointer-events-none absolute bottom-full left-0 z-30 mb-2 hidden max-w-64 whitespace-normal break-all rounded-xl bg-black/90 px-3 py-2 font-mono text-[11px] text-white/80 ring-1 ring-white/15 group-hover:block">
               {sessionId()}
@@ -884,7 +944,7 @@ export function App() {
               <span class="truncate">{sessionName()}</span>
               <svg
                 viewBox="0 0 16 16"
-                class={`h-3 w-3 shrink-0 transition-transform ${convOpen() ? "rotate-180" : ""}`}
+                class={`h-3.5 w-3.5 shrink-0 transition-transform ${convOpen() ? "rotate-180" : ""}`}
                 fill="none"
                 stroke="currentColor"
                 stroke-width="2"
@@ -925,10 +985,11 @@ export function App() {
               </div>
             </Show>
           </div>
-          <span class="barmini truncate font-mono text-[11px] text-white/30">{metricsMini()}</span>
         </div>
-        <Show when={isTauri()}>
-          <div class="flex shrink-0 items-center gap-1">
+        <div class="flex min-w-0 shrink-0 items-center gap-2">
+          <span class="barmini truncate font-mono text-[11px] text-white/30">{metricsMini()}</span>
+          <Show when={isTauri()}>
+            <div class="flex shrink-0 items-center gap-1">
             <button
               title="Minimize"
               aria-label="Minimize"
@@ -945,7 +1006,7 @@ export function App() {
               onClick={() => void winAction("max")}
               class="winbar-btn flex h-7 w-10 items-center justify-center rounded-md text-white/55 transition-colors duration-200 hover:bg-white/10 hover:text-white"
             >
-              <svg viewBox="0 0 16 16" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.8">
+              <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.8">
                 <rect x="3.5" y="3.5" width="9" height="9" rx="1.5" />
               </svg>
             </button>
@@ -959,8 +1020,9 @@ export function App() {
                 <path d="M4 4l8 8M12 4l-8 8" />
               </svg>
             </button>
-          </div>
-        </Show>
+            </div>
+          </Show>
+        </div>
       </div>
       </div>
     </div>

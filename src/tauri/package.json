@@ -12,14 +12,21 @@
     "tauri:build": "tauri build"
   },
   "dependencies": {
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "@paper-design/shaders": "^0.0.81",
     "@tauri-apps/api": "^2.1.1",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "solid-js": "1.9.12",
-    "three": "^0.186.1"
+    "three": "^0.186.1",
+    "voice-glow": "^0.3.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.0.0",
     "@tauri-apps/cli": "^2.12.1",
     "@tauri-apps/cli-linux-x64-gnu": "^2.12.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "@types/three": "^0.186.0",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.8.0",

@@ -1,5 +1,6 @@
 import { For, Show, createEffect, createMemo, createSignal } from "solid-js";
 import { EqBars, fmtClock } from "./EqBars.js";
+import { WarpOrb } from "./WarpOrb.js";
 import { ChainOfThoughtThread, type CotStepData } from "./chain-of-thought.js";
 import { CodeBlockView } from "./code-block.js";
 
@@ -48,31 +49,6 @@ export function suggestTypo(word: string): string | null {
 export type AgentMode = "Agent" | "Assistant";
 export type Perf = "High" | "Medium" | "Low";
 
-const NAV = ["Features", "Platforms", "Insights", "Pricing"];
-
-export function Nav(props: { ok: boolean; model: string; settingsOpen: boolean; onLogin: () => void }) {
-  return (
-    <div class="topnav flex items-center gap-6 px-7 pt-5 text-[13px] text-white/70">
-      <span class="logo flex h-6 w-6 items-center justify-center rounded-full border-[1.5px] border-white/80" aria-label="VoiceRT home">
-        <span class={`h-1.5 w-1.5 rounded-full ${props.ok ? "bg-emerald-400" : "bg-red-400"}`} title={props.ok ? "bridge up" : "bridge down"} />
-      </span>
-      <nav class="mx-auto flex items-center gap-7">
-        <For each={NAV}>
-          {(item) => (
-            <a href="#" onClick={(e) => e.preventDefault()} class="transition hover:text-white">
-              {item}
-            </a>
-          )}
-        </For>
-      </nav>
-      <span class="mlabel hidden font-mono text-[11px] text-white/40 md:inline">{props.model}</span>
-      <button onClick={props.onLogin} class="transition hover:text-white">
-        {props.settingsOpen ? "Close" : "Login"}
-      </button>
-    </div>
-  );
-}
-
 export function Greeting() {
   return (
     <div class="greet text-center">
@@ -117,6 +93,8 @@ const P_CLOUD = "M6.5 17a3.75 3.75 0 0 1-.55-7.46 5.25 5.25 0 0 1 10.2-1.35A3.6 
 const P_CHEV = "M5 7.5l5 5 5-5";
 const P_CIRCLE = "M10 16.5a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13z";
 const P_ARC = "M10 3.5a6.5 6.5 0 1 0 6.5 6.5";
+// Ai02 port icons (Tabler equivalents, inline stroke style like the rest).
+const P_ALERT = "M10 3.5L2.8 16.5h14.4L10 3.5zM10 8v4.2M10 14.8h.01";
 
 function MicIcon() {
   return (
@@ -135,20 +113,12 @@ function ActivityIcon() {
   );
 }
 
-const TEMPLATES = [
-  { label: "Landing page", text: "Build a landing page with a hero, features, and pricing sections." },
-  { label: "Debug an error", text: "Debug this error:\n\n[paste the error]" },
-  { label: "Explain code", text: "Explain this code:\n\n[paste the code]" },
-];
+type MenuId = "plus" | null;
 
-type MenuId = "plus" | "url" | "tpl" | "model" | "agent" | "perf" | null;
-
-// Ai03 input ported to Solid: rounded card (textarea + circular + / Auto
-// pill / circular send) with the Local/Cloud · Agent/Assistant ·
-// High/Medium/Low dropdown row underneath. Stripped to the Ai03 feature
-// set — no context bar, no mic/EQ recording, no URL/template/clipboard
-// entries, no bridge-model list (static Local/Cloud). The props signature
-// is unchanged so app.tsx needs no edits; stripped props are ignored.
+// Ai02 input ported to Solid: tall card (textarea + dictation mic / voice
+// orb / square send row) with the + attachment menu. The blue orb enters
+// full voice mode (voice-glow overlay); the ghost mic is inline dictation.
+// The props signature is unchanged so app.tsx needs no edits.
 export function AskCard(props: {
   value: string;
   onInput: (v: string) => void;
@@ -159,6 +129,7 @@ export function AskCard(props: {
   recLevels: number[];
   recSecs: number;
   onMicToggle: () => void;
+  onVoiceMode: () => void;
   onRecCancel: () => void;
   autoMode: boolean;
   onToggleAuto: () => void;
@@ -187,8 +158,6 @@ export function AskCard(props: {
   let fileRef!: HTMLInputElement;
   let taRef!: HTMLTextAreaElement;
   const [menu, setMenu] = createSignal<MenuId>(null);
-  // Static Ai03 model picker (bridge model list stripped).
-  const [selectedModel, setSelectedModel] = createSignal("Local");
 
   function autoresize(): void {
     if (!taRef) return;
@@ -244,11 +213,16 @@ export function AskCard(props: {
   }
 
   const canSend = () => props.value.trim().length > 0 && !props.busy;
+  const hasText = () => props.value.trim().length > 0;
 
   return (
     <div class="w-full">
       <div class="relative">
-        <div class="overflow-hidden rounded-2xl bg-[#1e1f23] shadow-[0_24px_60px_-12px_rgba(0,0,0,0.65)] ring-1 ring-white/10">
+        <div class="rounded-[20px] bg-black/25 p-1.5 backdrop-blur-lg">
+        <div
+          onClick={() => taRef?.focus()}
+          class="flex min-h-[120px] cursor-text flex-col rounded-2xl bg-black/70 shadow-[0_24px_60px_-12px_rgba(0,0,0,0.65)] ring-1 ring-white/10 backdrop-blur-xl"
+        >
           <input
             ref={fileRef}
             type="file"
@@ -260,7 +234,7 @@ export function AskCard(props: {
             }}
           />
 
-          <div class="px-3 pb-2 pt-3">
+          <div class="relative max-h-[258px] flex-1 overflow-y-auto">
             <textarea
               ref={taRef}
               value={props.value}
@@ -271,39 +245,29 @@ export function AskCard(props: {
               onKeyDown={onKey}
               placeholder="Ask anything"
               rows={1}
-              class="max-h-[25vh] min-h-10 w-full resize-none border-0 bg-transparent p-0 text-[15px] text-white/90 shadow-none outline-none placeholder:text-white/30 focus-visible:ring-0"
+              class="min-h-[48px] w-full resize-none whitespace-pre-wrap break-words border-0 bg-transparent p-3 text-[16px] text-white/90 shadow-none outline-none placeholder:text-white/30 focus-visible:ring-0"
             />
           </div>
 
-          <div class="flex items-center justify-between px-2 pb-2">
+          <div class="flex min-h-[40px] items-center gap-2 p-2">
             <div class="flex items-center gap-1">
               <button
                 title="Add attachments"
                 aria-label="Add attachments"
-                onClick={toggleMenu("plus")}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleMenu("plus")();
+                }}
                 class="flex h-7 w-7 items-center justify-center rounded-full border border-white/10 text-white/55 transition hover:bg-white/10 hover:text-white"
               >
                 <I d={P_PLUS} cls="h-4 w-4" />
               </button>
-
-              <button
-                onClick={props.onToggleAuto}
-                title={props.autoMode ? "Auto: confirmations auto-allowed" : "Auto: ask before acting"}
-                class={`flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs transition ${
-                  props.autoMode
-                    ? "border-white/30 bg-white/15 text-white"
-                    : "border-white/10 text-white/55 hover:bg-white/5 hover:text-white/80"
-                }`}
-              >
-                <I d={P_WAND} cls="h-3.5 w-3.5" />
-                Auto
-              </button>
             </div>
 
-            <div class="ml-auto flex items-center gap-1">
+            <div class="ml-auto flex items-center gap-1.5">
               <Show when={props.recording}>
                 <span class="mr-1 font-mono text-[11px] text-white/50">{fmtTime(props.recSecs)}</span>
-                <div class="flex h-4 w-48 items-center justify-center gap-0.5 overflow-hidden">
+                <div class="flex h-4 w-32 items-center justify-center gap-0.5 overflow-hidden sm:w-48">
                   <For each={props.recLevels}>
                     {(l) => (
                       <div
@@ -317,20 +281,67 @@ export function AskCard(props: {
               <Show
                 when={props.recording}
                 fallback={
-                  <button
-                    title="Voice dictation"
-                    aria-label="Voice dictation"
-                    onClick={props.onMicToggle}
-                    class="flex h-7 w-7 items-center justify-center rounded-full text-white/55 transition hover:bg-white/10 hover:text-white"
-                  >
-                    <MicIcon />
-                  </button>
+                  <>
+                    <button
+                      title="Dictation"
+                      aria-label="Dictation"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        props.onMicToggle();
+                      }}
+                      class="flex h-7 w-7 items-center justify-center rounded-full text-white/55 transition hover:bg-white/10 hover:text-white"
+                    >
+                      <MicIcon />
+                    </button>
+                    <Show
+                      when={hasText()}
+                      fallback={
+                        <button
+                          title="Voice mode"
+                          aria-label="Voice mode"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            props.onVoiceMode();
+                          }}
+                          class="voice-blob relative flex h-8 w-8 items-center justify-center overflow-hidden text-white transition active:scale-[0.96]"
+                        >
+                          <WarpOrb />
+                          <span class="relative drop-shadow-[0_1px_2px_rgba(0,0,0,0.6)]">
+                            <svg viewBox="0 0 20 20" class="h-5 w-5" fill="currentColor" aria-hidden="true">
+                              <rect x="3.5" y="8" width="2.4" height="4" rx="1.2" />
+                              <rect x="7.3" y="4.5" width="2.4" height="11" rx="1.2" />
+                              <rect x="11.1" y="7" width="2.4" height="6" rx="1.2" />
+                              <rect x="14.9" y="9.5" width="2.4" height="4" rx="1.2" />
+                            </svg>
+                          </span>
+                        </button>
+                      }
+                    >
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          props.onSubmit();
+                        }}
+                        disabled={!canSend()}
+                        title="Send"
+                        aria-label="Send"
+                        class="flex h-8 w-8 items-center justify-center rounded-[10px] bg-white text-black transition hover:bg-white/85 active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <svg viewBox="0 0 20 20" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                          <path d={P_SEND} />
+                        </svg>
+                      </button>
+                    </Show>
+                  </>
                 }
               >
                 <button
                   title="Stop and dictate"
                   aria-label="Stop and dictate"
-                  onClick={props.onMicToggle}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    props.onMicToggle();
+                  }}
                   class="flex h-7 w-7 items-center justify-center rounded-full bg-red-500/90 text-white transition hover:bg-red-500"
                 >
                   <svg viewBox="0 0 20 20" class="h-3.5 w-3.5" fill="currentColor">
@@ -338,19 +349,9 @@ export function AskCard(props: {
                   </svg>
                 </button>
               </Show>
-              <button
-                onClick={props.onSubmit}
-                disabled={!canSend()}
-                title="Send"
-                aria-label="Send"
-                class="flex h-7 w-7 items-center justify-center rounded-full bg-white text-black transition hover:bg-white/85 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                <svg viewBox="0 0 20 20" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d={P_SEND} />
-                </svg>
-              </button>
             </div>
           </div>
+        </div>
         </div>
 
         <Show when={menu() === "plus"}>
@@ -371,75 +372,6 @@ export function AskCard(props: {
               props.onToggleHistory();
               setMenu(null);
             })}
-          </div>
-        </Show>
-      </div>
-
-      <div class="relative flex items-center gap-0 pt-2">
-        <button
-          onClick={toggleMenu("model")}
-          class="flex h-6 items-center gap-1.5 rounded-full px-2 text-xs text-white/55 transition hover:bg-white/10 hover:text-white"
-        >
-          <I d={selectedModel() === "Cloud" ? P_CLOUD : P_LAPTOP} cls="h-3.5 w-3.5" />
-          <span>{selectedModel()}</span>
-          <I d={P_CHEV} cls="h-3 w-3 opacity-60" />
-        </button>
-        <Show when={menu() === "model"}>
-          <div class="absolute bottom-full left-0 z-40 mb-2 w-56 overflow-hidden rounded-2xl bg-[#22232a] p-1.5 shadow-2xl ring-1 ring-white/15">
-            {dropItem(P_LAPTOP, "Local", () => {
-              setSelectedModel("Local");
-              setMenu(null);
-            })}
-            {dropItem(P_CLOUD, "Cloud", () => {
-              setSelectedModel("Cloud");
-              setMenu(null);
-            })}
-          </div>
-        </Show>
-
-        <button
-          onClick={toggleMenu("agent")}
-          class="flex h-6 items-center gap-1.5 rounded-full px-2 text-xs text-white/55 transition hover:bg-white/10 hover:text-white"
-        >
-          <I d={props.agentMode === "Agent" ? P_USER : P_ROBOT} cls="h-3.5 w-3.5" />
-          <span>{props.agentMode}</span>
-          <I d={P_CHEV} cls="h-3 w-3 opacity-60" />
-        </button>
-        <Show when={menu() === "agent"}>
-          <div class="absolute bottom-full left-0 z-40 mb-2 w-56 overflow-hidden rounded-2xl bg-[#22232a] p-1.5 shadow-2xl ring-1 ring-white/15">
-            {dropItem(P_USER, "Agent", () => {
-              props.onAgentMode("Agent");
-              setMenu(null);
-            })}
-            {dropItem(P_ROBOT, "Assistant", () => {
-              props.onAgentMode("Assistant");
-              setMenu(null);
-            })}
-          </div>
-        </Show>
-
-        <button
-          onClick={toggleMenu("perf")}
-          class="flex h-6 items-center gap-1.5 rounded-full px-2 text-xs text-white/55 transition hover:bg-white/10 hover:text-white"
-        >
-          <I d={P_BOLT} cls="h-3.5 w-3.5" />
-          <span>{props.perf}</span>
-          <I d={P_CHEV} cls="h-3 w-3 opacity-60" />
-        </button>
-        <Show when={menu() === "perf"}>
-          <div class="absolute bottom-full left-0 z-40 mb-2 w-56 overflow-hidden rounded-2xl bg-[#22232a] p-1.5 shadow-2xl ring-1 ring-white/15">
-            {dropItem(P_CIRCLE, "High", () => {
-              props.onPerf("High");
-              setMenu(null);
-            })}
-            {dropItem(P_ARC, "Medium", () => {
-              props.onPerf("Medium");
-              setMenu(null);
-            })}
-            {dropItem(P_CIRCLE, "Low", () => {
-              props.onPerf("Low");
-              setMenu(null);
-            }, true)}
           </div>
         </Show>
       </div>
@@ -492,44 +424,69 @@ function RichText(props: { text: string }) {
 }
 
 export function Transcript(props: { msgs: Msg[]; onSpeak: (text: string) => void }) {
+  // When a real conversation exists, the panel flattens the dither behind
+  // it exactly like the mouse hover does.
+  const hasChat = () => props.msgs.some((m) => m.who === "you" || m.who === "agent" || m.who === "cot");
   return (
-    <div class="flex flex-col gap-2.5">
-      <For each={props.msgs}>
-        {(m) => (
-          <Show
-            when={m.who === "cot"}
-            fallback={
-              <div
-                class={`bub rounded-2xl px-4 py-3 text-sm shadow-lg backdrop-blur ${
-                  m.who === "you"
-                    ? "bub-you bg-[#1b1c22] text-white ring-1 ring-white/15"
-                    : m.who === "agent"
-                      ? "bub-agent bg-[#f2f3f5] text-slate-700"
-                      : m.who === "err"
-                        ? "bub-err bg-[#2a0f14] text-red-100 ring-1 ring-red-400/30"
-                        : "bub-sys bg-[#101116] text-white/45"
-                }`}
-              >
-                <div class="mb-0.5 flex items-center justify-between text-[10px] uppercase tracking-widest opacity-60">
-                  <span>{m.who === "you" ? "You" : m.who === "agent" ? "Agent" : m.who === "err" ? "Error" : "System"}</span>
-                  <Show when={m.who === "agent"}>
-                    <button class="normal-case tracking-normal underline" onClick={() => props.onSpeak(m.text)}>
-                      Speak
-                    </button>
-                  </Show>
-                </div>
-                {m.who === "agent" || m.who === "you" ? (
-                  <RichText text={m.text} />
-                ) : (
-                  <p class="whitespace-pre-wrap break-words">{m.text}</p>
-                )}
-              </div>
-            }
-          >
-            <ChainOfThoughtThread steps={m.steps ?? []} />
-          </Show>
-        )}
-      </For>
+    <div class="relative" data-erase={hasChat() ? "" : undefined}>
+      <div
+        aria-hidden="true"
+        class="absolute -inset-4 rounded-[28px] bg-black/20 backdrop-blur-md"
+        style={{
+          "mask-image":
+            "linear-gradient(to right, transparent, black 32px, black calc(100% - 32px), transparent), linear-gradient(to bottom, transparent, black 32px, black calc(100% - 32px), transparent)",
+          "-webkit-mask-image":
+            "linear-gradient(to right, transparent, black 32px, black calc(100% - 32px), transparent), linear-gradient(to bottom, transparent, black 32px, black calc(100% - 32px), transparent)",
+          "mask-composite": "intersect",
+          "-webkit-mask-composite": "source-in",
+        }}
+      />
+      <div class="relative p-4 md:p-5">
+      <div class="flex flex-col gap-4">
+        <For each={props.msgs}>
+          {(m) => (
+            <Show
+              when={m.who === "cot"}
+              fallback={
+                <Show
+                  when={m.who === "you"}
+                  fallback={
+                    <div
+                      class={`px-1 py-0.5 text-sm ${
+                        m.who === "agent"
+                          ? "text-white/85"
+                          : m.who === "err"
+                            ? "text-red-200"
+                            : "text-white/45"
+                      }`}
+                    >
+                      <div class="mb-0.5 flex items-center justify-between text-[10px] uppercase tracking-widest opacity-60">
+                        <span>{m.who === "agent" ? "Agent" : m.who === "err" ? "Error" : "System"}</span>
+                        <Show when={m.who === "agent"}>
+                          <button class="normal-case tracking-normal underline" onClick={() => props.onSpeak(m.text)}>
+                            Speak
+                          </button>
+                        </Show>
+                      </div>
+                      {m.who === "agent" ? <RichText text={m.text} /> : <p class="whitespace-pre-wrap break-words">{m.text}</p>}
+                    </div>
+                  }
+                >
+                  <div class="bub-you rounded-2xl bg-[#1b1c22]/70 px-4 py-3 text-sm text-white shadow-lg ring-1 ring-white/15 backdrop-blur-xl">
+                    <div class="mb-0.5 text-[10px] uppercase tracking-widest opacity-60">
+                      <span>You</span>
+                    </div>
+                    <RichText text={m.text} />
+                  </div>
+                </Show>
+              }
+            >
+              <ChainOfThoughtThread steps={m.steps ?? []} />
+            </Show>
+          )}
+        </For>
+      </div>
+      </div>
     </div>
   );
 }

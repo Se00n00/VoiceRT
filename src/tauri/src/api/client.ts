@@ -47,12 +47,24 @@ export async function health(): Promise<{ ok: boolean; agent_loaded?: boolean; m
 }
 
 export async function stt(pcm: Uint8Array, sr = 16000): Promise<{ kind: string; text?: string; message?: string }> {
-  const r = await fetch(`${API}/term/stt`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ pcm_b64: u8ToB64(pcm), sr }),
-  });
-  return json(r);
+  const ctrl = new AbortController();
+  const timer = window.setTimeout(() => ctrl.abort(), 120000);
+  try {
+    const r = await fetch(`${API}/term/stt`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pcm_b64: u8ToB64(pcm), sr }),
+      signal: ctrl.signal,
+    });
+    return json(r);
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "AbortError") {
+      return { kind: "error", message: "timed out after 120s (model overloaded?)" };
+    }
+    throw e;
+  } finally {
+    window.clearTimeout(timer);
+  }
 }
 
 export async function say(text: string): Promise<{ kind: string; wav_b64?: string; sr?: number; message?: string }> {

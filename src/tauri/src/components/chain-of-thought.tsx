@@ -59,7 +59,7 @@ export function ChainOfThought(props: { defaultOpen?: boolean; children: JSX.Ele
   const [open, setOpen] = createSignal(props.defaultOpen ?? true);
   return (
     <CotCtx.Provider value={{ open, toggle: () => setOpen((v) => !v) }}>
-      <div class="overflow-hidden rounded-2xl bg-[#14151b] ring-1 ring-white/10">{props.children}</div>
+      <div class="overflow-hidden px-1 py-0.5">{props.children}</div>
     </CotCtx.Provider>
   );
 }
