@@ -4,7 +4,7 @@ import asyncio
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from ..state import _maybe_title, _seen_sids, _wav_b64, get_agent
+from ..state import _maybe_title, _seen_sids, _wav_b64, get_agent, note_turn_end, note_turn_start
 
 router = APIRouter()
 
@@ -46,6 +46,7 @@ async def term(ws: WebSocket):
     harness = get_agent()
 
     async def run_one(text, sid, cwd):
+        t0 = note_turn_start()
         try:
             async for event in harness.run_text(text, session_id=sid, cwd=cwd,
                                                 confirm_fn=confirm_fn):
@@ -61,6 +62,7 @@ async def term(ws: WebSocket):
             except Exception:
                 pass
         finally:
+            note_turn_end(t0)
             turn_task["task"] = None
 
             if sid and not closed["done"]:
@@ -122,6 +124,7 @@ async def deep(ws: WebSocket):
     closed = {"done": False}
 
     async def run_one(text, sid, cwd):
+        t0 = note_turn_start()
         try:
 
             async for event in harness.run_text(text, session_id=sid, cwd=cwd,
@@ -136,6 +139,7 @@ async def deep(ws: WebSocket):
             except Exception:
                 pass
         finally:
+            note_turn_end(t0)
             turn_task["task"] = None
 
     while not closed["done"]:

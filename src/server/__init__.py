@@ -16,13 +16,18 @@ Endpoints (see ``src/server/routes/`` for the handlers):
 - ``GET /term/title?sid=`` — persisted session name (no model call)
 - ``WS /term`` — full turn + confirm gate
 - ``WS /deep`` — autonomous turns over the same agent (confirms auto-pass)
+- ``POST /talk/offer`` — WebRTC offer/answer handshake for a duplex call
+- ``WS /chat`` — pure Qwen chat (no tools, no confirms)
+- ``GET /metrics`` — uptime, turns, VRAM/RAM/CPU/GPU, legs
+- ``GET /metrics/context?sid=`` — session context usage
+- ``GET /legs`` — leg labels, model profile, tool policy
 """
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import state
-from .routes import sessions_router, system_router, turns_router, voice_router
+from .routes import chat_router, sessions_router, system_router, talk_router, turns_router, voice_router
 
 __all__ = ["create_app", "app"]
 
@@ -41,6 +46,8 @@ def create_app(agent=None):
     app.include_router(sessions_router)
     app.include_router(voice_router)
     app.include_router(turns_router)
+    app.include_router(chat_router)
+    app.include_router(talk_router)
 
     @app.on_event("startup")
     async def _warm():

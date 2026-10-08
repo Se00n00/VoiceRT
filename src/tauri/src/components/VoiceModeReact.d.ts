@@ -1,8 +1,9 @@
 import type { ComponentType } from "react";
 
 export declare const VoiceModeView: ComponentType<{
-  stream: MediaStream | null;
-  partial: string;
-  processing: boolean;
-  onMicError: (msg: string) => void;
+  micStream: MediaStream | null;
+  sid: string;
+  apiBase: string;
+  onTranscript: (who: "user" | "agent", text: string) => void;
+  onError: (msg: string) => void;
 }>;

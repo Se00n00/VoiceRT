@@ -7,10 +7,10 @@ import { KbdCombo } from "./components/Kbd.js";
 import { WarpOrb } from "./components/WarpOrb.js";
 import collapseSvg from "./assets/collapse.svg?raw";
 import expandSvg from "./assets/expand.svg?raw";
-import { API, TurnSocket, fetchHistory, fetchTitle, getLegs, getMetrics, getMetricsContext, getModel, health, openSttStream, say, setAPI, stt, switchModel, type Legs, type Metrics, type TurnEvent } from "./api/client.js";
+import { API, TurnSocket, fetchHistory, fetchTitle, getLegs, getMetrics, getMetricsContext, getModel, health, say, setAPI, stt, switchModel, type Legs, type Metrics, type TurnEvent } from "./api/client.js";
 import type { CotStepData } from "./components/chain-of-thought.js";
 import { b64ToF32 } from "./audio/dsp.js";
-import { createRecorder, playF32, primeVoiceMix, recordSecs, startVoiceCapture, tapTtsIntoMix, type Recorder, type VoiceCapture } from "./audio/webaudio.js";
+import { createRecorder, playF32, recordSecs, type Recorder } from "./audio/webaudio.js";
 
 const uid = () => Math.random().toString(16).slice(2, 10);
 const newSessionId = () => `ses_${uid()}${uid().slice(0, 2)}`;
@@ -93,148 +93,43 @@ export function App() {
   const [recSecs, setRecSecs] = createSignal(0);
   // Full voice mode: voice-glow overlay, composer hidden, no dictation.
   const [voiceMode, setVoiceMode] = createSignal(false);
-  // Voice mode owns its mic: PCM frames stream live to the backend voice
-  // pipeline (`/term/stt-stream`), partials show in the overlay, and the
-  // final transcript is sent as a user message on stop.
+  // Duplex voice mode: the mic stream goes to the WebRTC island, which
+  // owns the whole call (offer/answer, transcripts, playback). Exiting
+  // unmounts the island (hangup) and releases the mic. Voice turns land
+  // in the shared session via datachannel transcripts.
   const [voiceStream, setVoiceStream] = createSignal<MediaStream | null>(null);
-  const [voicePartial, setVoicePartial] = createSignal("");
-  const VOICE_WINDOW_SECS = 60;
-  let voiceCap: VoiceCapture | null = null;
-  let voiceSock: { sendPcm: (pcm: Uint8Array) => void; stop: () => void; close: () => void } | null = null;
-  let voiceTimer = 0;
-  let voiceStreamFailed = false;
-  let voiceFinalText = "";
-  let voiceFinalResolve: ((text: string) => void) | null = null;
-  // Set when a voice turn is sent: the agent's reply is spoken aloud.
-  let voiceReplyPending = false;
-
-  function f32ToI16(pcm: Float32Array): Uint8Array {
-    const out = new Uint8Array(pcm.length * 2);
-    const view = new DataView(out.buffer);
-    for (let i = 0; i < pcm.length; i++) {
-      const v = Math.max(-1, Math.min(1, pcm[i] ?? 0));
-      view.setInt16(i * 2, Math.round(v * 32767), true);
-    }
-    return out;
-  }
 
   async function enterVoiceMode(): Promise<void> {
     if (voiceMode()) return;
     if (recState()) cancelDictate();
-    let cap: VoiceCapture;
     try {
-      cap = await startVoiceCapture({
-        onChunk: (pcm) => {
-          try {
-            voiceSock?.sendPcm(f32ToI16(pcm));
-          } catch {
-            /* streaming tap is best-effort */
-          }
-        },
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true },
       });
+      setVoiceStream(stream);
+      setVoiceMode(true);
     } catch (e) {
       push("err", `mic: ${e instanceof Error ? e.message : String(e)}`);
-      return;
     }
-    voiceCap = cap;
-    voiceFinalText = "";
-    voiceFinalResolve = null;
-    voiceStreamFailed = false;
-    setVoicePartial("");
-    voiceSock = openSttStream(16000, {
-      onPartial: (t) => {
-        if (t.trim()) setVoicePartial(t.trim().slice(0, 220));
-      },
-      onFinal: (t) => {
-        voiceFinalText = (t ?? "").trim();
-        voiceFinalResolve?.(voiceFinalText);
-        voiceFinalResolve = null;
-      },
-      onError: (m) => {
-        voiceStreamFailed = true;
-        push("err", `voice stream: ${m}`);
-      },
-    });
-    setVoiceStream(cap.mixed);
-    setVoiceMode(true);
-    primeVoiceMix();
-    window.clearTimeout(voiceTimer);
-    voiceTimer = window.setTimeout(() => void stopVoiceMode(), VOICE_WINDOW_SECS * 1000);
   }
 
-  /** End the voice window: await the streamed final (or fall back to one
-      full transcribe) and send the result as a user message. */
-  async function stopVoiceMode(): Promise<void> {
+  function stopVoiceMode(): void {
     if (!voiceMode()) return;
-    window.clearTimeout(voiceTimer);
     setVoiceMode(false);
+    const stream = voiceStream();
     setVoiceStream(null);
-    setVoicePartial("");
-    const cap = voiceCap;
-    voiceCap = null;
-    const sock = voiceSock;
-    voiceSock = null;
-    let fallback: { pcm: Uint8Array } | null = null;
     try {
-      fallback = cap ? cap.snapshotPcm() : null;
-    } catch {
-      fallback = null;
-    }
-    try {
-      cap?.stop();
+      stream?.getTracks().forEach((t) => t.stop());
     } catch {
       /* ignore */
     }
-    // Let straggler frames flush down the socket before finalizing.
-    await new Promise((r) => setTimeout(r, 400));
-    let text = "";
-    if (sock && !voiceStreamFailed) {
-      text = await new Promise<string>((resolve) => {
-        const to = window.setTimeout(() => {
-          voiceFinalResolve = null;
-          resolve(voiceFinalText);
-        }, 15000);
-        voiceFinalResolve = (t) => {
-          window.clearTimeout(to);
-          voiceFinalResolve = null;
-          resolve(t);
-        };
-        try {
-          sock.stop();
-        } catch {
-          window.clearTimeout(to);
-          voiceFinalResolve = null;
-          resolve(voiceFinalText);
-        }
-      });
-      try {
-        sock.close();
-      } catch {
-        /* ignore */
-      }
-    }
-    if (!text.trim() && voiceStreamFailed && fallback && fallback.pcm.byteLength >= 3200) {
-      setPhase("working");
-      try {
-        const r = await stt(fallback.pcm, 16000, { timeoutMs: 60000 });
-        if ((r.kind === "ok" || r.kind === "text") && r.text?.trim()) {
-          text = r.text.trim();
-        } else {
-          push("err", `stt: ${r.message ?? "no speech"}`);
-        }
-      } catch (e) {
-        push("err", `stt: ${e instanceof Error ? e.message : String(e)}`);
-      } finally {
-        setPhase("idle");
-      }
-    }
-    if (text.trim()) {
-      push("sys", `heard: ${text.trim().slice(0, 200)}`);
-      await sendText(text.trim());
-      voiceReplyPending = true;
-    } else if (!voiceStreamFailed) {
-      push("err", "stt: no speech");
-    }
+  }
+
+  function pushVoiceTranscript(who: "you" | "agent", text: string): void {
+    const trimmed = text.trim().slice(0, 2000);
+    if (!trimmed) return;
+    push(who, trimmed);
+    touchRecent(sessionId(), sessionName());
   }
   let recTimer = 0;
   const [metricsOpen, setMetricsOpen] = createSignal(false);
@@ -442,12 +337,6 @@ export function App() {
     } else if (e.event === "chat" || e.event === "summary") {
       const reply = String((e as { reply: string }).reply ?? "");
       if (reply.trim()) push("agent", reply);
-      if (voiceReplyPending && reply.trim()) {
-        voiceReplyPending = false;
-        void speak(reply);
-      } else if (voiceReplyPending) {
-        voiceReplyPending = false;
-      }
       setPhase("idle");
       setBusy(false);
     } else if (e.event === "title") {
@@ -457,12 +346,10 @@ export function App() {
         touchRecent(sessionId(), t.trim());
       }
     } else if (e.event === "stuck") {
-      voiceReplyPending = false;
       push("err", `stuck: ${String((e as { reason: string }).reason ?? "")}`);
       setBusy(false);
       setPhase("idle");
     } else if (e.event === "error") {
-      voiceReplyPending = false;
       push("err", String((e as { message: string }).message ?? "error"));
       setBusy(false);
       setPhase("idle");
@@ -772,13 +659,10 @@ export function App() {
   }
 
   async function speak(text: string): Promise<void> {
-    primeVoiceMix();
     try {
       const r = await say(text);
       if (r.kind === "audio" && r.wav_b64) {
-        const f32 = b64ToF32(r.wav_b64);
-        tapTtsIntoMix(f32, r.sr ?? 24000);
-        await playF32(f32, r.sr ?? 24000);
+        await playF32(b64ToF32(r.wav_b64), r.sr ?? 24000);
       } else push("err", `tts: ${r.message ?? "failed"}`);
     } catch (e) {
       push("err", `tts: ${e instanceof Error ? e.message : String(e)}`);
@@ -814,7 +698,6 @@ export function App() {
   onCleanup(() => {
     window.clearInterval(pollTimer);
     window.clearInterval(recTimer);
-    window.clearTimeout(voiceTimer);
     try {
       voiceStream()
         ?.getTracks()
@@ -989,10 +872,11 @@ export function App() {
             }}
           >
             <ReactVoiceMode
-              stream={() => voiceStream()}
-              partial={() => voicePartial()}
-              processing={() => busy() || phase() !== "idle"}
-              onMicError={(m) => push("err", `mic: ${m}`)}
+              micStream={() => voiceStream()}
+              sid={() => sessionId()}
+              apiBase={API}
+              onTranscript={(who, text) => pushVoiceTranscript(who === "user" ? "you" : "agent", text)}
+              onError={(m) => push("err", `mic: ${m}`)}
             />
           </div>
         </Show>
@@ -1157,7 +1041,7 @@ export function App() {
             title={voiceMode() ? "Exit voice mode" : "Enter voice mode"}
             aria-label="Toggle voice mode"
             onClick={() => void (voiceMode() ? stopVoiceMode() : enterVoiceMode())}
-            class={`relative h-6 w-6 shrink-0 overflow-hidden rounded-full transition active:scale-95 ${
+            class={`relative h-5 w-5 shrink-0 overflow-hidden rounded-full transition active:scale-95 ${
               voiceMode()
                 ? "opacity-100 ring-2 ring-blue-400"
                 : "opacity-70 ring-1 ring-white/20 hover:opacity-100"
@@ -1169,7 +1053,7 @@ export function App() {
             title="Sample conversation"
             aria-label="Open sample conversation"
             onClick={() => void switchRecent(SAMPLE_SID)}
-            class={`winbar-btn flex h-6 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[11px] transition-colors duration-200 hover:bg-white/10 hover:text-white ${
+            class={`winbar-btn flex h-8 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[11px] transition-colors duration-200 hover:bg-white/10 hover:text-white ${
               sessionId() === SAMPLE_SID ? "bg-white/10 text-white" : "text-white/70"
             }`}
           >

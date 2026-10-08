@@ -20,7 +20,7 @@ async def term_stt(payload: dict):
     except Exception:
         return {"kind": "error", "message": "bad pcm_b64"}
     sr = int((payload or {}).get("sr", 16000))
-    wav = (np.frombuffer(raw, dtype="<i2").astype("float32") / 32768.0)
+    wav = (np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0)
     if wav.size < 1600:
         return {"kind": "error", "message": "nothing recorded"}
     agent = get_agent()
@@ -150,7 +150,7 @@ async def term_stt_stream(ws: WebSocket):
             data = msg.get("bytes")
             if data is not None:
                 try:
-                    chunk = (np.frombuffer(bytes(data), dtype="<i2")
+                    chunk = (np.frombuffer(bytes(data), dtype=np.int16)
                                .astype("float32") / 32768.0)
                 except Exception:
                     continue

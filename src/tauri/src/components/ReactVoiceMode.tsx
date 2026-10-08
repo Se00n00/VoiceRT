@@ -1,17 +1,17 @@
-// Solid bridge for the voice-glow React island: mounts VoiceModeView into
-// an isolated React root and re-renders it whenever the stream or the
-// processing flag changes. The mic stream is owned by the app — closing it
-// is the app's job on voice-mode exit.
+// Solid bridge for the duplex voice-call React island: mounts
+// VoiceModeView into an isolated React root. The island owns the whole
+// RTCPeerConnection for its mount lifetime; unmount hangs the call up.
 import { createEffect, onCleanup, onMount } from "solid-js";
 import { createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { VoiceModeView } from "./VoiceModeReact.js";
 
 export function ReactVoiceMode(props: {
-  stream: () => MediaStream | null;
-  partial: () => string;
-  processing: () => boolean;
-  onMicError: (msg: string) => void;
+  micStream: () => MediaStream | null;
+  sid: () => string;
+  apiBase: string;
+  onTranscript: (who: "user" | "agent", text: string) => void;
+  onError: (msg: string) => void;
 }) {
   let host!: HTMLDivElement;
   let root: Root | undefined;
@@ -19,10 +19,11 @@ export function ReactVoiceMode(props: {
   function renderReact(): void {
     root?.render(
       createElement(VoiceModeView, {
-        stream: props.stream(),
-        partial: props.partial(),
-        processing: props.processing(),
-        onMicError: props.onMicError,
+        micStream: props.micStream(),
+        sid: props.sid(),
+        apiBase: props.apiBase,
+        onTranscript: props.onTranscript,
+        onError: props.onError,
       }),
     );
   }
@@ -32,9 +33,7 @@ export function ReactVoiceMode(props: {
     renderReact();
   });
   createEffect(() => {
-    props.stream();
-    props.partial();
-    props.processing();
+    props.micStream();
     renderReact();
   });
   onCleanup(() => {

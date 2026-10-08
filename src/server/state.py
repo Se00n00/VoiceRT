@@ -24,6 +24,9 @@ __all__ = [
     "_t_boot",
     "_wav_b64",
     "get_agent",
+    "note_turn_end",
+    "note_turn_start",
+    "qwen_leg",
 ]
 
 _t_boot = time.time()
@@ -103,6 +106,25 @@ _compacted_for: dict = {}
 
 
 _titled_sids: set = set()
+
+
+_turns = {"done": 0, "total_s": 0.0, "last_s": 0.0, "active": 0}
+
+
+def note_turn_start() -> float:
+    _turns["active"] += 1
+    return time.monotonic()
+
+
+def note_turn_end(t0: float) -> None:
+    try:
+        dt = max(0.0, time.monotonic() - t0)
+    except Exception:
+        dt = 0.0
+    _turns["active"] = max(0, _turns["active"] - 1)
+    _turns["done"] += 1
+    _turns["total_s"] += dt
+    _turns["last_s"] = dt
 
 
 async def _maybe_title(agent, sid, text, ws) -> None:
@@ -318,3 +340,18 @@ def get_agent():
 def _wav_b64(wav: np.ndarray) -> str:
     arr = np.ascontiguousarray(np.asarray(wav, dtype=np.float32))
     return base64.b64encode(arr.tobytes()).decode()
+
+
+def qwen_leg(agent):
+    """Pure-Qwen chat leg: front brain first, else the main leg when it is
+    itself qwen-backed. Returns None when only a sidecar leg exists."""
+    for cand in (getattr(agent, "front_llm", None), getattr(agent, "llm", None)):
+        if cand is None:
+            continue
+        try:
+            backend = str(getattr(getattr(cand, "config", None), "backend", "") or "")
+        except Exception:
+            continue
+        if backend == "qwen":
+            return cand
+    return None

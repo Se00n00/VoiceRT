@@ -41,6 +41,11 @@ uvicorn==0.52.4
 websockets>=14,<18
 starlette==1.6.0
 pydantic==2.13.5
+# - aiortc: WebRTC stack for POST /talk/offer duplex voice calls
+#   (barge-in capable). Pulls av/aioice/pylibsrtp transitively.
+#   Verified live 1.15.0: offer/answer, Opus both directions, datachannel
+#   transcripts, barge-in cancel. Keep unpinned (native wheels vary).
+aiortc
 soundfile==0.14.0
 numpy==2.5.3
 onnxruntime==1.30.0
