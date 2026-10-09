@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import time
 import enum
-from dataclasses import dataclass, field
+
+from pydantic import BaseModel, Field, model_validator
 
 from src.inference.config import SamplingParams
 
@@ -23,8 +24,7 @@ class SequenceStatus(str, enum.Enum):
     ABORTED = "ABORTED"
 
 
-@dataclass
-class Sequence:
+class Sequence(BaseModel):
     """Single token sequence with paged block table."""
 
     seq_id: int
@@ -32,18 +32,20 @@ class Sequence:
     block_size: int = 16
     status: SequenceStatus = SequenceStatus.WAITING
     # output tokens generated so far (excluding prompt)
-    output_token_ids: list[int] = field(default_factory=list)
+    output_token_ids: list[int] = Field(default_factory=list)
     # logical block table -> physical block ids
-    block_table: list[int] = field(default_factory=list)
+    block_table: list[int] = Field(default_factory=list)
     # number of tokens already computed (prefill progress)
     num_computed_tokens: int = 0
-    sampling_params: SamplingParams = field(default_factory=SamplingParams)
-    arrival_time: float = field(default_factory=time.time)
+    sampling_params: SamplingParams = Field(default_factory=SamplingParams)
+    arrival_time: float = Field(default_factory=time.time)
     # metrics
     prompt_len: int = 0
 
-    def __post_init__(self):
+    @model_validator(mode="after")
+    def _derive_prompt_len(self):
         self.prompt_len = len(self.prompt_token_ids)
+        return self
 
     # -- token view ---------------------------------------------------
     @property
@@ -109,14 +111,13 @@ class Sequence:
         return False
 
 
-@dataclass
-class SequenceGroup:
+class SequenceGroup(BaseModel):
     """One user request = one SequenceGroup (single seq for now, supports beam)."""
 
     request_id: str
     sequences: list[Sequence]
     sampling_params: SamplingParams
-    arrival_time: float = field(default_factory=time.time)
+    arrival_time: float = Field(default_factory=time.time)
     # prompt string for debug
     prompt: str | None = None
 

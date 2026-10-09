@@ -17,7 +17,6 @@ htmlcov/
 *.safetensors
 *.onnx
 !models/silero_vad/*.onnx
-!src/models/engines/silero_vad/*.onnx
 
 # audio fixtures, outputs, logs (never commit these)
 *.wav

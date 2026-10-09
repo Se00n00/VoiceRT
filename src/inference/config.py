@@ -1,8 +1,8 @@
-"""Engine configuration — no YAML, frozen dataclasses only."""
+"""Engine configuration — no YAML, frozen pydantic models only."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 __all__ = [
     "KVCacheConfig",
@@ -12,9 +12,10 @@ __all__ = [
 ]
 
 
-@dataclass(frozen=True)
-class KVCacheConfig:
+class KVCacheConfig(BaseModel):
     """Paged KV-cache geometry."""
+
+    model_config = ConfigDict(frozen=True)
 
     block_size: int = 16  # tokens per block
     num_blocks: int = 512  # physical blocks
@@ -31,9 +32,10 @@ class KVCacheConfig:
         return int(self.num_blocks * self.block_size)
 
 
-@dataclass(frozen=True)
-class SchedulerConfig:
+class SchedulerConfig(BaseModel):
     """Continuous-batching scheduler limits."""
+
+    model_config = ConfigDict(frozen=True)
 
     max_num_seqs: int = 32  # max sequences in running+waiting
     max_num_batched_tokens: int = 512  # token budget per batch (prefill chunk)
@@ -42,9 +44,10 @@ class SchedulerConfig:
     watermark_blocks: int = 2  # reserve blocks to avoid OOM
 
 
-@dataclass(frozen=True)
-class EngineConfig:
+class EngineConfig(BaseModel):
     """Top-level inference engine config."""
+
+    model_config = ConfigDict(frozen=True)
 
     model: str = "Qwen/Qwen3-0.6B"
     device: str = "cuda"
@@ -84,17 +87,21 @@ class EngineConfig:
         )
 
 
-@dataclass(frozen=True)
-class SamplingParams:
+class SamplingParams(BaseModel):
     """Per-request generation controls."""
+
+    model_config = ConfigDict(frozen=True)
 
     max_tokens: int = 48
     temperature: float = 0.0  # 0 => greedy
     top_p: float = 1.0
     top_k: int = -1  # -1 disabled
-    stop_token_ids: tuple[int, ...] = field(default_factory=lambda: (151645, 151643))
+    stop_token_ids: tuple[int, ...] = Field(default_factory=lambda: (151645, 151643))
     ignore_eos: bool = False
 
-    def __post_init__(self):
-        if self.max_tokens < 1:
+    @field_validator("max_tokens")
+    @classmethod
+    def _check_max_tokens(cls, v):
+        if v < 1:
             raise ValueError("max_tokens must be >=1")
+        return v

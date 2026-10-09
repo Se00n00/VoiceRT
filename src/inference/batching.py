@@ -9,23 +9,25 @@ forward; KV gather uses per-seq block tables.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from typing import Any
 
 import torch
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.inference.sequence import SequenceGroup
 
 __all__ = ["InputBatch", "make_batch"]
 
 
-@dataclass
-class InputBatch:
+class InputBatch(BaseModel):
     """One forward batch."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     # flattened tokens for this step: [num_batched_tokens]
-    input_ids: torch.Tensor
+    input_ids: Any
     # positions: [num_batched_tokens] absolute pos per token
-    positions: torch.Tensor
+    positions: Any
     # per-seq lengths before this step
     seq_lens: list[int]
     # per-seq block tables (list of lists)
@@ -34,11 +36,11 @@ class InputBatch:
     seq_ids: list[int]
     # per-seq uncomputed token counts (for prefill chunking)
     # also seq_groups in scheduled order
-    seq_groups: list[SequenceGroup] = field(default_factory=list)
+    seq_groups: list[SequenceGroup] = Field(default_factory=list)
     # whether each seq is prefill vs decode
-    is_prefill: list[bool] = field(default_factory=list)
+    is_prefill: list[bool] = Field(default_factory=list)
     # number of tokens per seq in this batch
-    num_tokens_per_seq: list[int] = field(default_factory=list)
+    num_tokens_per_seq: list[int] = Field(default_factory=list)
 
     @property
     def num_seqs(self) -> int:

@@ -6,20 +6,22 @@ Every pipeline node (vad/stt/llm/tts) reports progress by yielding
 ``"turn"`` for the loop summary); ``kind`` names the payload shape.
 """
 import time
-from dataclasses import dataclass, field
 from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = ["NODES", "AgentEvent"]
 
 NODES = ("vad", "stt", "llm", "tts")
 
 
-@dataclass(frozen=True)
-class AgentEvent:
+class AgentEvent(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     node: str = "vad"   # vad | stt | llm | tts | turn
     kind: str = ""      # segments | text | token | done | audio | summary | error
-    data: dict = field(default_factory=dict)
-    t_s: float = field(default_factory=time.perf_counter)
+    data: dict = Field(default_factory=dict)
+    t_s: float = Field(default_factory=time.perf_counter)
 
     def as_dict(self) -> dict:
         """JSON-safe view (ndarrays are the caller's job to encode)."""

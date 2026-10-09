@@ -13,7 +13,6 @@ nested (a non-empty stash frame is an error, not recursion). Guards
 (confirm_fn, timeouts, step budgets) pass through unchanged — subtask
 actions face the identical y/n gate and policy as direct turns.
 """
-import dataclasses
 import json
 import os
 import re
@@ -175,8 +174,8 @@ class SimAgent:
                 # Lean context: sliver + subtask preamble + narrowed tools
                 # + scratch session (parent history untouched).
                 try:
-                    llm.config = dataclasses.replace(
-                        llm.config, system_prompt=SYSTEM_SLIVER % text[:500])
+                    llm.config = llm.config.model_copy(
+                        update={"system_prompt": SYSTEM_SLIVER % text[:500]})
                 except Exception:
                     pass
                 try:
@@ -232,8 +231,8 @@ class SimAgent:
         finally:
             try:
                 if old_system is not None:
-                    llm.config = dataclasses.replace(
-                        llm.config, system_prompt=old_system)
+                    llm.config = llm.config.model_copy(
+                        update={"system_prompt": old_system})
             except Exception:
                 pass
             try:

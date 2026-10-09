@@ -21,7 +21,8 @@ Coherence rule: step floor >= think cap + min answer. A think cap above
 the floor truncates mid-thought — decorative, not enforced.
 """
 import urllib.request
-from dataclasses import dataclass, field
+
+from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = [
     "estimate_tokens",
@@ -54,10 +55,11 @@ HEADROOM = 0.8
 CHARS_PER_TOKEN = 3.5
 
 
-@dataclass(frozen=True)
-class BudgetConfig:
+class BudgetConfig(BaseModel):
     """Per-backend context budget. Fixed parts are caps (never cut);
     elastic parts fill whatever remains after the fixed parts."""
+
+    model_config = ConfigDict(frozen=True)
 
     ctx: int
     system_cap: int = 2500

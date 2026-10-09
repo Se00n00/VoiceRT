@@ -11,9 +11,10 @@ admitting a sequence, and the component that recycles blocks on completion.
 from __future__ import annotations
 
 import collections
-from dataclasses import dataclass
+from typing import Any
 
 import torch
+from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from src.inference.config import KVCacheConfig
 from src.models.runtime.device import select_device
@@ -195,8 +196,7 @@ class BlockManager:
 BlockSpaceManager = BlockManager
 
 
-@dataclass
-class KVCacheMemoryPool:
+class KVCacheMemoryPool(BaseModel):
     """Actual GPU tensor pool for paged KV.
 
     One pool per layer pair? We allocate [num_blocks, block_size, kv_heads, head_dim]
@@ -207,16 +207,19 @@ class KVCacheMemoryPool:
                      V:[num_blocks, block_size, kv_heads, head_dim]
     """
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     config: KVCacheConfig
-    device: torch.device
-    dtype: torch.dtype
+    device: Any
+    dtype: Any
 
     # per-layer lists after init
-    k_pools: list[torch.Tensor] | None = None
-    v_pools: list[torch.Tensor] | None = None
+    k_pools: Any = None
+    v_pools: Any = None
+
+    _requested_dtype: Any = PrivateAttr(default=None)
 
     def __init__(self, config: KVCacheConfig, device: str | torch.device = "cpu", dtype: str | torch.dtype | None = None):
-        self.config = config
         if isinstance(device, str):
             device = select_device(device)
         # fallback to cpu if cuda not avail
@@ -225,38 +228,39 @@ class KVCacheMemoryPool:
                 device = torch.device("cpu")
         except Exception:
             device = torch.device("cpu")
-        self.device = device
         torch_dtype = parse_dtype(dtype or config.dtype) if isinstance(dtype or config.dtype, str) else (dtype or config.dtype)
         if isinstance(torch_dtype, str):
             torch_dtype = parse_dtype(torch_dtype)
         # fp8 on CPU not supported -> fallback to fp16 for storage but report as fp8
-        self._requested_dtype = torch_dtype
+        requested_dtype = torch_dtype
         if torch_dtype == torch.float8_e4m3fn and device.type == "cpu":
             # torch float8 requires cuda, fallback to fp16 on cpu but keep logical dtype as fp8 for mem calc
             torch_dtype = torch.float16
         if isinstance(torch_dtype, str):
             torch_dtype = parse_dtype(torch_dtype)
-        self.dtype = torch_dtype
-        self.k_pools = []
-        self.v_pools = []
+        k_pools: list = []
+        v_pools: list = []
         for _ in range(config.num_layers):
             try:
                 k = torch.zeros(
                     (config.num_blocks, config.block_size, config.num_kv_heads, config.head_dim),
-                    dtype=self.dtype,
-                    device=self.device,
+                    dtype=torch_dtype,
+                    device=device,
                 )
             except Exception:
                 # fallback if dtype not supported on device
                 k = torch.zeros(
                     (config.num_blocks, config.block_size, config.num_kv_heads, config.head_dim),
                     dtype=torch.float16,
-                    device=self.device,
+                    device=device,
                 )
-                self.dtype = torch.float16
+                torch_dtype = torch.float16
             v = torch.zeros_like(k)
-            self.k_pools.append(k)
-            self.v_pools.append(v)
+            k_pools.append(k)
+            v_pools.append(v)
+        super().__init__(config=config, device=device, dtype=torch_dtype,
+                         k_pools=k_pools, v_pools=v_pools)
+        self._requested_dtype = requested_dtype
 
     def memory_mb(self) -> float:
         # Use requested dtype for accounting (fp8=1B even if fallback to fp16 on CPU)

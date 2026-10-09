@@ -4,8 +4,8 @@
   huggingface_hub.snapshot_download (HF cache)
 - Ternary Bonsai 2 27B GGUF (worker LLM backend) via snapshot_download
   with allow-list (PTQ pack, not the full repo)
-- Silero VAD ONNX via stdlib urllib to src/models/engines/silero_vad/silero_vad.onnx
-   (matches the ``VadConfig.onnx_path`` default)
+- Silero VAD ships inside the ``silero-vad`` pip wheel
+  (see requirements.txt) — nothing to fetch here.
 
 Run: PYTHONPATH=. python -m src.models.download [--dest DIR]
 """
@@ -32,13 +32,6 @@ HF_PATTERNS = {
     ],
 }
 
-SILERO_URL = (
-    "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/"
-    "silero_vad.onnx"
-)
-SILERO_REL = os.path.join("src", "models", "engines", "silero_vad", "silero_vad.onnx")
-
-
 def download_hf(repo, patterns=None):
     from huggingface_hub import snapshot_download
 
@@ -48,18 +41,6 @@ def download_hf(repo, patterns=None):
         path = snapshot_download(repo)
     print(f"hf {repo} -> {path}")
     return path
-
-
-def download_silero(root):
-    dest = os.path.join(root, SILERO_REL)
-    os.makedirs(os.path.dirname(dest), exist_ok=True)
-    if os.path.exists(dest) and os.path.getsize(dest) > 0:
-        print(f"silero onnx exists: {dest} ({os.path.getsize(dest)}B)")
-        return dest
-    print(f"fetching silero onnx -> {dest}", flush=True)
-    urllib.request.urlretrieve(SILERO_URL, dest)
-    print(f"silero onnx done: {dest} ({os.path.getsize(dest)}B)")
-    return dest
 
 
 def main(argv=None):
@@ -82,11 +63,6 @@ def main(argv=None):
         except Exception as exc:
             print(f"FAILED hf {repo}: {exc}")
             failures.append(repo)
-    try:
-        download_silero(root)
-    except Exception as exc:
-        print(f"FAILED silero onnx: {exc}")
-        failures.append("silero-vad-onnx")
     if failures:
         print(f"OMITTED/FAILED: {failures}")
         return 1

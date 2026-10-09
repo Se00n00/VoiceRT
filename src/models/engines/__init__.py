@@ -1,1 +1,1 @@
-# engines package: heavy model implementations (qwen, whisper, tts, silero_vad)
+# engines package: heavy model implementations (qwen, whisper, tts)

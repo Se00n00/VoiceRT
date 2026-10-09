@@ -21,9 +21,10 @@ import asyncio
 import os
 import re
 import time
-from dataclasses import dataclass, field, replace
+from typing import Any
 
 import numpy as np
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.agent.delegate import Route, is_task_shaped
 from src.agent.events import AgentEvent  # noqa: F401  (public currency)
@@ -71,14 +72,15 @@ def _speak_head(full: str, limit: int = 280) -> str:
     return head.strip() + " … full output is on screen."
 
 
-@dataclass(frozen=True)
-class VoiceAgentConfig:
-    """Whole-agent config. Legs are dataclasses; no YAML anywhere."""
+class VoiceAgentConfig(BaseModel):
+    """Whole-agent config. Legs are pydantic models; no YAML anywhere."""
 
-    vad: VadConfig = field(default_factory=VadConfig)
-    stt: SttConfig = field(default_factory=SttConfig)
-    llm: LlmConfig = field(default_factory=LlmConfig)
-    tts: TtsConfig = field(default_factory=TtsConfig)
+    model_config = ConfigDict(frozen=True)
+
+    vad: VadConfig = Field(default_factory=VadConfig)
+    stt: SttConfig = Field(default_factory=SttConfig)
+    llm: LlmConfig = Field(default_factory=LlmConfig)
+    tts: TtsConfig = Field(default_factory=TtsConfig)
     max_audio_s: float = 60.0
     max_session_turns: int = 8
     session_ttl_s: float = 1800.0
@@ -103,7 +105,7 @@ class VoiceAgentConfig:
     speak_text_turns: bool = True
     fast_voice: bool = False
     max_queue: int = 16
-    sandbox: object = None
+    sandbox: Any = None
     memory_tokens: int = 0
     memory_recall: bool = False
     memory_store: bool = False
@@ -187,6 +189,9 @@ _DELEGATION_TALK = re.compile(
     r"i(?:'| wi)ll (let|have|get) (someone|another|the) ",
     re.IGNORECASE)
 
+class CascadePipeline:
+    def __init__(self):
+        pass  # pre-existing stub: was an empty body (SyntaxError); no-op keeps it importable
 
 class VoiceAgent:
     """VAD -> STT -> deep-agent LLM (Bonsai 27B sidecar) -> TTS (GPU), streaming."""
@@ -211,15 +216,16 @@ class VoiceAgent:
                     self.delegate_cfg = dcfg
                     over = worker_llm_overrides(dcfg)
                     if over:
-                        llm_cfg = replace(llm_cfg, **over)
+                        llm_cfg = llm_cfg.model_copy(update=over)
             except Exception:
                 self.delegate_cfg = None
         if str(getattr(llm_cfg, "backend", "")) in SIDECAR_BACKENDS and cfg.llm_paged:
-            llm_cfg = replace(llm_cfg, use_paged=False)
+            llm_cfg = llm_cfg.model_copy(update={"use_paged": False})
         elif cfg.llm_paged:
-            llm_cfg = replace(llm_cfg, use_paged=True,
-                              paged_blocks=cfg.llm_paged_blocks,
-                              paged_batch_size=cfg.llm_paged_batch_size)
+            llm_cfg = llm_cfg.model_copy(update={
+                "use_paged": True,
+                "paged_blocks": cfg.llm_paged_blocks,
+                "paged_batch_size": cfg.llm_paged_batch_size})
         self.vad = VadModel(cfg.vad)
         self.stt = SttModel(cfg.stt)
         self.llm = LlmModel(llm_cfg)
@@ -584,7 +590,7 @@ class VoiceAgent:
         cap = int(getattr(self.delegate_cfg, "max_task_chars", 1200) or 1200)
         escalate, reason = await decide_escalate(self.front_llm, text)
         if escalate:
-            return Route("delegate", str(text), reason=reason,
+            return Route(kind="delegate", text=str(text), reason=reason,
                          forced=reason != "boolean")
 
         reply, reason2 = await self._front_chat(text, history)
@@ -594,8 +600,8 @@ class VoiceAgent:
         if (getattr(self.delegate_cfg, "backstop", False)
                 and is_task_shaped(text, int(getattr(
                     self.delegate_cfg, "backstop_min_score", 2) or 2))):
-            return Route("delegate", str(text), reason="backstop", forced=True)
-        return Route("chat", reply, reason=reason2 or reason)
+            return Route(kind="delegate", text=str(text), reason="backstop", forced=True)
+        return Route(kind="chat", text=reply, reason=reason2 or reason)
 
     async def _front_chat(self, text: str, history: list) -> tuple[str, str]:
         """One short spoken reply from the front leg.

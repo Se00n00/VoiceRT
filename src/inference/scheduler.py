@@ -12,7 +12,7 @@ enforces max_batch_size / max_num_batched_tokens limits.
 from __future__ import annotations
 
 import collections
-from dataclasses import dataclass, field
+from typing import TypedDict
 
 from src.inference.block_manager import BlockManager
 from src.inference.config import SchedulerConfig
@@ -21,17 +21,16 @@ from src.inference.sequence import Sequence, SequenceGroup, SequenceStatus
 __all__ = ["SchedulerOutputs", "ContinuousScheduler"]
 
 
-@dataclass
-class SchedulerOutputs:
-    scheduled: list[SequenceGroup] = field(default_factory=list)
+class SchedulerOutputs(TypedDict, total=False):
+    scheduled: list[SequenceGroup]
     # per-seq metadata for model runner
-    num_batched_tokens: int = 0
+    num_batched_tokens: int
     # sequences that were preempted (need to be re-queued)
-    preempted: list[SequenceGroup] = field(default_factory=list)
+    preempted: list[SequenceGroup]
     # number of waiting groups still pending
-    waiting: int = 0
-    running: int = 0
-    swapped: int = 0
+    waiting: int
+    running: int
+    swapped: int
 
 
 class ContinuousScheduler:
@@ -235,11 +234,11 @@ class ContinuousScheduler:
                 # keep blocks but mark waiting? vLLM would swap; we keep blocks and mark WAITING
                 seq.status = SequenceStatus.WAITING
 
-        out.scheduled = scheduled
-        out.num_batched_tokens = token_budget
-        out.waiting = len(self.waiting)
-        out.running = len(self.running)
-        out.swapped = len(self.swapped)
+        out["scheduled"] = scheduled
+        out["num_batched_tokens"] = token_budget
+        out["waiting"] = len(self.waiting)
+        out["running"] = len(self.running)
+        out["swapped"] = len(self.swapped)
         return out
 
     def free_finished(self, seq_groups: list[SequenceGroup]):

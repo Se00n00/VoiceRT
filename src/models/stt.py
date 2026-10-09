@@ -1,15 +1,14 @@
 """STT leg: Whisper transcription behind a clean async class."""
 import asyncio
-from dataclasses import dataclass
 
 import numpy as np
+from pydantic import BaseModel, ConfigDict
 
-__all__ = ["SttConfig", "SttResult", "SttModel"]
 
-
-@dataclass(frozen=True)
-class SttConfig:
+class SttConfig(BaseModel):
     """No YAML: construct (or override fields) in code."""
+
+    model_config = ConfigDict(frozen=True)
 
     model: str = "openai/whisper-base"
     language: str = "en"
@@ -18,8 +17,9 @@ class SttConfig:
     device: str = "cuda"
 
 
-@dataclass(frozen=True)
-class SttResult:
+class SttResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     text: str = ""
     rtf: float = 0.0
     ttfs: float = 0.0

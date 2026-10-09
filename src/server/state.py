@@ -23,6 +23,10 @@ __all__ = [
     "_titled_sids",
     "_t_boot",
     "_wav_b64",
+    "console_emit",
+    "console_history",
+    "console_subscribe",
+    "console_unsubscribe",
     "get_agent",
     "note_turn_end",
     "note_turn_start",
@@ -109,6 +113,51 @@ _titled_sids: set = set()
 
 
 _turns = {"done": 0, "total_s": 0.0, "last_s": 0.0, "active": 0}
+
+
+_console_events = []
+_console_subs: set = set()
+_CONSOLE_KEEP = 300
+
+
+def console_emit(source: str, kind: str, text: str = "", sid: str = "") -> None:
+    """Append a console event and fan out to live tail sockets (never raises)."""
+    try:
+        import time as _time
+
+        ev = {"ts": round(_time.time(), 3), "source": str(source),
+              "kind": str(kind), "text": str(text or "")[:2000],
+              "sid": str(sid or "")}
+        _console_events.append(ev)
+        del _console_events[:-_CONSOLE_KEEP]
+        for q in list(_console_subs):
+            try:
+                q.put_nowait(ev)
+            except Exception:
+                try:
+                    _console_subs.discard(q)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
+def console_history() -> list:
+    return list(_console_events)
+
+
+def console_subscribe(queue) -> None:
+    try:
+        _console_subs.add(queue)
+    except Exception:
+        pass
+
+
+def console_unsubscribe(queue) -> None:
+    try:
+        _console_subs.discard(queue)
+    except Exception:
+        pass
 
 
 def note_turn_start() -> float:
@@ -322,8 +371,6 @@ def get_agent():
     if _agent is None:
         import os
 
-        from dataclasses import replace
-
         from src.main import VoiceAgent, VoiceAgentConfig
 
         text_only = os.environ.get("VOICE_TEXT_ONLY", "").strip() == "1"
@@ -332,7 +379,7 @@ def get_agent():
                                delegate=delegate not in ("0", "false", "no"))
         dpath = os.environ.get("VOICE_DELEGATE_CONFIG", "").strip()
         if dpath:
-            cfg = replace(cfg, delegate_config=dpath)
+            cfg = cfg.model_copy(update={"delegate_config": dpath})
         _agent = VoiceAgent(cfg)
     return _agent
 

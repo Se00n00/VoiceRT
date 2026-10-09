@@ -17,7 +17,8 @@ mutating needs an explicit yes.
 """
 import json
 import re
-from dataclasses import dataclass
+
+from pydantic import BaseModel, ConfigDict
 
 __all__ = [
     "ALLOWED_OPS",
@@ -147,9 +148,10 @@ _CONFIRM_RES = [
 _CONFIRM_CMD_RE = re.compile("|".join(f"(?:{p})" for p in _CONFIRM_RES))
 
 
-@dataclass(frozen=True)
-class TerminalAction:
+class TerminalAction(BaseModel):
     """Validated single terminal step. edit carries anchor, grep carries pattern."""
+
+    model_config = ConfigDict(frozen=True)
 
     op: str = "done"
     command: str = ""

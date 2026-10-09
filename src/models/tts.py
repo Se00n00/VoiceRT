@@ -1,12 +1,10 @@
 """TTS leg: Kokoro synthesis behind a clean async class."""
 import asyncio
 import difflib
-from dataclasses import dataclass, replace
+from typing import Any
 
 import numpy as np
-
-__all__ = ["TtsConfig", "TtsAudio", "TtsModel", "TtsVoice",
-           "VOICES", "list_voices", "voice_info"]
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # Kokoro ships one .pt style vector per voice under
@@ -40,9 +38,10 @@ _VOICES_BY_PREFIX = {
 _GENDER = {"f": "female", "m": "male"}
 
 
-@dataclass(frozen=True)
-class TtsVoice:
+class TtsVoice(BaseModel):
     """One catalogue entry. `lang`/`language` come from kokoro's LANG_CODES."""
+
+    model_config = ConfigDict(frozen=True)
 
     name: str
     lang: str
@@ -75,7 +74,8 @@ def _build_catalogue() -> dict:
         language = codes.get(lang, lang)
         gender = _GENDER.get(prefix[1], "unknown")
         for name in names:
-            out[name] = TtsVoice(name, lang, language, gender)
+            out[name] = TtsVoice(name=name, lang=lang, language=language,
+                               gender=gender)
     return out
 
 
@@ -129,9 +129,10 @@ def list_voices(lang: str | None = None, gender: str | None = None):
     return picked, langs
 
 
-@dataclass(frozen=True)
-class TtsConfig:
+class TtsConfig(BaseModel):
     """No YAML: construct (or override fields) in code."""
+
+    model_config = ConfigDict(frozen=True)
 
     voice: str = "af_heart"
     lang: str = "a"
@@ -140,18 +141,19 @@ class TtsConfig:
     device: str = "cuda"
 
 
-@dataclass(frozen=True)
-class TtsAudio:
-    wav: np.ndarray = None  # float32 mono
+class TtsAudio(BaseModel):
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    wav: Any = Field(default_factory=lambda: np.zeros(0, dtype=np.float32))  # float32 mono
     sample_rate: int = 24000
     sentence: str = ""
     synth_s: float = 0.0
 
-    def __post_init__(self):
-        object.__setattr__(
-            self, "wav",
-            np.asarray(self.wav if self.wav is not None else [],
-                       dtype=np.float32).ravel())
+    @field_validator("wav", mode="before")
+    @classmethod
+    def _coerce_wav(cls, v):
+        return np.asarray(v if v is not None else [],
+                          dtype=np.float32).ravel()
 
 
 class TtsModel:
@@ -165,7 +167,7 @@ class TtsModel:
 
     def _apply_voice(self, name: str) -> None:
         """Force a voice id onto config and a live pipeline, unvalidated."""
-        self.config = replace(self.config, voice=name)
+        self.config = self.config.model_copy(update={"voice": name})
         if self._leg is not None:
             self._leg.voice = name
 
@@ -233,7 +235,7 @@ class TtsModel:
         two never drift apart.
         """
         code = _resolve_lang(lang)
-        self.config = replace(self.config, lang=code)
+        self.config = self.config.model_copy(update={"lang": code})
         if self._leg is not None:
             self._leg.lang_code = code
         cur = VOICES.get(self.config.voice)

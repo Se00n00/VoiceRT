@@ -1,78 +1,33 @@
-# voice-pipeline runtime. Pinned to the versions it is tested on
-# (RTX 3050, CUDA 12, Python 3.12). Install with:
-#   pip install -r requirements.txt
-#
-# Notes:
-# - torch: get the CUDA build for your platform first if pip resolves
-#   CPU-only (see https://pytorch.org/get-started/locally/), then
-#   install the rest of this file.
-# - kokoro pulls its own phonemizer (misaki) automatically.
-# - transformers 5.x is REQUIRED-ish: the TTS eager path is chosen
-#   because dynamo x transformers-5 output_capturing breaks full-model
-#   torch.compile (see models/tts.py). Older transformers may
-#   behave differently under compile; eager still works.
+# ------- MODEL LAYER ------------------------------------------
+
+numpy==2.5.3
+onnxruntime==1.30.0
+kokoro==0.9.4
+silero-vad[audio]==6.2.3
 torch==2.5.1
-# - torchvision: lockstep match for torch 2.5.1 is 0.20.1 (patch versions
-#   must agree: 0.20.0 wants torch==2.5.0 and breaks resolution). Kaggle
-#   pre-installs torchvision 0.25.0 (built for torch 2.10); with our torch
-#   downgrade that combo crashes inside transformers' image_utils import
-#   chain (register_fake torchvision::nms) and kills every model warm.
-#   Pinning the matching version makes pip downgrade it deterministically.
 torchvision==0.20.1
-# - torchaudio: same story, one layer deeper. Kaggle pre-installs 2.10.0
-#   (built for torch 2.10); with our torch downgrade its .so fails with
-#   "undefined symbol" and kills transformers' audio_utils import chain
-#   (every model warm). Lockstep match for torch 2.5.1. Unused by our
-#   code paths, but transformers probes it at import time.
 torchaudio==2.5.1
 triton==3.1.0
 transformers==5.17.0
-# - websockets: REQUIRED for uvicorn to accept WS /talk. Without it
-#   uvicorn serves HTTP-only and every WS handshake 404s (the route still
-#   registers, so /docs and route lists look fine — misleading).
-fastapi==0.141.1
-uvicorn==0.52.4
-# - websockets: range (not a pin) so pip can satisfy langgraph-sdk (<17)
-#   and uvicorn at the same time. Fresh resolver runs fail on an exact
-#   pin (seen on Kaggle: langgraph-sdk 0.4.x requires websockets<17).
-#   Verified: WS /talk + bridge protocol tests pass on the resolved
-#   version (see AGENTS.md). Do NOT re-pin exact without re-running
-#   tests/src/test_server.py + tests/src/test_bridge.py.
-websockets>=14,<18
-starlette==1.6.0
-pydantic==2.13.5
-# - aiortc: WebRTC stack for POST /talk/offer duplex voice calls
-#   (barge-in capable). Pulls av/aioice/pylibsrtp transitively.
-#   Verified live 1.15.0: offer/answer, Opus both directions, datachannel
-#   transcripts, barge-in cancel. Keep unpinned (native wheels vary).
-aiortc
-soundfile==0.14.0
-numpy==2.5.3
-onnxruntime==1.30.0
-pyyaml==6.0.3
-httpx==0.28.1
-qrcode==8.2
-kokoro==0.9.4
-# - langgraph: the voice-turn agent is a compiled StateGraph
-#   (src/agent/graph.py). Pulls langchain-core transitively.
-# - langchain/deepagents/langchain-core: PINNED to the tested combo.
-#   Kaggle pre-installs langchain 1.2.15, which declares itself
-#   incompatible with langgraph 1.2.11 — with these floating, pip keeps
-#   the broken pair and every agent turn dies at graph-build time
-#   (warm succeeds, then 0 steps / 0.0s / empty reply). Do NOT unpin
-#   without re-running the full agent path (at least one live turn).
+
+# ------- AGENTIC LAYER ------------------------------------------
+
 langgraph==1.2.11
 langchain==1.4.2
 langchain-core==1.6.3
 deepagents==0.7.16
-# - mcp/langchain-mcp-adapters: the agent's extra tools (python_exec /
-#   fetch / web_search) are served by a local MCP stdio server
-#   (src/agent/mcp/server.py) and loaded via the stdio client
-#   (src/agent/mcp/client.py). PINNED to the tested combo.
 mcp==1.30.0
-langchain-mcp-adapters==0.3.2
-# - textual: the opencode-style full-screen TUI (tui.py). Not needed
-#   for the server; install only for the terminal app.
-textual==8.2.8
-rich==15.0.0
+langchain-mcp-adapters==0.3.23
 
+# ------- PRESENTATION LAYER ------------------------------------------
+
+fastapi==0.141.1
+uvicorn==0.52.4
+websockets>=14,<18
+starlette==1.6.0
+pydantic==2.13.5
+aiortc
+soundfile==0.14.0
+pyyaml==6.0.3
+httpx==0.28.1
+qrcode==8.2

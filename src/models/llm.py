@@ -1,11 +1,8 @@
 """LLM leg: Qwen chat generation behind a clean async class."""
 import asyncio
 import re
-from dataclasses import dataclass, field
 
-__all__ = ["LlmConfig", "LlmResult", "LlmToken", "LlmModel", "SYSTEM_PROMPT",
-           "split_thinking", "leg_device", "assert_cuda_leg",
-           "assert_ready_leg", "SIDECAR_BACKENDS", "to_openai_tools"]
+from pydantic import BaseModel, ConfigDict, Field
 
 SYSTEM_PROMPT = "You are a voice assistant. Reply in one short spoken sentence."
 
@@ -140,9 +137,10 @@ def to_openai_tools(tools) -> list:
     return out
 
 
-@dataclass(frozen=True)
-class LlmConfig:
+class LlmConfig(BaseModel):
     """No YAML: construct (or override fields) in code."""
+
+    model_config = ConfigDict(frozen=True)
 
     model: str = "Qwen/Qwen3-0.6B"
     # Backend switch.
@@ -189,16 +187,18 @@ class LlmConfig:
     enable_cuda_graph: bool = False
 
 
-@dataclass(frozen=True)
-class LlmResult:
+class LlmResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     text: str = ""
     ttft_s: float = 0.0
     tps: float = 0.0
-    output_ids: tuple = field(default_factory=tuple)
+    output_ids: tuple = Field(default_factory=tuple)
 
 
-@dataclass(frozen=True)
-class LlmToken:
+class LlmToken(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     token_id: int = 0
     piece: str = ""
     first: bool = False

@@ -35,8 +35,9 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import dataclass, field, replace
 from pathlib import Path
+
+from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = [
     "BOOLEAN_FEWSHOT",
@@ -88,15 +89,16 @@ def resolve_config_path(explicit: str | None = None) -> str | None:
 # --------------------------------------------------------------------------
 # config
 # --------------------------------------------------------------------------
-@dataclass(frozen=True)
-class DelegateConfig:
+class DelegateConfig(BaseModel):
     """Two-brain routing knobs. Unknown YAML keys are ignored, not fatal."""
+
+    model_config = ConfigDict(frozen=True)
 
     enabled: bool = True
     # "fused" (front on CUDA) | "cpu" (front fused on CPU, 0 VRAM).
     placement: str = "fused"
-    front: dict = field(default_factory=dict)
-    worker: dict = field(default_factory=dict)
+    front: dict = Field(default_factory=dict)
+    worker: dict = Field(default_factory=dict)
     backstop: bool = True
     backstop_min_score: int = 2
     max_task_chars: int = 1200
@@ -107,8 +109,8 @@ class DelegateConfig:
     worker_eager: bool = False
 
     def with_overrides(self, **kw) -> "DelegateConfig":
-        return replace(self, **{k: v for k, v in kw.items()
-                                if v is not None})
+        return self.model_copy(update={k: v for k, v in kw.items()
+                                       if v is not None})
 
 
 def load_config(explicit: str | None = None) -> DelegateConfig:
@@ -265,14 +267,15 @@ _THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE)
 _TRAILER_RE = re.compile(r"\n?\s*CWD:.*$", re.DOTALL)
 
 
-@dataclass(frozen=True)
-class Route:
+class Route(BaseModel):
     """What the front brain decided.
 
     ``kind`` is ``"chat"`` (answer the user here) or ``"delegate"`` (hand the
     task to the worker). ``reason`` records which signal decided it, and is
     carried on the event stream for debugging routing quality.
     """
+
+    model_config = ConfigDict(frozen=True)
 
     kind: str
     text: str = ""
@@ -489,9 +492,9 @@ def parse_delegate(raw: str, *, max_task_chars: int = 1200) -> Route | None:
         if str(name).strip() == DELEGATE_TOOL_NAME:
             task = _arg_text(params) or _arg_text(inner)
             if task.strip():
-                return Route("delegate", task.strip()[:max_task_chars],
-                             reason="tool")
-        return Route("delegate", "", reason="tool:foreign", forced=True)
+                return Route(kind="delegate", text=task.strip()[:max_task_chars],
+                           reason="tool")
+        return Route(kind="delegate", text="", reason="tool:foreign", forced=True)
 
     # 2. JSON envelopes: any balanced object that names a tool.
     for span in _json_objects(body):
@@ -508,14 +511,14 @@ def parse_delegate(raw: str, *, max_task_chars: int = 1200) -> Route | None:
         if isinstance(name, str) and name.strip():
             if name.strip() == DELEGATE_TOOL_NAME:
                 task = _arg_text(obj)
-                return Route("delegate", task.strip()[:max_task_chars],
-                             reason="tool")
-            return Route("delegate", "", reason="tool:foreign", forced=True)
+                return Route(kind="delegate", text=task.strip()[:max_task_chars],
+                           reason="tool")
+            return Route(kind="delegate", text="", reason="tool:foreign", forced=True)
         action = obj.get("action")
         if isinstance(action, str) and action.strip() == DELEGATE_TOOL_NAME:
             task = _arg_text(obj)
-            return Route("delegate", task.strip()[:max_task_chars],
-                         reason="tool")
+            return Route(kind="delegate", text=task.strip()[:max_task_chars],
+                       reason="tool")
 
     return None
 
