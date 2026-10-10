@@ -5,8 +5,10 @@
 
 numpy==2.5.3
 onnxruntime==1.30.0
+# No kokoro on 3.13+: every release caps at <3.13 and its misaki dep tops
+# at 0.7.4 (also <3.13). All kokoro imports are function-level, so evals
+# (TTS disabled) import fine without it; voice use stays on <3.13.
 kokoro==0.9.4; python_version < "3.13"
-kokoro==0.7.16; python_version >= "3.13"
 silero-vad[audio]==6.2.3
 torch==2.6.0
 torchvision==0.21.0
