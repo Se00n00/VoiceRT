@@ -68,6 +68,33 @@ def _house_json(name: str, args) -> str:
     return json.dumps({"action": name, **args})
 
 
+def _failed_call(exc):
+    """HTTPStatusError with tool_use_failed body -> (name, args) or None.
+
+    Groq validates tool calls against the declared set and 400s the
+    whole request when the model reaches past the narrowed specs. The
+    error body carries the model's intent (failed_generation) — honor
+    it instead of dying the turn. Pure inspection, never raises.
+    """
+    try:
+        import httpx
+
+        if not isinstance(exc, httpx.HTTPStatusError):
+            return None
+        body = json.loads(getattr(exc.response, "text", "") or "")
+        gen = (body.get("error", {}) or {}).get("failed_generation")
+        if isinstance(gen, str):
+            gen = json.loads(gen)
+        if not isinstance(gen, dict):
+            return None
+        name = str(gen.get("name", "") or "")
+        if not name:
+            return None
+        return name, gen.get("arguments", "") or ""
+    except Exception:
+        return None
+
+
 class GroqCloud:
     """Groq leg. ``warm()`` validates the key; ``close()`` is a no-op."""
 
@@ -76,11 +103,13 @@ class GroqCloud:
     def __init__(self, model: str = DEFAULT_MODEL, api_key: str = "auto",
                  temperature: float = 0.0,
                  base_url: str = BASE_URL,
+                 reasoning_effort: str = "low",
                  _post_fn=None, _stream_fn=None):
         self.model = str(model or DEFAULT_MODEL)
         self.api_key = str(api_key or "auto")
         self.temperature = float(temperature)
         self.base_url = str(base_url or BASE_URL)
+        self.reasoning_effort = str(reasoning_effort or "low").lower()
         self._post_fn = _post_fn
         self._stream_fn = _stream_fn
 
@@ -110,10 +139,45 @@ class GroqCloud:
             return self._post_fn(path, payload, timeout)
         import httpx
 
-        with httpx.Client(base_url=self.base_url, timeout=timeout) as c:
-            r = c.post(path, json=payload, headers=self._headers())
-            r.raise_for_status()
-            return r.json()
+        import time as _time
+
+        delay, last = 5.0, None
+        for _ in range(4):
+            try:
+                with httpx.Client(base_url=self.base_url,
+                                  timeout=timeout) as c:
+                    r = c.post(path, json=payload,
+                               headers=self._headers())
+                    r.raise_for_status()
+                    return r.json()
+            except httpx.HTTPStatusError as exc:
+                last = exc
+                if (exc.response is None
+                        or exc.response.status_code != 429):
+                    raise
+                delay = self._retry_after(exc.response, delay)
+                _time.sleep(delay)
+                delay = min(delay * 2.0, 120.0)
+        raise last
+
+    @staticmethod
+    def _retry_after(response, default: float) -> float:
+        """Seconds to wait on a 429 (headers, else backoff). Pure.
+
+        ..
+        """
+        try:
+            h = response.headers or {}
+            raw = (h.get("retry-after-ms") or h.get("retry-after")
+                   or h.get("ratelimit-reset") or "")
+            v = float(str(raw).strip().rstrip("s"))
+            if "ms" in str(raw):
+                v = v / 1000.0
+            if 0 < v <= 300:
+                return v
+        except Exception:
+            pass
+        return default
 
     def _stream(self, path, payload, timeout):
         if self._stream_fn is not None:
@@ -121,12 +185,28 @@ class GroqCloud:
             return
         import httpx
 
-        with httpx.Client(base_url=self.base_url, timeout=timeout) as c:
-            with c.stream("POST", path, json=payload,
-                          headers=self._headers()) as r:
-                r.raise_for_status()
-                for line in r.iter_lines():
-                    yield line
+        import time as _time
+
+        delay, last = 5.0, None
+        for _ in range(4):
+            try:
+                with httpx.Client(base_url=self.base_url,
+                                  timeout=timeout) as c:
+                    with c.stream("POST", path, json=payload,
+                                  headers=self._headers()) as r:
+                        r.raise_for_status()
+                        for line in r.iter_lines():
+                            yield line
+                return
+            except httpx.HTTPStatusError as exc:
+                last = exc
+                if (exc.response is None
+                        or exc.response.status_code != 429):
+                    raise
+                delay = self._retry_after(exc.response, delay)
+                _time.sleep(delay)
+                delay = min(delay * 2.0, 120.0)
+        raise last
 
     # -- chat contract ---------------------------------------------------
     def _payload(self, messages, tools, max_tokens, stop, stream):
@@ -139,6 +219,10 @@ class GroqCloud:
             "temperature": self.temperature,  # greedy, house rule
             "stream": bool(stream),
         }
+        # Reasoning models spend max_tokens on thought: "low" keeps the
+        # budget for answers + tool calls (agentic steps, not essays).
+        if self.reasoning_effort in ("low", "medium", "high"):
+            p["reasoning_effort"] = self.reasoning_effort
         oai = to_openai_tools(tools)
         if oai:
             p["tools"] = oai
@@ -169,10 +253,24 @@ class GroqCloud:
         """One full turn. Returns dict with composed ``text`` (raises on
         transport/API errors only — model content never raises)."""
         t0 = time.monotonic()
-        out = self._post("/chat/completions",
-                         self._payload(messages, tools, max_tokens, stop,
-                                       False),
-                         timeout=120)
+        try:
+            out = self._post("/chat/completions",
+                             self._payload(messages, tools, max_tokens, stop,
+                                           False),
+                             timeout=120)
+        except Exception as exc:
+            rec = _failed_call(exc)
+            if rec is None:
+                raise
+            # Declared-set miss: run the intended call, policy gate decides.
+            dt = time.monotonic() - t0
+            return {
+                "text": _house_json(*rec),
+                "tool_calls": [
+                    {"function": {"name": rec[0], "arguments": rec[1]}}],
+                "ttft": dt,
+                "decode_tps": 0.0,
+            }
         dt = time.monotonic() - t0
         msg = (out.get("choices") or [{}])[0].get("message", {})
         thought, text, calls = self._split_msg(msg)
@@ -199,35 +297,43 @@ class GroqCloud:
         """
         t0, first_at = time.monotonic(), None
         tcs: dict = {}
-        for line in self._stream(
+        try:
+            stream = self._stream(
                 "/chat/completions",
                 self._payload(messages, tools, max_tokens, stop, True),
-                timeout=300):
-            if not line or not line.startswith("data:"):
-                continue
-            data = line[5:].strip()
-            if data == "[DONE]":
-                break
-            try:
-                ev = json.loads(data)
-            except Exception:
-                continue
-            if first_at is None:
-                first_at = time.monotonic()
-            delta = (ev.get("choices") or [{}])[0].get("delta", {})
-            think = delta.get("reasoning_content") or delta.get("reasoning")
-            if think:
-                yield ("think", str(think))
-            if delta.get("content"):
-                yield ("text", str(delta["content"]))
-            for tc in delta.get("tool_calls") or []:
-                idx = tc.get("index", 0)
-                slot = tcs.setdefault(idx, {"name": "", "arguments": ""})
-                fn = tc.get("function") or {}
-                if fn.get("name"):
-                    slot["name"] = str(fn["name"])
-                if fn.get("arguments"):
-                    slot["arguments"] += str(fn["arguments"])
+                timeout=300)
+            for line in stream:
+                if not line or not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    ev = json.loads(data)
+                except Exception:
+                    continue
+                if first_at is None:
+                    first_at = time.monotonic()
+                delta = (ev.get("choices") or [{}])[0].get("delta", {})
+                think = (delta.get("reasoning_content")
+                         or delta.get("reasoning"))
+                if think:
+                    yield ("think", str(think))
+                if delta.get("content"):
+                    yield ("text", str(delta["content"]))
+                for tc in delta.get("tool_calls") or []:
+                    idx = tc.get("index", 0)
+                    slot = tcs.setdefault(idx, {"name": "", "arguments": ""})
+                    fn = tc.get("function") or {}
+                    if fn.get("name"):
+                        slot["name"] = str(fn["name"])
+                    if fn.get("arguments"):
+                        slot["arguments"] += str(fn["arguments"])
+        except Exception as exc:
+            rec = _failed_call(exc)
+            if rec is None:
+                raise
+            tcs = {0: {"name": rec[0], "arguments": rec[1]}}
         acc["ttft"] = (first_at - t0) if first_at else 0.0
         acc["decode_tps"] = 0.0
         ordered = [(v["name"], v["arguments"]) for _, v in sorted(tcs.items())

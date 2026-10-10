@@ -187,6 +187,11 @@ class SemanticRouter:
                 expanded.update(_ROUTE_DEPS.get(op, ()))
             if (observation or "").strip():
                 expanded.update(_ROUTE_FOLLOWUP)
+            # Backbone: the hands (read/write/list) plus the universal
+            # fallback (exec) are always visible (see route_tool_ops:
+            # a missing write strands fetch-then-write tasks in a fetch
+            # loop, and Groq 400s calls to undeclared tools).
+            expanded.update(("read", "write", "list", "exec"))
             ordered = [n for n in self._tool_names if n in expanded & set(ALLOWED_OPS)]
             return ordered or None
         except Exception:

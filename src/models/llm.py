@@ -193,6 +193,7 @@ class LlmConfig(BaseModel):
     # Select with backend="groq". Needs GROQ_API_KEY (env or .env).
     groq_model: str = "openai/gpt-oss-120b"  # tool-capable, 131K ctx
     groq_api_key: str = "auto"  # explicit key or "auto" (env/.env)
+    groq_reasoning_effort: str = "low"  # low/medium/high ("" = API default)
     # paged inference engine (real QwenRunner, no dummy). Disabled by default
     # so tests stay fast; enable in VoiceAgent/server for batching.
     use_paged: bool = False
@@ -283,6 +284,8 @@ class LlmModel:
                     model=getattr(self.config, "groq_model",
                                   "openai/gpt-oss-120b"),
                     api_key=getattr(self.config, "groq_api_key", "auto"),
+                    reasoning_effort=getattr(
+                        self.config, "groq_reasoning_effort", "low"),
                 )
                 return self._leg
             import torch

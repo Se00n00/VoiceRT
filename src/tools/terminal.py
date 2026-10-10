@@ -947,6 +947,12 @@ def route_tool_ops(text: str, observation: str = "") -> list[str] | None:
         expanded.update(_ROUTE_DEPS.get(op, ()))
     if (observation or "").strip():
         expanded.update(_ROUTE_FOLLOWUP)
+    # Backbone: the hands (read/write/list) plus the universal fallback
+    # (exec) are always visible. A task needing a second step (fetch THEN
+    # write) must see write in step one, or the model loops the first
+    # tool and gives up (measured). Exec stays because the model reaches
+    # for shell constantly — and Groq 400s calls to undeclared tools.
+    expanded.update(("read", "write", "list", "exec"))
     ops = sorted(expanded & set(ALLOWED_OPS))
     return ops or None
 

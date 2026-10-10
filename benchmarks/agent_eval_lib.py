@@ -15,7 +15,7 @@ CONFIRM_LOG = "auto-approve (deny verdicts still block)"
 
 
 async def warm_agent(model="Qwen/Qwen3-0.6B", backend="qwen",
-                     sessions_dir=None):
+                     sessions_dir=None, max_tokens=None):
     """Build VoiceAgent with warmed LLM leg, TTS disabled."""
     from src.main import VoiceAgent, VoiceAgentConfig
     from src.models.llm import LlmConfig, LlmModel, assert_ready_leg
@@ -24,27 +24,79 @@ async def warm_agent(model="Qwen/Qwen3-0.6B", backend="qwen",
     cfg = VoiceAgentConfig(
         **({"sessions_dir": sessions_dir} if sessions_dir else {}))
     agent = VoiceAgent(cfg)
-    agent.llm = LlmModel(LlmConfig(model=model, backend=backend))
+    leg_kw = {} if max_tokens is None else {"max_tokens": int(max_tokens)}
+    if backend in ("groq", "gemini") and model != "Qwen/Qwen3-0.6B":
+        # Cloud legs ignore `model` (qwen HF id): --model names their model.
+        key = "groq_model" if backend == "groq" else "gemini_model"
+        agent.llm = LlmModel(LlmConfig(backend=backend, **{key: model},
+                                       **leg_kw))
+    else:
+        agent.llm = LlmModel(LlmConfig(model=model, backend=backend,
+                                       **leg_kw))
     print(f"warming LLM {model} [{backend}] ...", flush=True)
     await agent.llm.warm()
     # the agent loop runs through chat_model: rewrap so it sees this leg
     # (VoiceAgent rebuilds the graph every turn, so the rewrap takes effect).
+    # Keep the MCP-fs mapping flag: without it terminal read/write/edit die
+    # on the tool-name collision when extras are attached.
     from src.agent.chat_model import LocalChatModel
 
-    agent.chat_model = LocalChatModel(llm=agent.llm)
+    agent.chat_model = LocalChatModel(
+        llm=agent.llm, use_mcp_fs=bool(agent._extra_tools))
     agent.tts = None
     print(f"agent ready (llm-only) on {assert_ready_leg(agent.llm)}.", flush=True)
     return agent
 
 
-def make_workdir(files=None):
-    """Fresh temp cwd with optional seed files {relpath: content}."""
+def anchor_workdir(agent, workdir):
+    """Point one task's file ops at its temp workdir.
+
+    Two channels, both rooted per task (the graph rebuilds every turn,
+    so swaps take effect on the next turn):
+    - MCP servers snapshot os.environ at spawn, so re-spawn the extras
+      after setting VOICE_WORKDIR (seconds per task; the LLM stays warm).
+    - the shell backend is rooted at construction: swap in a fresh
+      LocalShellBackend rooted at the workdir (cheap object, no spawn).
+    """
+    import os
+
+    from src.agent.mcp.client import load_extra_tools
+
+    os.environ["VOICE_WORKDIR"] = workdir
+    try:
+        from deepagents.backends import LocalShellBackend
+
+        agent.backend = LocalShellBackend(root_dir=workdir, timeout=30)
+    except Exception:
+        pass
+    try:
+        agent._mcp_client, agent._extra_tools = load_extra_tools()
+    except Exception:
+        pass
+    agent.chat_model.use_mcp_fs = bool(agent._extra_tools)
+
+
+def make_workdir(files=None, attachments=None, src_root="."):
+    """Fresh temp cwd with seed files {relpath: content} + attachments.
+
+    Attachments are repo-relative source paths, copied binary-safe
+    (GAIA ships pdf/xlsx/mp3/png); missing ones are skipped aloud.
+    """
+    import shutil
+
     d = tempfile.mkdtemp(prefix="eval-task-")
     for rel, content in (files or {}).items():
         full = os.path.join(d, rel)
         os.makedirs(os.path.dirname(full) or d, exist_ok=True)
         with open(full, "w", encoding="utf-8") as f:
             f.write(content)
+    for src in attachments or []:
+        src_full = os.path.join(src_root, src)
+        if not os.path.isfile(src_full):
+            print(f"attachment missing (skipped): {src}", flush=True)
+            continue
+        dst = os.path.join(d, os.path.basename(src))
+        shutil.copyfile(src_full, dst)
     return d
 
 

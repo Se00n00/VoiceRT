@@ -50,7 +50,6 @@ sessions/
 
 # secrets (API keys etc. — never commit)
 .env
-.env.*
 
 # local per-session conversation dotfiles (<store_dir>, default .voicert/)
 .voicert/
