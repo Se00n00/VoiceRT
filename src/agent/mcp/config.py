@@ -12,6 +12,8 @@ import os
 import sys
 from pathlib import Path
 
+import yaml
+
 __all__ = [
     "CONFIG_ENV_VAR",
     "default_config_path",
@@ -95,8 +97,6 @@ def load_connections(config_path=None) -> tuple:
     path = resolve_config_path(config_path)
     if path is None:
         return {"voice-tools": server_connection()}, False
-    import yaml
-
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)

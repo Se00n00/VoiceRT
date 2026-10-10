@@ -188,11 +188,11 @@ def release_tenant_lock() -> None:
 
 
 def sidecar_gpu_estimate(backend: str, config=None) -> tuple[bool, float]:
-    """(needs_gpu, vram_mb) for the llama-server sidecar backend.
+    """(needs_gpu, vram_mb) for the sidecar-shaped backends.
 
-    Only bonsai remains: it parks ``-ngl`` transformer blocks in VRAM, so a nonzero layer
-    count prices VRAM (weights share + context reserve); ``ngl=0`` is
-    pure CPU and needs none. Estimates are conservative by design — the
+    Only bonsai parks anything in VRAM (``-ngl`` layers); cloud legs
+    (``gemini``, ``groq``) and everything else return ``(False, 0.0)`` via the
+    branch below. Estimates are conservative by design — the
     sidecar's own checks stay authoritative, this only stops a blind
     claim on a card that has no room.
     """

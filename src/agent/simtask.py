@@ -19,15 +19,23 @@ import re
 import tempfile
 import time
 
+from src.agent.events import AgentEvent
+from src.models.llm import split_thinking
+from src.prompts.sim import (  # noqa: F401  (single home, re-exported)
+    FINAL_COMPOSE_TEMPLATE,
+    MAX_SUBTASKS,
+    PLAN_PROMPT,
+    SUBTASK_ENVELOPE_TEMPLATE,
+    SUBTASK_HEAD_TEMPLATE,
+    SYSTEM_SLIVER,
+)
+from src.prompts.terminal import TERMINAL_PREAMBLE
+from src.tools.terminal import TERMINAL_TOOLS, tools_for_request
+
 __all__ = ["SimAgent", "parse_plan", "SYSTEM_SLIVER",
-           "build_subtask_preamble", "MAX_SUBTASKS"]
-
-MAX_SUBTASKS = 6  # mirrors max_agent_steps: bounded by construction
-
-SYSTEM_SLIVER = (
-    "You are a focused worker. Parent goal: %s. "
-    "Do exactly the assigned subtask: use the available tools when they "
-    "help, then reply with the result only when done.")
+           "build_subtask_preamble", "MAX_SUBTASKS", "PLAN_PROMPT",
+           "FINAL_COMPOSE_TEMPLATE", "SUBTASK_HEAD_TEMPLATE",
+           "SUBTASK_ENVELOPE_TEMPLATE"]
 
 def build_subtask_preamble(i: int, n: int, task: str, parent_goal: str,
                              allowed_ops: list, context_dump: str,
@@ -36,27 +44,10 @@ def build_subtask_preamble(i: int, n: int, task: str, parent_goal: str,
     Context Dump). The ops catalog + parser contract still come from
     ``base_preamble`` unchanged — this header only frames the subtask."""
     ops = ", ".join(allowed_ops) if allowed_ops else "all"
-    head = (
-        "Goal: subtask %d of %d: %s.\n"
-        "Parent goal: %s. Complete ONLY this subtask.\n"
-        "\nReturn Format: when done, reply with one short paragraph: "
-        "what you did + file paths/values produced. No envelopes, "
-        "no commentary.\n"
-        "\nWarnings: mutating commands need an explicit user yes; "
-        "destructive commands (rm -rf /, mkfs, fork-bombs, dd to devices) "
-        "are blocked — never emit them. Use only these ops: %s. "
-        "Do NOT plan further subtasks (depth 1 only) — execute flat.\n"
-        "\n--\n"
-        "\nContext Dump (the only parent context you get):\n%s"
-        % (i, n, task, parent_goal[:500], ops,
-           (context_dump or "(none)")[:1500]))
+    head = SUBTASK_HEAD_TEMPLATE % (
+        i, n, task, parent_goal[:500], ops,
+        (context_dump or "(none)")[:1500])
     return head + "\n\n" + base_preamble
-
-PLAN_PROMPT = (
-    "Break this request into numbered subtasks (one per line, `1. ...`). "
-    "Reply with ONLY the numbered list, no tools, no preamble. "
-    "If it needs fewer than 2 subtasks, reply with exactly one line. "
-    "Request: %s")
 
 _PLAN_RE = re.compile(r"^\s*(\d+)[.)]\s*(.+?)\s*$")
 
@@ -120,8 +111,6 @@ class SimAgent:
 
         Yields the same term/* events as ``run_text`` (plus sys notes).
         """
-        from src.agent.events import AgentEvent
-
         agent = self.agent
         # Phase 0 — plan (one cheap tool-free call).
         try:
@@ -135,8 +124,6 @@ class SimAgent:
                                    [:200]})
             return
         try:
-            from src.models.llm import split_thinking
-
             _, plan_text = split_thinking(plan_raw)
         except Exception:
             plan_text = plan_raw
@@ -166,8 +153,6 @@ class SimAgent:
                  "results": [], "at": time.time(), "status": "running"}
         self._save_frame(sid, frame)
         try:
-            from src.tools.terminal import TERMINAL_TOOLS, tools_for_request
-
             by_name = {t["name"]: t for t in TERMINAL_TOOLS}
             for i, task in enumerate(subtasks):
                 scratch = "%s:sub%d" % (sid, i)
@@ -212,8 +197,7 @@ class SimAgent:
                 result = reply or ("failed: %s" % error if error else "empty")
                 frame["results"].append({"task": task, "result": result})
                 self._save_frame(sid, frame)
-                envelope = ("▸ subtask %d/%d [%s]: %s"
-                            % (i + 1, len(subtasks), task, result))
+                envelope = SUBTASK_ENVELOPE_TEMPLATE % (i + 1, len(subtasks), task, result)
                 try:
                     agent.sessions.append(sid, "assistant", envelope)
                 except Exception:
@@ -222,9 +206,7 @@ class SimAgent:
                                  data={"message": envelope[:300]})
             frame["status"] = "done"
             self._save_frame(sid, frame)
-            final_q = ("Answer the original request from these subtask "
-                       "results (no more tools needed unless missing "
-                       "something): %s" % text)
+            final_q = FINAL_COMPOSE_TEMPLATE % text
             async for ev in agent.run_text(final_q, session_id=sid, cwd=cwd,
                                            confirm_fn=confirm_fn):
                 yield ev
@@ -251,8 +233,6 @@ class SimAgent:
     @staticmethod
     def _base_preamble() -> str:
         try:
-            from src.agent.prompts import TERMINAL_PREAMBLE
-
             return TERMINAL_PREAMBLE
         except Exception:
             return ""

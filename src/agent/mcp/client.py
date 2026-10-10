@@ -14,6 +14,8 @@ gets a fresh loop when the caller's thread already runs one).
 import asyncio
 import concurrent.futures
 
+from langchain_mcp_adapters.client import MultiServerMCPClient
+
 from src.agent.mcp.config import load_connections
 
 __all__ = ["load_extra_tools"]
@@ -30,8 +32,6 @@ def _await_sync(factory, timeout_s: float = 180.0):
 
 
 def load_extra_tools(config_path=None, timeout_s: float = 180.0):
-    from langchain_mcp_adapters.client import MultiServerMCPClient
-
     connections, prefix = load_connections(config_path)
     client = MultiServerMCPClient(connections, tool_name_prefix=prefix)
 

@@ -12,12 +12,10 @@ import re
 import tempfile
 import time
 
-__all__ = ["load_facts", "upsert_fact", "format_block", "parse_line",
-           "ANCHOR_LINE"]
+from src.prompts.memory import ANCHOR_LINE, FACTS_ANCHOR_LINE, FACTS_HEADER  # noqa: F401  (single home, re-exported)
 
-ANCHOR_LINE = ("Dated user facts below override older context on conflict; "
-               "newer entries win.")
-FACTS_HEADER = "# facts — user truths (auto-curated, human-editable)\n"
+__all__ = ["load_facts", "upsert_fact", "format_block", "parse_line",
+           "ANCHOR_LINE", "FACTS_HEADER", "FACTS_ANCHOR_LINE"]
 
 
 def parse_line(line: str):

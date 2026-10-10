@@ -19,8 +19,22 @@ present. TinyFish calls respect the free-tier quota (30/min + 500/hr)
 and a 15-min result cache, both file-backed so they hold across the
 per-call MCP server processes.
 """
+import base64
+import hashlib as _hl
 import html
+import httpx
+import json as _json
+import os as _os
 import re
+import subprocess
+import sys
+import time as _time
+import urllib.parse
+
+try:
+    import fcntl as _fcntl
+except ImportError:  # no fcntl on Windows; locked paths fail open
+    _fcntl = None
 
 __all__ = [
     "fetch",
@@ -37,8 +51,6 @@ def _load_dotenv() -> None:
     exported vars and CI secrets always override the file. Best-effort:
     a missing/unreadable file is normal (key-less DDG fallback).
     """
-    import os as _os
-
     if _os.environ.get("VOICE_DOTENV_LOADED"):
         return
     try:
@@ -75,10 +87,6 @@ def python_exec(code: str, timeout: int = 30) -> str:
     is base64-piped to ``python3 -`` so arbitrary payloads need no shell
     quoting. One-shot per call with a process kill on timeout.
     """
-    import base64
-    import subprocess
-    import sys
-
     src = str(code or "")
     if not src.strip():
         return "error: empty code"
@@ -116,7 +124,6 @@ def _strip_html(page: str) -> str:
 
 def fetch(url: str, max_chars: int = 6000, timeout: int = 20) -> str:
     """Fetch an http(s) URL and return its text. Never raises."""
-    import httpx
 
     url = str(url or "").strip()
     if not re.match(r"^https?://", url, re.IGNORECASE):
@@ -156,7 +163,6 @@ _DDG_TAG_RE = re.compile(r"<[^>]+>")
 
 def _ddg_link(raw: str) -> str:
     """Unwrap DDG redirect links (//duckduckgo.com/l/?uddg=...) to the URL."""
-    import urllib.parse
 
     raw = html.unescape(str(raw or "").strip())
     try:
@@ -171,7 +177,6 @@ def _ddg_link(raw: str) -> str:
 
 def _ddg_search(query: str, n: int, timeout: int) -> str:
     """Web search (DuckDuckGo HTML endpoint, no keys). Never raises."""
-    import httpx
 
     try:
         r = httpx.get(_DDG_URL, params={"q": query}, timeout=timeout,
@@ -220,13 +225,11 @@ _SEARCH_CACHE_CAP = 200
 
 def _tinyfish_key() -> str:
     """API key from the environment only. Never logged, never stored."""
-    import os as _os
 
     return (_os.environ.get("TINYFISH_API_KEY", "") or "").strip()
 
 
 def _search_state_path() -> str:
-    import os as _os
 
     override = (_os.environ.get("VOICE_SEARCH_STATE", "") or "").strip()
     if override:
@@ -238,7 +241,6 @@ def _search_state_path() -> str:
 
 def _load_search_state(path: str) -> dict:
     try:
-        import json as _json
 
         with open(path, "r", encoding="utf-8") as f:
             st = _json.load(f)
@@ -256,9 +258,7 @@ def _load_search_state(path: str) -> dict:
 
 def _save_search_state(path: str, state: dict) -> None:
     try:
-        import json as _json
-        import os as _os
-
+    
         _os.makedirs(_os.path.dirname(path) or ".", exist_ok=True)
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -274,23 +274,19 @@ def _with_search_state(fn):
     On any failure (missing fcntl, bad disk) run unlocked on a scratch
     state and skip the save — fail open, never raise.
     """
-    import os as _os
 
     path = _search_state_path()
     try:
         _os.makedirs(_os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "a+", encoding="utf-8") as f:
             try:
-                import fcntl as _fcntl
-
                 _fcntl.flock(f.fileno(), _fcntl.LOCK_EX)
                 locked = True
             except Exception:
                 locked = False
             try:
                 f.seek(0)
-                import json as _json
-
+        
                 try:
                     raw = _json.load(f)
                 except Exception:
@@ -320,13 +316,11 @@ def _with_search_state(fn):
 
 
 def _cache_key(provider: str, query: str, n: int) -> str:
-    import hashlib as _hl
 
     return _hl.sha256(f"{provider}|{query}|{n}".encode("utf-8")).hexdigest()[:32]
 
 
 def _cache_get(provider: str, query: str, n: int):
-    import time as _time
 
     def _get(state):
         now = _time.time()
@@ -342,7 +336,6 @@ def _cache_get(provider: str, query: str, n: int):
 
 
 def _cache_put(provider: str, query: str, n: int, result: str) -> None:
-    import time as _time
 
     def _put(state):
         cache = state.setdefault("cache", {})
@@ -362,7 +355,6 @@ def _quota_check():
 
     Returns ``(allowed, retry_in_s)``. State failures fail open.
     """
-    import time as _time
 
     def _check(state):
         now = _time.time()
@@ -383,7 +375,6 @@ def _quota_check():
 
 
 def _quota_record() -> None:
-    import time as _time
 
     def _rec(state):
         state.setdefault("calls", []).append(_time.time())
@@ -400,7 +391,6 @@ def _tinyfish_search(query: str, n: int, timeout: int) -> str:
     Auth: ``X-API-Key`` from ``TINYFISH_API_KEY`` (env only). Consumes
     one quota unit per attempt; results are cached (see above).
     """
-    import httpx
 
     key = _tinyfish_key()
     if not key:
@@ -463,7 +453,6 @@ def web_search(query: str, count: int = 5, timeout: int = 15) -> str:
     Results are cached per provider/query (TTL 15 min); TinyFish calls
     additionally respect the 30/min + 500/hr free-tier quota.
     """
-    import os as _os
 
     q = str(query or "").strip()
     if not q:

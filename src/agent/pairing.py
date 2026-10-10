@@ -17,10 +17,13 @@ Store (gitignored): sessions/tg/pairing.json::
 Key statuses: new -> started (chat bound) -> named -> done | failed.
 Keys are single-use (one chat) and expire after PAIRING_TTL_S (30 min).
 """
+import json
 import os
 import re
 import secrets
 import time
+
+from src.agent import contacts
 
 __all__ = [
     "PAIRING_TTL_S",
@@ -60,8 +63,6 @@ def _creator_file() -> str:
 
 def _load() -> dict:
     try:
-        import json
-
         with open(_pairing_file()) as fh:
             data = json.load(fh)
             if isinstance(data, dict):
@@ -75,8 +76,6 @@ def _load() -> dict:
 
 def _save(data: dict) -> bool:
     try:
-        import json
-
         os.makedirs(_tg_dir(), exist_ok=True)
         tmp = _pairing_file() + ".tmp"
         with open(tmp, "w") as fh:
@@ -208,8 +207,6 @@ def finalize_pairing(key: str, bot_token: str
     under agents[agent_id]. Never raises, never logs the token.
     """
     try:
-        from src.agent import contacts
-
         data = _load()
         rec = data.get("keys", {}).get(str(key or ""))
         if not rec or rec.get("status") not in ("started", "named"):
@@ -252,8 +249,6 @@ def creator_token() -> str:
     if env:
         return env
     try:
-        import json
-
         with open(_creator_file()) as fh:
             return str(json.load(fh).get("token", "") or "").strip()
     except Exception:
@@ -262,8 +257,6 @@ def creator_token() -> str:
 
 def creator_info() -> dict:
     try:
-        import json
-
         with open(_creator_file()) as fh:
             data = json.load(fh)
             return data if isinstance(data, dict) else {}
@@ -274,8 +267,6 @@ def creator_info() -> dict:
 def set_creator_token(token: str) -> tuple[bool, str]:
     """Validate via live getMe, persist (no env needed). Never raises."""
     try:
-        from src.agent import contacts
-
         token = str(token or "").strip()
         if not token or ":" not in token:
             return False, "that doesn't look like a bot token (want 123:ABC…)"
@@ -284,8 +275,6 @@ def set_creator_token(token: str) -> tuple[bool, str]:
         if not ok:
             return False, str(res.get("description", "getMe failed"))[:200]
         username = str(res.get("username", "") or "")
-        import json
-
         os.makedirs(_tg_dir(), exist_ok=True)
         with open(_creator_file(), "w") as fh:
             json.dump({"token": token, "username": username}, fh)

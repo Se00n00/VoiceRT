@@ -37,7 +37,17 @@ import os
 import re
 from pathlib import Path
 
+import yaml
 from pydantic import BaseModel, ConfigDict, Field
+
+from src.models.llm import LlmConfig
+from src.prompts.delegate import (  # noqa: F401  (single home, re-exported)
+    BOOLEAN_FEWSHOT,
+    BOOLEAN_MAX_TOKENS,
+    BOOLEAN_SYSTEM,
+    DELEGATE_TOOL,
+    DELEGATE_TOOL_NAME,
+)
 
 __all__ = [
     "BOOLEAN_FEWSHOT",
@@ -63,8 +73,6 @@ __all__ = [
 ]
 
 CONFIG_ENV_VAR = "VOICE_DELEGATE_CONFIG"
-
-DELEGATE_TOOL_NAME = "delegate"
 
 
 def repo_root() -> Path:
@@ -131,8 +139,6 @@ def load_config(explicit: str | None = None) -> DelegateConfig:
     data: dict = {}
     if raw.strip():
         try:
-            import yaml
-
             data = yaml.safe_load(raw) or {}
         except Exception:
             # JSON is a valid subset of YAML and needs no dependency; a
@@ -183,8 +189,6 @@ def front_llm_config(cfg: DelegateConfig):
     small token cap. A routing decision is one word plus a task string, so
     anything that spends tokens on deliberation costs the user latency.
     """
-    from src.models.llm import LlmConfig
-
     f = cfg.front or {}
     device = str(f.get("device") or "").strip()
     if not device:
@@ -220,47 +224,6 @@ def worker_llm_overrides(cfg: DelegateConfig) -> dict:
 
 
 # --------------------------------------------------------------------------
-# the one tool the front model gets
-# --------------------------------------------------------------------------
-# RETIRED — kept only so external callers and the historical tests do not
-# break. The front leg is no longer given this tool; it gets no schema at
-# all (see the module docstring and :func:`decide_escalate`). The boolean
-# replaced it because a 0.6B could not fill the envelope in: 0/8 valid
-# calls on real task prompts.
-#
-# House flat shape ({"name", ...}), like TERMINAL_TOOLS. Sidecar legs convert
-# to OpenAI form themselves; the fused leg does it in LlmModel.encode.
-DELEGATE_TOOL = {
-    "name": DELEGATE_TOOL_NAME,
-    "description": (
-        "Hand a task to the worker agent and let it do the work. The worker "
-        "has real tools: a shell, file read/write/edit, code search, a web "
-        "fetch and search, Python, and its own subagents. Call this for "
-        "ANY action on this machine or the web - reading or changing files, "
-        "running commands, looking something up in the repo, installing, "
-        "debugging, checking status. Reply with plain text and do NOT call "
-        "this for small talk, opinions, or questions you can answer from "
-        "your own knowledge. Never describe the work as done: either call "
-        "this tool, or say nothing happened."
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "task": {
-                "type": "string",
-                "description": (
-                    "The request in full, as the worker should carry it out. "
-                    "Carry over every detail the user gave: file paths, "
-                    "names, constraints, and what 'done' should look like."
-                ),
-            }
-        },
-        "required": ["task"],
-    },
-}
-
-
-# --------------------------------------------------------------------------
 # parsing the front model's output
 # --------------------------------------------------------------------------
 _THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE)
@@ -283,50 +246,9 @@ class Route(BaseModel):
     forced: bool = False
 
 
-# --------------------------------------------------------------------------
-# the boolean escalation contract
-# --------------------------------------------------------------------------
-# The front model's ONLY job is to raise a flag. It does not write the task
-# string, does not call a tool, and does not summarise anything.
-#
-# This replaced a single-tool `delegate` call, which measured 0/8 on real
-# task prompts: the 0.6B would answer in prose ("Sure, I renamed it") and
-# never emit the envelope. Asking it to *decide* instead of to *construct*
-# is the difference, because the worker already receives the raw user text
-# (see VoiceAgent._agent_invoke), so the flag carries no payload and there
-# is nothing to paraphrase and get wrong.
-#
-# The bias is deliberately toward YES. Measured on 19 task + 18 chat
-# prompts: 19/19 tasks escalate, 3 chat false positives. That asymmetry is
-# the design: a false positive costs one slow 27B turn on a message the
-# front model can still answer, while a false negative silently drops a
-# task the user asked for.
-BOOLEAN_SYSTEM = (
-    "Answer YES only if the user wants you to actually DO something: run a "
-    "command, read or change a file, install, search, look up, fetch, or "
-    "operate on their computer. Answer NO for greetings, opinions, jokes, "
-    "thanks, general knowledge, and questions about code or concepts you "
-    "can explain from memory.")
-
-# Few-shot pairs, not decoration: the same prompt without them answered
-# YES to 100% of chit-chat and NO to half the real tasks. These five were
-# the difference between 22/37 and 34/37.
-BOOLEAN_FEWSHOT = [
-    {"role": "user", "content": "USER: list the files in the current directory\nANSWER:"},
-    {"role": "assistant", "content": "YES"},
-    {"role": "user", "content": "USER: hi\nANSWER:"},
-    {"role": "assistant", "content": "NO"},
-    {"role": "user", "content": "USER: why is my code so slow\nANSWER:"},
-    {"role": "assistant", "content": "YES"},
-    {"role": "user", "content": "USER: ok cool\nANSWER:"},
-    {"role": "assistant", "content": "NO"},
-    {"role": "user", "content": "USER: summarize this article\nANSWER:"},
-    {"role": "assistant", "content": "YES"},
-]
-
-# 6 tokens is the whole budget: the answer is one word, so anything longer
-# is the model ignoring the format rather than thinking.
-BOOLEAN_MAX_TOKENS = 6
+# Boolean escalation contract lives in src.prompts.delegate (single home;
+# re-exported at the top of this module). Rationale stays in the module
+# docstring and in that prompt module.
 
 
 def boolean_messages(text: str, history: list | None = None) -> list:

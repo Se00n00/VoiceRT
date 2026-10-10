@@ -4,13 +4,14 @@ import re
 
 from pydantic import BaseModel, ConfigDict, Field
 
-SYSTEM_PROMPT = "You are a voice assistant. Reply in one short spoken sentence."
+from src.prompts.base import SYSTEM_PROMPT  # noqa: F401  (re-exported for back-compat)
 
-# Backends served by a llama-server sidecar process instead of in-process
-# weights. They own their own inference, so they need no local tokenizer,
-# hold no VRAM we manage, and are incompatible with the paged GPU engine.
-# Single source of truth: adding a sidecar backend means adding it HERE.
-SIDECAR_BACKENDS = ("bonsai",)
+# Backends that own their inference instead of in-process weights.
+# They need no local tokenizer, hold no VRAM we manage, and are
+# incompatible with the paged GPU engine. Single source of truth:
+# adding such a backend means adding it HERE ("bonsai" = local
+# llama-server sidecar; "gemini"/"groq" = cloud APIs).
+SIDECAR_BACKENDS = ("bonsai", "gemini", "groq")
 
 _THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE)
 _THINK_OPEN_RE = re.compile(r"<think\s*>", re.IGNORECASE)
@@ -153,6 +154,13 @@ class LlmConfig(BaseModel):
     #  - "bonsai" = Ternary Bonsai 2 27B via Prism-fork llama.cpp sidecar
     #    (-ngl auto from free VRAM, 16K ctx) — the WORKER brain for the
     #    full tool harness; STT/TTS keep the GPU, the rest offloads.
+    #  - "gemini" = Google Gemini via cloud API (no local weights, no
+    #    VRAM, no server binary) — the agentic leg when no usable GPU or
+    #    sidecar exists. Needs GEMINI_API_KEY. Selects GeminiCloud
+    #    (src/models/gemini.py), a sidecar-shaped leg (is_sidecar).
+    #  - "groq" = Groq Cloud via OpenAI-compatible API (no local weights,
+    #    no VRAM, no server binary). Needs GROQ_API_KEY. Selects GroqCloud
+    #    (src/models/groq.py), a sidecar-shaped leg (is_sidecar).
     backend: str = "qwen"
     max_tokens: int = 48
     max_seq: int = 8192
@@ -177,6 +185,14 @@ class LlmConfig(BaseModel):
     # turn. Agentic scores were measured thinking-on; raise or set None
     # when quality matters more than latency.
     bonsai_bin: str = "auto"  # explicit Prism-fork llama-server or "auto"
+    # Google Gemini cloud leg (no local weights/VRAM/server).
+    # Select with backend="gemini". Needs GEMINI_API_KEY (env or .env).
+    gemini_model: str = "gemini-3.8-flash"  # free-tier flash model
+    gemini_api_key: str = "auto"  # explicit key or "auto" (env/.env)
+    # Groq cloud leg (OpenAI-compatible API, no local weights/VRAM/server).
+    # Select with backend="groq". Needs GROQ_API_KEY (env or .env).
+    groq_model: str = "openai/gpt-oss-120b"  # tool-capable, 131K ctx
+    groq_api_key: str = "auto"  # explicit key or "auto" (env/.env)
     # paged inference engine (real QwenRunner, no dummy). Disabled by default
     # so tests stay fast; enable in VoiceAgent/server for batching.
     use_paged: bool = False
@@ -247,6 +263,26 @@ class LlmModel:
                     thinking_budget=getattr(self.config, "bonsai_thinking",
                                             None),
                     server_bin=getattr(self.config, "bonsai_bin", "auto"),
+                )
+                return self._leg
+            if backend == "gemini":
+                # Cloud leg (Google AI Studio API, key from env/.env).
+                from src.models.gemini import GeminiCloud
+
+                self._leg = GeminiCloud(
+                    model=getattr(self.config, "gemini_model",
+                                  "gemini-3.8-flash"),
+                    api_key=getattr(self.config, "gemini_api_key", "auto"),
+                )
+                return self._leg
+            if backend == "groq":
+                # Cloud leg (Groq OpenAI-compatible API, key from env/.env).
+                from src.models.groq import GroqCloud
+
+                self._leg = GroqCloud(
+                    model=getattr(self.config, "groq_model",
+                                  "openai/gpt-oss-120b"),
+                    api_key=getattr(self.config, "groq_api_key", "auto"),
                 )
                 return self._leg
             import torch
@@ -376,17 +412,8 @@ class LlmModel:
         stays 48; callers pass a larger per-step limit to ``generate``
         (e.g. 128) so JSON fits.
         """
-        # Inlined (was src.tools.schema.BROWSER_PREAMBLE): the browser
-        # schema module was removed with the extension; the prompt text
-        # stays here so this helper keeps working stand-alone.
-        _BROWSER_PREAMBLE = (
-            "You control a browser. Reply with EITHER plain chat text "
-            "OR exactly one JSON action. No other text when acting. "
-            'Ops: click {action,ref} | type {action,ref,text} | '
-            'scroll {action,ref,direction} | select {action,ref,text} | '
-            'navigate {action,text:url} | read {action,ref?} | '
-            'done {action,reply}. Use refs from the page list only.'
-        )
+        # Prompt text lives in src.prompts.terminal (single home).
+        from src.prompts.terminal import BROWSER_PREAMBLE as _BROWSER_PREAMBLE
 
         system = self.config.system_prompt + " " + _BROWSER_PREAMBLE
         msgs = [{"role": "system", "content": system}]
@@ -408,7 +435,7 @@ class LlmModel:
         src/tools/terminal.py). Keep bodies small so prompt+max_tokens
         fits the paged KV block pool.
         """
-        from src.agent.prompts import TERMINAL_PREAMBLE
+        from src.prompts.terminal import TERMINAL_PREAMBLE
 
         preamble = getattr(self, "terminal_preamble", None) or TERMINAL_PREAMBLE
         system = self.config.system_prompt + " " + preamble

@@ -31,7 +31,7 @@ from aiortc import MediaStreamTrack, RTCPeerConnection, RTCSessionDescription
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
-from ..state import get_agent, note_turn_end, note_turn_start, qwen_leg
+from ..state import console_emit, get_agent, note_turn_end, note_turn_start, qwen_leg
 
 router = APIRouter()
 
@@ -142,6 +142,8 @@ class TalkCall:
             pass
 
     def set_state(self, s: str) -> None:
+        if self.state != s:
+            console_emit("talk", "state", s, self.sid)
         self.state = s
         self.send_dc({"type": "state", "state": s})
 
@@ -199,6 +201,7 @@ class TalkCall:
                 return
             self.send_dc({"type": "transcript", "role": "user", "text": text})
             self.store_turn(agent, "user", text)
+            console_emit("talk", "user", text, self.sid)
             llm = qwen_leg(agent)
             if llm is None:
                 return
@@ -218,6 +221,7 @@ class TalkCall:
                 return
             self.store_turn(agent, "agent", reply)
             self.send_dc({"type": "transcript", "role": "agent", "text": reply})
+            console_emit("talk", "agent", reply, self.sid)
             self.set_state("speaking")
             tts = getattr(agent, "tts", None)
             if tts is None:
@@ -265,6 +269,7 @@ class TalkCall:
                     await self.cancel_pipeline()
                     self.outbound.drain()
                     self.send_dc({"type": "barge-in"})
+                    console_emit("talk", "barge-in", "", self.sid)
                     self.set_state("listening")
             else:
                 self.barge_s = 0.0
@@ -302,6 +307,7 @@ class TalkCall:
         if self.done:
             return
         self.done = True
+        console_emit("talk", "hangup", "", self.sid)
         await self.cancel_pipeline()
         if self.reader is not None and not self.reader.done():
             self.reader.cancel()
@@ -405,4 +411,5 @@ async def talk_offer(payload: dict):
         return JSONResponse(status_code=400, content={"error": f"webrtc failed: {exc}"[:200]})
     _active_call["call"] = call
     call.set_state("listening")
+    console_emit("talk", "ring", "", sid)
     return {"sdp": pc.localDescription.sdp, "sid": sid}

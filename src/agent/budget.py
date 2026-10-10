@@ -20,6 +20,7 @@ Budget shape (16K reference — see README "Context Engineering")::
 Coherence rule: step floor >= think cap + min answer. A think cap above
 the floor truncates mid-thought — decorative, not enforced.
 """
+import json
 import urllib.request
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -109,8 +110,6 @@ def count_messages(messages) -> int:
     strings; tool-call args count too (they consume context as JSON).
     Single estimate call over the joined text.
     """
-    import json as _json
-
     parts: list[str] = []
     for m in messages or []:
         try:
@@ -119,7 +118,7 @@ def count_messages(messages) -> int:
             elif isinstance(m, dict):
                 parts.append(str(m.get("content", "") or ""))
                 for tc in m.get("tool_calls", None) or []:
-                    parts.append(_json.dumps(tc, default=str))
+                    parts.append(json.dumps(tc, default=str))
             elif isinstance(m, (list, tuple)) and len(m) == 2:
                 parts.append(str(m[1]))
             else:
@@ -135,7 +134,7 @@ def count_messages(messages) -> int:
                 elif content:
                     parts.append(str(content))
                 for tc in getattr(m, "tool_calls", None) or []:
-                    parts.append(_json.dumps(
+                    parts.append(json.dumps(
                         tc if isinstance(tc, dict) else getattr(
                             tc, "args", tc), default=str))
         except Exception:
@@ -148,8 +147,6 @@ _tok_cache: dict = {}
 
 def tokenize_count(base_url: str, text: str, timeout: float = 10.0):
     """Exact count via llama-server /tokenize. None on any failure."""
-    import json
-
     try:
         req = urllib.request.Request(
             base_url.rstrip("/") + "/tokenize",

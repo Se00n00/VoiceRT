@@ -3,8 +3,8 @@
 :class:`SemanticRouter` embeds the request once with BAAI/bge-small-en-v1.5
 (plain transformers, CLS pooling, CPU by default — milliseconds per turn,
 zero VRAM impact) and returns the top-k ops by cosine similarity.
-:class:`InjectToolMiddleware` is the pluggable hook: add it to the
-deepagents middleware list and it hands that shortlist to
+:class:`src.agent.middleware.InjectToolMiddleware` is the pluggable hook:
+add it to the deepagents middleware list and it hands that shortlist to
 :class:`src.agent.chat_model.LocalChatModel` for the current model call
 only (a ContextVar, always reset). Anything unresolved — model missing,
 offline, empty scores — returns None and the keyword router stays in
@@ -16,14 +16,21 @@ text must not perturb what the model reads).
 """
 import threading
 from contextvars import ContextVar
-from typing import Any
 
-from langchain.agents.middleware import AgentMiddleware
+import torch
+import torch.nn.functional as _F
+from transformers import AutoModel, AutoTokenizer
+
+from src.tools.terminal import (
+    _ROUTE_DEPS,
+    _ROUTE_FOLLOWUP,
+    ALLOWED_OPS,
+    TERMINAL_TOOLS,
+)
 
 __all__ = [
     "ROUTING_BLURBS",
     "ROUTER_MODEL_ID",
-    "InjectToolMiddleware",
     "SemanticRouter",
     "current_ops",
 ]
@@ -82,10 +89,6 @@ class SemanticRouter:
             if self._model is not None:
                 return True
             try:
-                from transformers import AutoModel, AutoTokenizer
-
-                from src.tools.terminal import TERMINAL_TOOLS
-
                 self._tok = AutoTokenizer.from_pretrained(self.model_id)
                 self._model = AutoModel.from_pretrained(self.model_id)
                 self._model.eval()
@@ -98,11 +101,7 @@ class SemanticRouter:
                         return False
                     names.append(name)
                     vecs.append(v)
-                import torch
-
                 with torch.no_grad():
-                    import torch.nn.functional as _F
-
                     self._tool_matrix = _F.normalize(
                         torch.stack(vecs), p=2, dim=1)
                 self._tool_names = names
@@ -113,14 +112,10 @@ class SemanticRouter:
 
     def _embed(self, text: str):
         try:
-            import torch
-
             ids = self._tok(str(text or "")[:1000], return_tensors="pt",
                             truncation=True, max_length=512)
             with torch.no_grad():
                 out = self._model(**ids).last_hidden_state[:, 0]
-            import torch.nn.functional as _F
-
             return _F.normalize(out, p=2, dim=1)[0]
         except Exception:
             return None
@@ -133,8 +128,6 @@ class SemanticRouter:
         if q is None or self._tool_matrix is None:
             return None
         try:
-            import torch
-
             with torch.no_grad():
                 scores = (self._tool_matrix @ q).tolist()
         except Exception:
@@ -144,63 +137,12 @@ class SemanticRouter:
         if not ops:
             return None
         try:
-            from src.tools.terminal import _ROUTE_DEPS, _ROUTE_FOLLOWUP
-
             expanded = set(ops)
             for op in ops:
                 expanded.update(_ROUTE_DEPS.get(op, ()))
             if (observation or "").strip():
                 expanded.update(_ROUTE_FOLLOWUP)
-            from src.tools.terminal import ALLOWED_OPS
-
             ordered = [n for n in self._tool_names if n in expanded & set(ALLOWED_OPS)]
             return ordered or None
         except Exception:
             return list(ops)
-
-
-def _request_text(request: Any) -> tuple:
-    text, obs = "", ""
-    try:
-        from langchain_core.messages import HumanMessage, ToolMessage
-
-        for m in request.messages or []:
-            if isinstance(m, HumanMessage) and isinstance(m.content, str):
-                text = m.content
-            elif isinstance(m, ToolMessage) and isinstance(m.content, str):
-                obs += "\n" + m.content
-    except Exception:
-        pass
-    return text, obs
-
-
-class InjectToolMiddleware(AgentMiddleware):
-    def __init__(self, router: SemanticRouter | None = None, **kwargs):
-        self.router = router or SemanticRouter(**kwargs)
-
-    def _select(self, request: Any) -> list | None:
-        try:
-            text, obs = _request_text(request)
-            return self.router.route(text, obs)
-        except Exception:
-            return None
-
-    def wrap_model_call(self, request, handler):
-        ops = self._select(request)
-        if not ops:
-            return handler(request)
-        tok = _current_ops.set(tuple(ops))
-        try:
-            return handler(request)
-        finally:
-            _current_ops.reset(tok)
-
-    async def awrap_model_call(self, request, handler):
-        ops = self._select(request)
-        if not ops:
-            return await handler(request)
-        tok = _current_ops.set(tuple(ops))
-        try:
-            return await handler(request)
-        finally:
-            _current_ops.reset(tok)

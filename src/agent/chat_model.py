@@ -15,22 +15,35 @@ Thinking tokens (``<think>…</think>``) are preserved via
 message's ``additional_kwargs`` so the TUI can render them dimmed.
 """
 import asyncio
+import concurrent.futures
 import json
+import re
+import uuid
 from typing import Any, List, Optional
 
 from langchain_core.callbacks.manager import CallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import (
     AIMessage,
+    AIMessageChunk,
     BaseMessage,
     HumanMessage,
     SystemMessage,
     ToolMessage,
 )
-from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.messages.ai import create_tool_call_chunk
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 
+from src.agent.budget import for_backend
+from src.agent.tool_router import current_ops
 from src.models.llm import LlmModel, split_thinking
-from src.tools.terminal import TERMINAL_TOOLS, is_degenerate, is_echo, parse_bare_tail, parse_functiongemma_action, parse_gemma_action, parse_terminal_action, parse_toolcall_dict, parse_xml_action
+from src.prompts.chat import (
+    ECHO_RETRY,
+    GARBLED_RETRY,
+    REPEAT_NOTE_TEMPLATE,
+    UNPARSEABLE_RETRY,
+)
+from src.tools.terminal import TERMINAL_TOOLS, is_degenerate, is_echo, parse_bare_tail, parse_functiongemma_action, parse_gemma_action, parse_terminal_action, parse_toolcall_dict, parse_xml_action, tools_for_request
 
 # Read-only ops: repeating one with identical args can never add
 # information (the observation is already in context). Side-effecting
@@ -109,17 +122,15 @@ class LocalChatModel(BaseChatModel):
             return None
         tools = self.bound_tools
         backend = str(getattr(getattr(self.llm, "config", None), "backend", ""))
-        if tools is None and backend in ("bonsai", "qwen"):
+        if tools is None and backend in ("bonsai", "qwen", "gemini", "groq"):
             # Native-spec legs get the narrowed defs as REAL function specs
-            # (qwen: chat-template tools=; bonsai: OpenAI tools[]). Small
+            # (qwen: chat-template tools=; bonsai/groq: OpenAI tools[];
+            # gemini: function declarations). Small
             # models drown in 11 — the semantic shortlist wins when
             # InjectToolMiddleware set one, else the keyword router decides.
-            from src.agent.tool_router import current_ops
-            from src.tools.terminal import TERMINAL_TOOLS as _NATIVE
-
             ops = current_ops()
             if ops:
-                by_name = {t["name"]: t for t in _NATIVE}
+                by_name = {t["name"]: t for t in TERMINAL_TOOLS}
                 picked = [by_name[o] for o in ops if o in by_name]
                 if picked:
                     return picked
@@ -128,10 +139,6 @@ class LocalChatModel(BaseChatModel):
             # appends a "CWD: ... SHELL: ..." trailer to every turn — strip
             # it for routing (else "shell" forces exec into every set).
             # None (or another backend) keeps the full set / preamble path.
-            import re
-
-            from src.tools.terminal import tools_for_request
-
             routable = re.sub(r"\nCWD: .*?(\s+SHELL: \w+)?\s*$", "", text)
             tools = tools_for_request(routable, observation)
         return tools
@@ -141,8 +148,6 @@ class LocalChatModel(BaseChatModel):
         # this the hard way: 48/160 strangled the model mid-think, killing
         # the think→toolcall loop). Floors come from the budget table
         # (src/agent/budget.py:BUDGETS) so pack() and the loop agree.
-        from src.agent.budget import for_backend
-
         base_max = int(getattr(getattr(self.llm, "config", None), "max_tokens", 48) or 48)
         backend = str(getattr(getattr(self.llm, "config", None), "backend", ""))
         return max(base_max, for_backend(backend).step_floor)
@@ -233,18 +238,14 @@ class LocalChatModel(BaseChatModel):
                      action=None) -> str | None:
         """One-retry nudge for garbled, echoed, or unparsable-call output."""
         if is_degenerate(raw):
-            return ("That reply was garbled. Answer again: ONLY one JSON "
-                    "action or one short sentence.")
+            return GARBLED_RETRY
         if is_echo(thinking, answer):
-            return ("Do not repeat your thinking as the reply. Reply with "
-                    "EITHER one short chat sentence OR exactly one function "
-                    "call, nothing else.")
+            return ECHO_RETRY
         if action is None and self._looks_like_call(raw):
             # Measured 2026-09-28: a 27B model emitted a call-shaped reply
             # the parsers rejected, and the turn silently ended as chat.
             # One nudge recovers it instead of dropping the user's task.
-            return ("Your tool call didn't parse (invalid JSON?). Reply "
-                    "with EXACTLY one valid function call, nothing else.")
+            return UNPARSEABLE_RETRY
         return None
 
     async def _stream_raw(self, msgs, max_tokens: int, tools, acc: dict):
@@ -353,8 +354,6 @@ class LocalChatModel(BaseChatModel):
         return acc2.get("raw", "") or raw
     def _final_message(self, raw: str):
         """Build the result AIMessage: parsed tool call or plain chat."""
-        import uuid
-
         thinking, answer, action = self._parse_action(raw)
         if action and action.op != "done":
             name, args = self._builtin_call(action)
@@ -411,10 +410,7 @@ class LocalChatModel(BaseChatModel):
         name, _ = recent[-1]
         if name not in REPEAT_GUARD_OPS:
             return None
-        return (f"I already called {name} with these exact arguments and "
-                f"have the results above. Do NOT call it again — answer "
-                f"the user now from those results, in one short chat "
-                f"sentence, no tool call.")
+        return REPEAT_NOTE_TEMPLATE.format(name=name)
 
     async def _agenerate_async(
         self, messages: List[BaseMessage], **kwargs
@@ -440,10 +436,6 @@ class LocalChatModel(BaseChatModel):
         message) and ``thinking`` in ``additional_kwargs``. Garble/echo
         retries stream transparently inside the same step.
         """
-        from langchain_core.messages import AIMessageChunk
-        from langchain_core.messages.ai import create_tool_call_chunk
-        from langchain_core.outputs import ChatGenerationChunk
-
         def _cgc(msg):
             return ChatGenerationChunk(message=msg)
 
@@ -503,8 +495,6 @@ class LocalChatModel(BaseChatModel):
             extra["thinking"] = thinking
         chunks = []
         if action and action.op != "done":
-            import uuid
-
             name, args = self._builtin_call(action)
             chunks.append(create_tool_call_chunk(
                 name=name,
@@ -533,8 +523,6 @@ class LocalChatModel(BaseChatModel):
         except RuntimeError:
             return asyncio.run(self._agenerate_async(messages, **kwargs))
         else:
-            import concurrent.futures
-
             with concurrent.futures.ThreadPoolExecutor() as ex:
                 fut = ex.submit(asyncio.run, self._agenerate_async(messages, **kwargs))
                 return fut.result()

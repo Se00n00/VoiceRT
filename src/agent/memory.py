@@ -18,9 +18,16 @@ session to ``<sessions_dir>/<sid>.json`` (atomic tmp+rename writes), so
 conversation history survives restarts. This is the store ``VoiceAgent``
 uses by default.
 """
+import hashlib
+import json as _json
 import os
+import re
 import threading
 import time
+
+from engine.session import new_session_id as _new_session_id
+
+from src.agent.budget import estimate_tokens
 
 try:
     from langchain_core.chat_history import BaseChatMessageHistory
@@ -46,9 +53,7 @@ __all__ = ["LangChainSessionMemory", "LCSessionHistory", "JsonSessionMemory",
 
 
 def new_session_id():
-    from engine import new_session_id as _new
-
-    return _new()
+    return _new_session_id()
 
 
 class LCSessionHistory(BaseChatMessageHistory):
@@ -134,7 +139,6 @@ class LangChainSessionMemory:
         if len(h.messages) > cap:
             del h.messages[:len(h.messages) - cap]
         if self.max_tokens > 0 and len(h.messages) > 2:
-            from src.agent.budget import estimate_tokens
             counts = [estimate_tokens(_to_dict(m).get("content", ""),
                                       self.tokenizer_url)
                       for m in h.messages]
@@ -231,9 +235,6 @@ class LangChainSessionMemory:
 
 def _safe_sid(sid: str) -> str:
     """Filesystem-safe session id (anything else becomes a hex digest)."""
-    import hashlib
-    import re
-
     s = str(sid or "")
     if s and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", s):
         return s
@@ -268,8 +269,6 @@ class JsonSessionMemory(LangChainSessionMemory):
                 "title": str(self._titles.get(sid, "") or ""),
                 "messages": [_to_dict(m) for m in self._data[sid].messages],
             }
-            import json as _json
-
             tmp = self._path_locked(sid) + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
                 _json.dump(payload, f)
@@ -296,8 +295,6 @@ class JsonSessionMemory(LangChainSessionMemory):
 
     def _load_locked(self, sid: str, now: float) -> "LCSessionHistory | None":
         try:
-            import json as _json
-
             with open(self._path_locked(sid), "r", encoding="utf-8") as f:
                 payload = _json.load(f)
             at = float(payload.get("at", 0.0) or 0.0)

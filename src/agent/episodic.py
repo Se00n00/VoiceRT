@@ -13,6 +13,11 @@ import sqlite3
 import threading
 import time
 
+import numpy as _np
+import torch
+import torch.nn.functional as _F
+from transformers import AutoModel, AutoTokenizer
+
 __all__ = ["EpisodicStore", "summarize_turns"]
 
 EMBED_MODEL_ID = "BAAI/bge-small-en-v1.5"
@@ -71,22 +76,16 @@ class EpisodicStore:
                 return None
         if self._model is None:
             try:
-                from transformers import AutoModel, AutoTokenizer
-
                 self._tok = AutoTokenizer.from_pretrained(EMBED_MODEL_ID)
                 self._model = AutoModel.from_pretrained(EMBED_MODEL_ID)
                 self._model.eval()
             except Exception:
                 return None
         try:
-            import torch
-
             ids = self._tok(str(text or "")[:1000], return_tensors="pt",
                             truncation=True, max_length=512)
             with torch.no_grad():
                 out = self._model(**ids).last_hidden_state[:, 0][0]
-            import torch.nn.functional as _F
-
             return _F.normalize(out, p=2, dim=1)[0].tolist()
         except Exception:
             return None
@@ -101,8 +100,6 @@ class EpisodicStore:
         blob = None
         if vec:
             try:
-                import numpy as _np
-
                 blob = _np.asarray(vec, dtype="<f4").tobytes()
             except Exception:
                 blob = None
@@ -156,7 +153,7 @@ class EpisodicStore:
             cos = 0.0
             if qv and blob:
                 try:
-                    import numpy as _np
+                    v = _np.frombuffer(blob, dtype="<f4>")
 
                     v = _np.frombuffer(blob, dtype="<f4>")
                     q = _np.asarray(qv, dtype=float)

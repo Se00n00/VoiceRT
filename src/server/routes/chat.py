@@ -16,7 +16,7 @@ import asyncio
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from ..state import get_agent, note_turn_end, note_turn_start, qwen_leg
+from ..state import console_emit, get_agent, note_turn_end, note_turn_start, qwen_leg
 
 router = APIRouter()
 
@@ -67,6 +67,7 @@ async def chat(ws: WebSocket):
                 llm = qwen_leg(agent)
                 if llm is None:
                     raise RuntimeError("no qwen leg available")
+                console_emit("chat", "user", text, sid)
                 messages = _history_messages(agent, sid) + [
                     {"role": "user", "content": text}]
                 try:
@@ -94,9 +95,11 @@ async def chat(ws: WebSocket):
                     pass
                 try:
                     await ws.send_json({"event": "reply", "reply": reply})
+                    console_emit("chat", "agent", reply, sid)
                 except Exception:
                     pass
             except Exception as exc:
+                console_emit("chat", "error", str(exc)[:300], sid)
                 try:
                     await ws.send_json({"event": "error", "message": str(exc)[:300]})
                 except Exception:

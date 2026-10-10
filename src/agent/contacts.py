@@ -22,10 +22,17 @@ Every public function degrades to ``(False, reason)`` / ``("", None,
 reason)`` and never raises — same house rule as the model engines.
 """
 import asyncio
+import base64
+import io
+import json
 import os
 import subprocess
 import time
 import uuid
+
+import httpx
+import numpy as np
+import qrcode
 
 __all__ = [
     "normalize_phone",
@@ -91,7 +98,6 @@ def _api_key() -> str:
 
 def _http_get_sync(url: str, params: dict, timeout_s: float) -> tuple[bool, str]:
     """Blocking GET via httpx; monkeypatch seam for unit tests."""
-    import httpx
 
     try:
         r = httpx.get(url, params=params, timeout=timeout_s)
@@ -106,7 +112,6 @@ def _http_get_sync(url: str, params: dict, timeout_s: float) -> tuple[bool, str]
 def _http_post_sync(url: str, payload: dict,
                     timeout_s: float) -> tuple[bool, str]:
     """Blocking POST-JSON via httpx; monkeypatch seam for unit tests."""
-    import httpx
 
     try:
         r = httpx.post(url, json=payload, timeout=timeout_s)
@@ -143,8 +148,7 @@ async def _gw_post(path: str, payload: dict,
 async def gateway_status() -> dict:
     """``wa-gate`` health: {linked, phone, ...} or {linked: False, err}."""
     try:
-        import httpx
-
+    
         r = await asyncio.to_thread(
             httpx.get, gateway_url() + "/wa/health", timeout=5.0)
         if r.status_code == 200:
@@ -161,7 +165,6 @@ def _tg_token() -> str:
     if env:
         return env
     try:
-        import json
 
         with open(_tg_bot_file()) as fh:
             tok = str(json.load(fh).get("token", "") or "").strip()
@@ -187,7 +190,6 @@ def register_agent(agent_id: str, name: str, chat_id: str, token: str,
     """Record an agent bot from pairing (tokens stay in sessions/).
     Never raises."""
     try:
-        import json
 
         agent_id = str(agent_id or "default")[:64]
         path = _tg_agents_file()
@@ -213,7 +215,6 @@ def register_agent(agent_id: str, name: str, chat_id: str, token: str,
 def get_agent_record(agent_id: str = "default") -> dict | None:
     """Agent bot record (includes token — never log it). Never raises."""
     try:
-        import json
 
         with open(_tg_agents_file()) as fh:
             data = json.load(fh)
@@ -231,7 +232,6 @@ def _tg_bot_file() -> str:
 
 def _tg_bot_info() -> dict:
     try:
-        import json
 
         with open(_tg_bot_file()) as fh:
             data = json.load(fh)
@@ -242,7 +242,6 @@ def _tg_bot_info() -> dict:
 
 def _tg_save_bot(token: str, username: str) -> bool:
     try:
-        import json
 
         path = _tg_bot_file()
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -301,11 +300,6 @@ def tg_deeplink_qr() -> tuple[bool, str]:
                 username = str(res.get("username", "") or "").strip()
         if not username:
             return False, "bot username unknown (set token first)"
-        import base64
-        import io
-
-        import qrcode
-
         img = qrcode.make(f"https://t.me/{username}")
         buf = io.BytesIO()
         img.save(buf, format="PNG")
@@ -329,7 +323,6 @@ def remember_tg_chat(chat_id: str) -> str:
             return ""
         path = _tg_state_file()
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        import json
 
         with open(path, "w") as fh:
             json.dump({"chat_id": chat_id}, fh)
@@ -344,7 +337,6 @@ def telegram_chat_id() -> str:
     if env:
         return env
     try:
-        import json
 
         with open(_tg_state_file()) as fh:
             return str(json.load(fh).get("chat_id", "") or "").strip()
@@ -359,7 +351,6 @@ def _tg_call_sync(method: str, data: dict | None, files: dict | None,
 
     Returns (True, result) or (False, {"description": ...}).
     """
-    import httpx
 
     token = (token or _tg_token()).strip()
     if not token:
@@ -477,7 +468,6 @@ def encode_ogg_opus(wav_f32, sr: int = 24000) -> bytes:
 
     Raises RuntimeError on ffmpeg failure (callers convert to (False, …)).
     """
-    import numpy as np
 
     pcm = np.ascontiguousarray(np.asarray(wav_f32, dtype=np.float32))
     try:
@@ -501,7 +491,6 @@ async def send_whatsapp_voice(phone: str, text: str = "",
     """Voice note to the operator. Provide ONE of: ogg_b64, wav (+sr),
     or text (synth happens in the caller, e.g. via server /tts/say — this
     module stays weight-free). Never raises."""
-    import base64
 
     prov = provider()
     if prov == "callmebot":

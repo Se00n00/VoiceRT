@@ -8,6 +8,7 @@ Every pipeline node (vad/stt/llm/tts) reports progress by yielding
 import time
 from typing import Any
 
+import numpy as _np
 from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = ["NODES", "AgentEvent"]
@@ -28,8 +29,6 @@ class AgentEvent(BaseModel):
         data: dict[str, Any] = {}
         for k, v in (self.data or {}).items():
             try:
-                import numpy as _np
-
                 if isinstance(v, _np.ndarray):
                     v = {"dtype": str(v.dtype), "shape": list(v.shape),
                          "n": int(v.size)}

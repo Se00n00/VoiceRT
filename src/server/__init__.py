@@ -21,13 +21,24 @@ Endpoints (see ``src/server/routes/`` for the handlers):
 - ``GET /metrics`` — uptime, turns, VRAM/RAM/CPU/GPU, legs
 - ``GET /metrics/context?sid=`` — session context usage
 - ``GET /legs`` — leg labels, model profile, tool policy
+- ``GET /console/snapshot`` — recent console events + active calls
+- ``WS /console/stream`` — live console event tail
+  (terminal UI: ``python -m src.server.console_cli``)
 """
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import state
-from .routes import chat_router, sessions_router, system_router, talk_router, turns_router, voice_router
+from .routes import (
+    chat_router,
+    console_router,
+    sessions_router,
+    system_router,
+    talk_router,
+    turns_router,
+    voice_router,
+)
 
 __all__ = ["create_app", "app"]
 
@@ -48,6 +59,7 @@ def create_app(agent=None):
     app.include_router(turns_router)
     app.include_router(chat_router)
     app.include_router(talk_router)
+    app.include_router(console_router)
 
     @app.on_event("startup")
     async def _warm():
