@@ -9,16 +9,22 @@ server binary need a fresh download anyway.
 
 - Accelerator: GPU T4 x2, internet ON.
 - Cells run top to bottom, one at a time (single tenant per card).
+- Use the Kaggle **system python3** — never a `.venv` (venvs embed
+  absolute paths and don't survive copying; a broken one errors in
+  `sitecustomize` before your code runs — if one exists: `rm -rf .venv`).
 
 ```bash
 # cell 1: code
 !git clone https://github.com/Se00n00/VoiceRT.git
 %cd VoiceRT/voice-pipeline
-# cell 2: env (~10 min, torch CUDA build dominates)
+# cell 2: env (torch CUDA build is the big download; requirements.txt
+# pins are verified for Python 3.13: kokoro splits by version marker,
+# torch trio is 2.6.0/0.21.0/2.6.0, mcp-adapters is 0.3.2)
 !pip install -r requirements.txt
 # cell 3: preconditions (all must print OK)
-!PYTHONPATH=. python -c "import torch; print(torch.cuda.is_available())"
+!PYTHONPATH=. python3 -c "import torch; print(torch.cuda.is_available())"
 ```
+All eval commands below use system `python3` (`PY=python3`), never `.venv`.
 
 ## 1. Bonsai preconditions (do these before any eval)
 

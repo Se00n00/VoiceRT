@@ -1,13 +1,17 @@
 # ------- MODEL LAYER ------------------------------------------
+# Pinned as a mutually consistent trio (torch/vision/audio) that installs
+# on Python 3.12 AND 3.13 (Kaggle default). torchvision is never imported
+# (kept for resolver consistency); torchaudio serves silero-vad[audio].
 
 numpy==2.5.3
 onnxruntime==1.30.0
-kokoro==0.9.4
+kokoro==0.9.4; python_version < "3.13"
+kokoro==0.7.16; python_version >= "3.13"
 silero-vad[audio]==6.2.3
-torch==2.5.1
-torchvision==0.20.1
-torchaudio==2.5.1
-triton==3.1.0
+torch==2.6.0
+torchvision==0.21.0
+torchaudio==2.6.0
+triton==3.2.0
 transformers==5.17.0
 
 # ------- AGENTIC LAYER ------------------------------------------
@@ -17,7 +21,7 @@ langchain==1.4.2
 langchain-core==1.6.3
 deepagents==0.7.16
 mcp==1.30.0
-langchain-mcp-adapters==0.3.23
+langchain-mcp-adapters==0.3.2
 langchain-google-genai==4.4.0
 
 # ------- PRESENTATION LAYER ------------------------------------------

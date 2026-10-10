@@ -36,3 +36,12 @@ Use very very little `try/except` — never one per line. Validate
 with plain `if`s instead of catching your own coercions. The only
 tries allowed are import guards and one boundary guard per tool
 function (so it returns `error: ...` instead of raising).
+
+## Commits
+
+Never commit or push unless the user explicitly asks. And even then:
+before committing, always propose the message first and wait for
+approval — never commit on the same turn as writing code unasked.
+Message shape: `Change_type [scope]: short description`, where type
+is one of add (appending), change, fix, remove, chore. Before
+staging, scan for secrets and stage only intended files.
