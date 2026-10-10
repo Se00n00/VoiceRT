@@ -28,12 +28,9 @@ BASE_URL = "https://api.groq.com/openai/v1"
 
 
 def _repo_root() -> str:
-    try:
-        return os.path.dirname(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        )
-    except Exception:
-        return os.getcwd()
+    return os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    )
 
 
 def resolve_api_key(explicit: str = "auto") -> str:

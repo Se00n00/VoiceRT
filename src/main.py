@@ -48,8 +48,10 @@ from src.agent.mcp.client import load_extra_tools
 from src.agent.memory import JsonSessionMemory
 from src.agent.middleware import (
     InjectToolMiddleware,
+    PolicyMiddleware,
     SummarizationMiddleware,
     TrimObservationsMiddleware,
+    VerifyMiddleware,
 )
 from src.models.llm import (
     SIDECAR_BACKENDS,
@@ -281,10 +283,16 @@ class VoiceAgent:
             )
         except Exception:
             self.backend = None
+        # Anchor for MCP relative paths (VOICE_WORKDIR): model-relative
+        # paths land where the shell backend runs. Set BEFORE the MCP
+        # stdio servers spawn — they snapshot os.environ per process.
+        if getattr(cfg, "work_dir", ""):
+            os.environ["VOICE_WORKDIR"] = str(cfg.work_dir)
         try:
             self._mcp_client, self._extra_tools = load_extra_tools(cfg.mcp_config)
         except Exception:
             self._mcp_client, self._extra_tools = None, []
+        self.chat_model.use_mcp_fs = bool(self._extra_tools)
         self.sessions = JsonSessionMemory(
             sessions_dir=cfg.sessions_dir,
             max_turns=cfg.max_session_turns,
@@ -312,12 +320,15 @@ class VoiceAgent:
         self._paged_engine = None
         self.agent = self._build_agent()
 
-    def _build_agent(self):
+    def _build_agent(self, confirmer=None):
         """Assemble the deep agent: model, shell backend, tools, middleware.
 
         The middleware list lives here directly: todo tracking,
-        observation trimming, optional tool-shortlist injection, and
-        always-on in-turn summarization.
+        observation trimming, policy gate, result verification,
+        optional tool-shortlist injection, and always-on in-turn
+        summarization. ``confirmer`` (async (name, args) -> yes/no) backs
+        confirm verdicts; None auto-allows (announced nowhere on server
+        — the WS gate passes one per turn below).
         """
         middleware = [
             TodoListMiddleware(
@@ -325,6 +336,8 @@ class VoiceAgent:
                 tool_description=TODO_TOOL_DESCRIPTION,
             ),
             TrimObservationsMiddleware(limit=1500),
+            PolicyMiddleware(confirmer=confirmer),
+            VerifyMiddleware(),
             *([InjectToolMiddleware()]
               if getattr(self.config, "use_tool_router", False) else []),
             SummarizationMiddleware(llm=self.llm, backend=self.backend),
@@ -659,10 +672,14 @@ class VoiceAgent:
         the front brain handed over (or forced over via the backstop), and
         it runs the full existing graph.
         """
-        confirm = self._confirm_wrapper(confirm_fn, sid)
-        _ = confirm
+        raw_confirm = self._confirm_wrapper(confirm_fn, sid)
+
+        async def _policy_confirm(name, args):
+            return await raw_confirm({"name": name,
+                                      "args": dict(args or {})})
+
         try:
-            agent = self._build_agent()
+            agent = self._build_agent(confirmer=_policy_confirm)
             self.agent = agent
         except Exception as exc:
             yield AgentEvent(

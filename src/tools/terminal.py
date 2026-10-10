@@ -18,7 +18,9 @@ mutating needs an explicit yes.
 import json
 import re
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
+from src.agent.mcp.defs import MCP_TOOL_DEFS, MCP_TOOL_NAMES
 
 __all__ = [
     "ALLOWED_OPS",
@@ -39,7 +41,7 @@ __all__ = [
     "tools_for_request",
 ]
 
-ALLOWED_OPS = ("exec", "exec_bg", "poll", "read", "write", "edit", "grep", "list", "python_exec", "fetch", "searxng", "done")
+ALLOWED_OPS = ("exec", "exec_bg", "poll", "read", "write", "edit", "grep", "list", "python_exec", "fetch", "searxng", "done") + MCP_TOOL_NAMES
 
 
 # Native tool definitions for models with template-level tool support
@@ -161,6 +163,7 @@ class TerminalAction(BaseModel):
     anchor: str = ""
     pattern: str = ""
     code: str = ""  # python_exec payload (own key: shell deny patterns must not see it)
+    args: dict = Field(default_factory=dict)  # MCP-tool args (op in MCP_TOOL_NAMES)
 
     def as_dict(self) -> dict:
         out: dict = {"action": self.op}
@@ -178,7 +181,48 @@ class TerminalAction(BaseModel):
             out["pattern"] = self.pattern
         if self.code:
             out["code"] = self.code
+        for k, v in (self.args or {}).items():
+            out.setdefault(str(k), v)
         return out
+
+
+# MCP-tool aliases, checked BEFORE the terminal table: several are
+# prefixes of terminal keys in reverse ("readfile" contains "read"),
+# so the terminal table would shadow them anywhere later.
+_MCP_NORM_OPS = (
+    ("typetext", "type_text"), ("type_text", "type_text"),
+    ("presskey", "press_key"), ("press_key", "press_key"),
+    ("hotkey", "press_key"),
+    ("getactivewindow", "get_active_window"),
+    ("get_active_window", "get_active_window"),
+    ("activewindow", "get_active_window"),
+    ("listwindows", "list_windows"), ("list_windows", "list_windows"),
+    ("windows", "list_windows"),
+    ("listdirectory", "list_directory"), ("list_directory", "list_directory"),
+    ("listdir", "list_directory"),
+    ("searchfiles", "search_files"), ("search_files", "search_files"),
+    ("readfile", "read_file"), ("read_file", "read_file"),
+    ("writefile", "write_file"), ("write_file", "write_file"),
+    ("editfile", "edit_file"), ("edit_file", "edit_file"),
+    ("movefile", "move_file"), ("move_file", "move_file"),
+    ("move", "move_file"),
+    ("deletefile", "delete_file"), ("delete_file", "delete_file"),
+    ("delete", "delete_file"), ("remove", "delete_file"),
+    ("searchweb", "search_web"), ("search_web", "search_web"),
+    ("openurl", "open_url"), ("open_url", "open_url"),
+    ("openapp", "open_app"), ("open_app", "open_app"),
+    ("launch", "open_app"),
+    ("extractpage", "extract_page"), ("extract_page", "extract_page"),
+    ("downloadfile", "download_file"), ("download_file", "download_file"),
+    ("download", "download_file"),
+    ("browserclick", "browser_click"), ("browser_click", "browser_click"),
+    ("browsertype", "browser_type"), ("browser_type", "browser_type"),
+    ("browserscroll", "browser_scroll"),
+    ("browser_scroll", "browser_scroll"),
+    ("screenshot", "screenshot"), ("screencapture", "screenshot"),
+    ("click", "click"),
+    ("scroll", "scroll"),
+)
 
 
 def _norm_op(op: str) -> str:
@@ -191,6 +235,9 @@ def _norm_op(op: str) -> str:
     o = re.sub(r"[^a-z]+", "", str(op or "").lower())
     if not o:
         return ""
+    for key, mapped in _MCP_NORM_OPS:
+        if key in o:
+            return mapped
     for key, mapped in (
         # python_exec first: "exec" is a substring of "pythonexec" and
         # would shadow it anywhere later in this table.
@@ -243,6 +290,26 @@ def _from_obj(obj: dict, strict: bool) -> TerminalAction | None:
         op = _norm_op(raw_op)
         if not op:
             return None
+    if op in MCP_TOOL_NAMES:
+        # MCP-category tool: args straight from the declared spec keys.
+        spec = next((t for t in MCP_TOOL_DEFS if t["name"] == op), {})
+        params = (spec.get("parameters", {}) or {})
+        props = params.get("properties", {}) or {}
+        required = params.get("required", []) or []
+        args: dict = {}
+        for k in props:
+            v = _payload(obj, k, limit=10000 if k in (
+                "content", "text", "code") else 4000)
+            if v:
+                args[k] = v
+            else:
+                raw = obj.get(k)
+                if isinstance(raw, (int, float, bool)):
+                    args[k] = raw
+        for k in required:
+            if k not in args or not str(args[k]).strip():
+                return None
+        return TerminalAction(op=op, args=args)
     # per-op payload extraction to avoid cross-contamination (e.g. edit text
     # becoming command)
     command = ""
@@ -802,6 +869,34 @@ ROUTE_KEYWORDS: dict[str, tuple[str, ...]] = {
               "http"),
     "searxng": ("searxng", "web search", "websearch", "web", "internet",
                 "online", "google"),
+    "screenshot": ("screenshot", "screen capture", "capture the screen",
+                   "capture screen"),
+    "click": ("click", "left-click", "right-click", "click on"),
+    "type_text": ("type", "typing", "keystrokes", "enter text"),
+    "press_key": ("press key", "hotkey", "keyboard shortcut", "shortcut",
+                  "ctrl+", "alt+"),
+    "scroll": ("scroll",),
+    "get_active_window": ("active window", "focused window",
+                          "current window", "foreground window"),
+    "list_windows": ("windows", "open windows", "window list", "window"),
+    "open_app": ("open app", "launch", "start app", "application", "app"),
+    "list_directory": ("list_directory",),
+    "search_files": ("search files", "find file", "locate file",
+                     "search_files"),
+    "read_file": ("read_file",),
+    "write_file": ("write_file",),
+    "edit_file": ("edit_file",),
+    "move_file": ("move", "move_file", "rename"),
+    "delete_file": ("delete", "remove", "delete_file"),
+    "search_web": ("search_web",),
+    "open_url": ("open url", "open link", "open in browser", "open_url"),
+    "extract_page": ("extract", "page text", "page content",
+                     "extract_page"),
+    "browser_click": ("browser click", "click on page", "browser_click"),
+    "browser_type": ("fill", "fill in", "type into", "input field",
+                     "browser_type"),
+    "browser_scroll": ("scroll page", "browser_scroll"),
+    "download_file": ("download", "download_file"),
 }
 """Intent keywords per op. Matched case-insensitively on word boundaries."""
 
@@ -812,9 +907,14 @@ _ROUTE_DEPS: dict[str, tuple[str, ...]] = {
     "write": ("read",),
     "exec_bg": ("poll",),
     "poll": ("exec_bg",),
+    "edit_file": ("read_file",),
+    "write_file": ("read_file",),
+    "delete_file": ("list_directory",),
+    "move_file": ("list_directory",),
 }
 
-_ROUTE_FOLLOWUP: tuple[str, ...] = ("read", "list")
+_ROUTE_FOLLOWUP: tuple[str, ...] = ("read", "list", "read_file",
+                                    "list_directory")
 """Follow-up steps (observation present) can always navigate results."""
 
 
@@ -852,9 +952,16 @@ def route_tool_ops(text: str, observation: str = "") -> list[str] | None:
 
 
 def tools_for_request(text: str, observation: str = "") -> list:
-    """TERMINAL_TOOLS filtered by :func:`route_tool_ops` (order kept)."""
+    """Terminal + MCP defs filtered by :func:`route_tool_ops`.
+
+    Order kept (terminal first, then MCP). No hits -> terminal tools
+    only: the MCP set stays hidden unless routed, so small models never
+    drown in 33 specs.
+    """
     ops = route_tool_ops(text, observation)
     if ops is None:
         return TERMINAL_TOOLS
     wanted = set(ops)
-    return [t for t in TERMINAL_TOOLS if t["name"] in wanted]
+    out = [t for t in TERMINAL_TOOLS if t["name"] in wanted]
+    out += [t for t in MCP_TOOL_DEFS if t["name"] in wanted]
+    return out

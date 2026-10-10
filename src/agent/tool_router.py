@@ -21,6 +21,7 @@ import torch
 import torch.nn.functional as _F
 from transformers import AutoModel, AutoTokenizer
 
+from src.agent.mcp.defs import MCP_TOOL_DEFS
 from src.tools.terminal import (
     _ROUTE_DEPS,
     _ROUTE_FOLLOWUP,
@@ -31,6 +32,7 @@ from src.tools.terminal import (
 __all__ = [
     "ROUTING_BLURBS",
     "ROUTER_MODEL_ID",
+    "ALL_TOOL_DEFS",
     "SemanticRouter",
     "current_ops",
 ]
@@ -62,7 +64,50 @@ ROUTING_BLURBS: dict[str, str] = {
                "what is, find, endpoint, API reference, latest news, "
                "prices, documentation, discover URLs. Never guess a URL — "
                "search for it first.",
+    "screenshot": "Capture the computer screen to a PNG image file: take "
+                  "a screenshot, see what is on the display.",
+    "click": "Click the mouse at screen coordinates: press a button, "
+             "click on something visible on screen.",
+    "type_text": "Type text with the keyboard into the focused window: "
+                 "enter text, fill what is open on screen.",
+    "press_key": "Press a keyboard key or shortcut combo: Enter, Escape, "
+                 "ctrl+c, alt+tab, function keys.",
+    "scroll": "Scroll the screen or window up and down with the mouse "
+              "wheel.",
+    "get_active_window": "Find which window is active and focused: current "
+                         "window title and id.",
+    "list_windows": "List the open windows on the desktop: see what apps "
+                    "are running.",
+    "open_app": "Launch a desktop application by name: open a program, "
+                "start an app.",
+    "list_directory": "List a directory on disk: show folder contents, "
+                      "browse files.",
+    "search_files": "Find files by name under a folder: locate a file, "
+                    "glob search.",
+    "read_file": "Read lines from a text file: show file contents with "
+                 "line numbers.",
+    "write_file": "Create a new file or overwrite one with given text: "
+                  "save output to a file.",
+    "edit_file": "Replace exact text inside an existing file: patch code, "
+                 "fix a line.",
+    "move_file": "Move or rename a file or directory to a new path.",
+    "delete_file": "Delete a file or directory from disk: remove it "
+                   "permanently.",
+    "search_web": "Search the web for information: titles, links and "
+                  "snippets on any topic.",
+    "open_url": "Open a web page in the default browser for the user to "
+                "see.",
+    "extract_page": "Read one specific web page as text when you already "
+                    "have its full URL.",
+    "browser_click": "Click an element on a web page by CSS selector.",
+    "browser_type": "Type text into a web page form field by CSS "
+                    "selector, optionally submit.",
+    "browser_scroll": "Scroll a web page up or down and read what "
+                      "appears.",
+    "download_file": "Download a file from a URL and save it to disk.",
 }
+
+ALL_TOOL_DEFS = TERMINAL_TOOLS + MCP_TOOL_DEFS
 
 _current_ops: ContextVar[tuple | None] = ContextVar("tool_router_ops", default=None)
 
@@ -93,7 +138,7 @@ class SemanticRouter:
                 self._model = AutoModel.from_pretrained(self.model_id)
                 self._model.eval()
                 names, vecs = [], []
-                for t in TERMINAL_TOOLS:
+                for t in ALL_TOOL_DEFS:
                     name = t.get("name", "")
                     text = ROUTING_BLURBS.get(name, t.get("description", ""))
                     v = self._embed(text)

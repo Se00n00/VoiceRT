@@ -89,7 +89,11 @@ async def amain(backend: str, model: str, workdir: str) -> int:
     from langchain.agents.middleware import TodoListMiddleware
 
     from src.agent.chat_model import LocalChatModel
+    from src.agent.mcp.client import load_extra_tools
+    from src.agent.middleware.inject import InjectToolMiddleware
+    from src.agent.middleware.policy import PolicyMiddleware
     from src.agent.middleware.trim import TrimObservationsMiddleware
+    from src.agent.middleware.verify import VerifyMiddleware
     from src.models.gemini import DEFAULT_MODEL as GEMINI_DEFAULT
     from src.models.groq import DEFAULT_MODEL as GROQ_DEFAULT
     from src.models.llm import LlmConfig, LlmModel
@@ -97,6 +101,13 @@ async def amain(backend: str, model: str, workdir: str) -> int:
     from src.prompts.middleware import TODO_SYSTEM_PROMPT, TODO_TOOL_DESCRIPTION
 
     os.makedirs(workdir, exist_ok=True)
+    os.environ["VOICE_WORKDIR"] = workdir
+    use_color = sys.stdout.isatty()
+    dim, reset = ("\033[2m", "\033[0m") if use_color else ("", "")
+
+    def _announce(text: str) -> None:
+        print(f"{dim}… {text}{reset}", flush=True)
+
     backend = str(backend or "groq").lower()
     if backend == "gemini":
         resolved = model or GEMINI_DEFAULT
@@ -112,16 +123,25 @@ async def amain(backend: str, model: str, workdir: str) -> int:
     except SystemExit as exc:
         print(exc)
         return 2
+    try:
+        _mcp_client, extra_tools = load_extra_tools()
+    except Exception as exc:  # noqa: BLE001 - console runs tool-less
+        print(f"{dim}… mcp extras unavailable ({exc}); built-ins only{reset}",
+              flush=True)
+        _mcp_client, extra_tools = None, []
     agent = create_deep_agent(
-        model=LocalChatModel(llm=llm),
+        model=LocalChatModel(llm=llm, use_mcp_fs=bool(extra_tools)),
         backend=LocalShellBackend(root_dir=workdir, timeout=30),
-        tools=[],
+        tools=list(extra_tools or []),
         middleware=[
             TodoListMiddleware(
                 system_prompt=TODO_SYSTEM_PROMPT,
                 tool_description=TODO_TOOL_DESCRIPTION,
             ),
             TrimObservationsMiddleware(limit=1500),
+            PolicyMiddleware(announce=_announce),
+            VerifyMiddleware(),
+            InjectToolMiddleware(),
         ],
         system_prompt=SYSTEM_PROMPT,
     )

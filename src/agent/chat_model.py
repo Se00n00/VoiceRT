@@ -35,7 +35,8 @@ from langchain_core.messages.ai import create_tool_call_chunk
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 
 from src.agent.budget import for_backend
-from src.agent.tool_router import current_ops
+from src.agent.mcp.defs import MCP_TOOL_NAMES
+from src.agent.tool_router import ALL_TOOL_DEFS, current_ops
 from src.models.llm import LlmModel, split_thinking
 from src.prompts.chat import (
     ECHO_RETRY,
@@ -52,6 +53,8 @@ from src.tools.terminal import TERMINAL_TOOLS, is_degenerate, is_echo, parse_bar
 REPEAT_GUARD_OPS = frozenset({
     "read", "list", "grep", "searxng", "fetch",
     "read_file", "ls", "web_search",
+    "list_directory", "search_files", "extract_page", "search_web",
+    "get_active_window", "list_windows",
 })
 
 
@@ -64,6 +67,13 @@ class LocalChatModel(BaseChatModel):
     # handed tools alongside a "respond ONLY with ..." instruction may
     # emit a tool call instead of the requested text.
     no_tools: bool = False
+    # use_mcp_fs: the MCP filesystem tools (read_file/write_file/edit_file
+    # with {path, content, ...} args) are attached and silently WIN the
+    # tool-node name collision over the deepagents built-ins (same names,
+    # {file_path, ...} args). Set by the harness builders that load the
+    # MCP extras; _builtin_call then emits the MCP arg schema so terminal
+    # read/write/edit actually execute instead of dying on validation.
+    use_mcp_fs: bool = False
 
     def __init__(self, llm: Any, **kwargs):
         super().__init__(llm=llm, **kwargs)
@@ -78,9 +88,12 @@ class LocalChatModel(BaseChatModel):
         # backend in _prompt_tools (native TERMINAL_TOOLS for bonsai,
         # JSON-preamble path otherwise) — rendering foreign schemas into
         # the chat template would silently change model behavior.
+        names = {getattr(t, "name", "") for t in tools or []}
+        mcp = bool(names & set(MCP_TOOL_NAMES))
         defs = [t for t in tools or []
                 if isinstance(t, dict) and "name" in t]
-        return LocalChatModel(llm=self.llm, bound_tools=defs or None)
+        return LocalChatModel(llm=self.llm, bound_tools=defs or None,
+                              use_mcp_fs=self.use_mcp_fs or mcp)
 
     def _messages_to_llm_input(self, messages: List[BaseMessage]):
         # Convert LangChain messages to the (text, history, observation)
@@ -130,7 +143,7 @@ class LocalChatModel(BaseChatModel):
             # InjectToolMiddleware set one, else the keyword router decides.
             ops = current_ops()
             if ops:
-                by_name = {t["name"]: t for t in TERMINAL_TOOLS}
+                by_name = {t["name"]: t for t in ALL_TOOL_DEFS}
                 picked = [by_name[o] for o in ops if o in by_name]
                 if picked:
                     return picked
@@ -182,18 +195,22 @@ class LocalChatModel(BaseChatModel):
             action = parse_bare_tail(raw)
         return thinking, answer, action
 
-    @staticmethod
-    def _builtin_call(action) -> tuple:
-        """Old terminal op -> deepagents built-in (name, args).
+    def _builtin_call(self, action) -> tuple:
+        """Old terminal op -> execution tool (name, args).
 
         The prompt still shows the legacy schema (exec/read/write/... with
         path/text args); the graph executes the built-ins (execute/
-        read_file/... with file_path/content args). Anything without a
+        read_file/... with file_path/content args) — UNLESS the MCP
+        filesystem tools are attached (``use_mcp_fs``), which win the
+        name collision, so the MCP arg schema ({path, content,
+        old_string, new_string}, relative paths anchored at
+        VOICE_WORKDIR) is emitted instead. Anything without a
         built-in passes through unchanged (the tool node reports it and
         the model recovers).
         """
         d = action.as_dict()
         op = action.op
+        mcp_fs = bool(getattr(self, "use_mcp_fs", False))
 
         def _abs(p: str) -> str:
             p = str(p or "")
@@ -202,11 +219,20 @@ class LocalChatModel(BaseChatModel):
         if op == "exec":
             return "execute", {"command": d.get("command", "")}
         if op == "read":
+            if mcp_fs:
+                return "read_file", {"path": d.get("path", "")}
             return "read_file", {"file_path": _abs(d.get("path", ""))}
         if op == "write":
+            if mcp_fs:
+                return "write_file", {"path": d.get("path", ""),
+                                      "content": d.get("text", "")}
             return "write_file", {"file_path": _abs(d.get("path", "")),
                                   "content": d.get("text", "")}
         if op == "edit":
+            if mcp_fs:
+                return "edit_file", {"path": d.get("path", ""),
+                                     "old_string": d.get("anchor", ""),
+                                     "new_string": d.get("text", "")}
             return "edit_file", {"file_path": _abs(d.get("path", "")),
                                  "old_string": d.get("anchor", ""),
                                  "new_string": d.get("text", "")}

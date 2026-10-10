@@ -39,9 +39,6 @@ benchmarks/results/*.json
 # generated roll-up (keep local only)
 COMPLETE.md
 
-# local operator notes (keep local only)
-AGENTS.md
-
 # local harness plan (keep local only)
 PLAN.md
 

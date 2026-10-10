@@ -11,6 +11,7 @@ __all__ = [
     "ECHO_RETRY",
     "UNPARSEABLE_RETRY",
     "REPEAT_NOTE_TEMPLATE",
+    "VERIFY_RETRY",
 ]
 
 GARBLED_RETRY = (
@@ -36,4 +37,11 @@ REPEAT_NOTE_TEMPLATE = (
     "have the results above. Do NOT call it again — answer "
     "the user now from those results, in one short chat "
     "sentence, no tool call."
+)
+
+VERIFY_RETRY = (
+    "Three tool results in a row did not match what the tools "
+    "claimed. Stop and restate: what observable evidence do you "
+    "have, and which single check (list_directory/read_file) "
+    "settles it next?"
 )
