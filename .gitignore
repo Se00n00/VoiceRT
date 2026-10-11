@@ -29,6 +29,9 @@ samples_out/
 # benchmark run outputs (the kernel_profile.txt docstring table stays)
 benchmarks/results/*.json
 
+# vendored TB 2.1 repo (regenerate via benchmarks/harness/eval.py --adapt tb21)
+benchmarks/harness/tb21/
+
 # editors / OS
 .DS_Store
 *.swp

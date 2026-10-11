@@ -39,9 +39,9 @@ All eval commands below use system `python3` (`PY=python3`), never `.venv`.
 Smoke (one task, proves the whole eval path on Bonsai):
 
 ```bash
-!PYTHONPATH=. VOICE_GUARD=0 python -u benchmarks/eval_agent_tasks.py \
-    --tasks benchmarks/gaia_l1.json --tag kagdhi-bonsai-smoke \
-    --backend bonsai --limit 1 --timeout 900
+!PYTHONPATH=. VOICE_GUARD=0 python3 -u benchmarks/harness/eval.py \
+    --suite gaia --limit 1 --tag kaggle-bonsai-smoke \
+    --backend bonsai --timeout 900
 ```
 
 `--model` is inert for sidecar legs (Bonsai model is fixed by the GGUF).
@@ -56,19 +56,19 @@ GAIA validation is access-gated (one-time human step, NOT runnable here):
 # 0. in a browser: accept terms at
 #    https://huggingface.co/datasets/gaia-benchmark/GAIA
 export HF_TOKEN=<read token with access>
-# 1. download + adapt (writes benchmarks/gaia.jsonl)
-!PYTHONPATH=. python -u benchmarks/gaia_adapter.py
+# 1. download + adapt (writes benchmarks/harness/gaia.jsonl)
+!PYTHONPATH=. python3 -u benchmarks/harness/eval.py --adapt gaia
 ```
 
 Then (task attachments copy per task, oracles are GAIA-exact reply_match):
 
 ```bash
-!PYTHONPATH=. python -u benchmarks/eval_agent_tasks.py \
-    --tasks benchmarks/gaia.jsonl --tag kaggle-bonsai-gaia-full \
+!PYTHONPATH=. python3 -u benchmarks/harness/eval.py \
+    --suite gaia --tag kaggle-bonsai-gaia-full \
     --backend bonsai --timeout 900
 # per level, e.g. L1 only:
-!PYTHONPATH=. python -u benchmarks/eval_agent_tasks.py \
-    --tasks benchmarks/gaia.jsonl --tag kaggle-bonsai-gaia-l1 \
+!PYTHONPATH=. python3 -u benchmarks/harness/eval.py \
+    --suite gaia --tag kaggle-bonsai-gaia-l1 \
     --backend bonsai --timeout 900 --level 1
 !PYTHONPATH=. python -u benchmarks/eval_agent_tasks.py \
     --tasks benchmarks/terminal_bench.json --tag kaggle-bonsai-tb \
@@ -78,42 +78,53 @@ Then (task attachments copy per task, oracles are GAIA-exact reply_match):
 165 tasks at Bonsai speed: run per level (L1/L2/L3) in separate sessions
 (12h cap). Results carry `by_level` (L1/L2/L3 pass counts) in `summary`.
 
-Reference (Groq, 2026-10-10, 5-task L1-style manifests, not comparable):
-GAIA-L1 5/5 effective, TB 5/5. Full-validation numbers are unmeasured —
-record them from `benchmarks/results/agent_tasks_<tag>_*.json`.
+Reference (Groq, 2026-10-10, local smokes, not comparable):
+terminal_bench 5/5. Full-validation numbers are unmeasured —
+record them from `benchmarks/results/harness_*_<tag>_*.json`.
 
-## 3. DRACO (100 deep-research tasks, Bonsai-graded)
+## 3. Terminal-Bench 2.1 (89 terminal tasks, verifier-graded)
 
-Grading uses the same Bonsai leg (`--judge-backend` defaults to the agent
-backend), so the score measures one setup — never agent-vs-judge mixing.
+Manifest is vendored from the Harbor repo (prompts only — scoring
+stays with each task's verifier under harbor/docker, never local):
 
 ```bash
-!PYTHONPATH=. python -u benchmarks/draco_eval.py \
-    --backend bonsai --judge-backend bonsai --limit 3 \
-    --tag kaggle-bonsai-draco-sample \
-    --timeout 2400 --max-tokens 8192 --pause 10
+# 0. vendor (needs git + network; writes benchmarks/harness/tb21.jsonl:
+#    89 tasks, easy-first: 4 easy / 55 medium / 30 hard)
+!PYTHONPATH=. python3 benchmarks/harness/eval.py --adapt tb21
 ```
 
-Then, only if the sample looks sane (reports >500 chars, judge parses):
+Sample (proves the whole eval path on Bonsai; rows report
+verifier_pending while trajectories are recorded):
 
 ```bash
-!PYTHONPATH=. python -u benchmarks/draco_eval.py \
-    --backend bonsai --limit 25 --offset 0 --tag kaggle-bonsai-draco \
-    --timeout 2400 --max-tokens 8192 --pause 10
-!PYTHONPATH=. python -u benchmarks/draco_eval.py \
-    --backend bonsai --limit 25 --offset 25 --tag kaggle-bonsai-draco \
-    --timeout 2400 --max-tokens 8192 --pause 10
+!PYTHONPATH=. python3 -u benchmarks/harness/eval.py \
+    --suite tb21 --tag kaggle-bonsai-tb21-sample \
+    --backend bonsai --limit 3 --timeout 900
+```
+
+Then, only if the sample looks sane (steps > 0, no timeouts):
+
+```bash
+!PYTHONPATH=. python3 -u benchmarks/harness/eval.py \
+    --suite tb21 --tag kaggle-bonsai-tb21 \
+    --backend bonsai --limit 25 --offset 0 --timeout 900
+!PYTHONPATH=. python3 -u benchmarks/harness/eval.py \
+    --suite tb21 --tag kaggle-bonsai-tb21 \
+    --backend bonsai --limit 25 --offset 25 --timeout 900
 # ... offsets 50, 75 (12h session cap: one chunk per session max)
 ```
 
 Notes: no 429 risk on Bonsai (local), but wall-clock is ~10-20x Groq
-(measure per-task seconds on the sample first). Judge runs on the same
-leg. Scores are judge- and setup-dependent — compare only within this
-setup, never against Groq-judged numbers.
+(measure per-task seconds on the sample first). Local rows stay
+verifier_pending by design — for true scores, run each task's
+verifier from its `docker_image` (oracle field) under harbor. Scores
+are setup-dependent — compare only within this setup, never against
+harbor-leaderboard numbers.
 
 ## 4. After the runs
 
-- Download `benchmarks/results/agent_tasks_*.json` and `draco_*.json`.
-- Record: pass rates, mean steps-to-success, median seconds, DRACO mean
-  score + per-domain breakdown — all in the results JSON `summary`.
+- Download `benchmarks/results/agent_tasks_*.json`.
+- Record: pass rates (graded tasks), mean steps-to-success, median
+  seconds, TB 2.1 verifier_pending count + trajectory stats — all in
+  the results JSON `summary`.
 - Groq-side reference files live next to them (`*-groq*` tags).

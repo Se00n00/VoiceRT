@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# Eval sweep in one command: own tools -> GAIA -> TB,
-# then a consolidated results table at the end.
+# Eval sweep in one command: own tools -> harness GAIA sample -> harness
+# TB 2.1 sample, then a consolidated results table at the end.
 #
 # Usage (from voice-pipeline/, GPU idle, ONE model process at a time):
 #   PYTHONPATH=. bash benchmarks/run_all_evals.sh [TAG]        # sampled sweep
 #   PY=/path/to/python bash benchmarks/run_all_evals.sh mytag   # custom interp
+#
+# Harness steps sample their suites (--limit 5): full runs are Kaggle
+# jobs (benchmarks/kaggle.md), not part of this sweep.
 #
 # Each step runs even if an earlier one fails; exit code is nonzero if
 # anything failed. Every runner aborts loudly on CPU fallback (no silent
@@ -24,11 +27,11 @@ step() { echo; echo "===== $1 ====="; }
 step "1/3 own toolset (18 cases)"
 $PY -u benchmarks/toolcall_eval.py --tag "$TAG" || { echo "toolcall FAILED"; FAILED=1; }
 
-step "2/3 GAIA L1 agent tasks"
-$PY -u benchmarks/eval_agent_tasks.py --tasks benchmarks/gaia_l1.json --tag "$TAG-gaia" || { echo "gaia FAILED"; FAILED=1; }
+step "2/3 harness GAIA sample (5 tasks)"
+$PY -u benchmarks/harness/eval.py --suite gaia --limit 5 --tag "$TAG" || { echo "gaia FAILED"; FAILED=1; }
 
-step "3/3 TerminalBench agent tasks"
-$PY -u benchmarks/eval_agent_tasks.py --tasks benchmarks/terminal_bench.json --tag "$TAG-tb" || { echo "tb FAILED"; FAILED=1; }
+step "3/3 harness TB 2.1 sample (5 tasks, easy-first)"
+$PY -u benchmarks/harness/eval.py --suite tb21 --limit 5 --tag "$TAG" || { echo "tb21 FAILED"; FAILED=1; }
 
 echo
 echo "================ FINAL RESULTS ($TAG) ================"
@@ -68,10 +71,10 @@ def show(label, path, keys):
 ok = True
 ok &= show("toolcall", latest(f"toolcall_eval_{tag}_*.json"),
            ["n", "tool_f1", "arg_validity_rate", "retries", "median_seconds"])
-ok &= show("gaia", latest(f"agent_tasks_{tag}-gaia_*.json"),
-           ["n", "pass_rate", "mean_steps_to_success", "median_seconds"])
-ok &= show("tb", latest(f"agent_tasks_{tag}-tb_*.json"),
-           ["n", "pass_rate", "mean_steps_to_success", "median_seconds"])
+ok &= show("gaia", latest(f"harness_gaia_{tag}_*.json"),
+           ["n", "n_graded", "pass_rate", "mean_steps_to_success", "median_seconds"])
+ok &= show("tb21", latest(f"harness_tb21_{tag}_*.json"),
+           ["n", "verifier_pending", "median_seconds"])
 print("=====================================================")
 sys.exit(0 if ok else 1)
 EOF

@@ -17,50 +17,58 @@ CONFIRM_LOG = "auto-approve (deny verdicts still block)"
 async def warm_agent(model="Qwen/Qwen3-0.6B", backend="qwen",
                      sessions_dir=None, max_tokens=None):
     """Build VoiceAgent with warmed LLM leg, TTS disabled."""
+    from src.agent.cloud_models import is_cloud_backend, make_chat_model
     from src.main import VoiceAgent, VoiceAgentConfig
-    from src.models.llm import LlmConfig, LlmModel, assert_ready_leg
 
     # sessions_dir kept for API compat (JsonSessionMemory persists per sid).
     cfg = VoiceAgentConfig(
         **({"sessions_dir": sessions_dir} if sessions_dir else {}))
     agent = VoiceAgent(cfg)
-    leg_kw = {} if max_tokens is None else {"max_tokens": int(max_tokens)}
-    if backend in ("groq", "gemini") and model != "Qwen/Qwen3-0.6B":
-        # Cloud legs ignore `model` (qwen HF id): --model names their model.
-        key = "groq_model" if backend == "groq" else "gemini_model"
-        agent.llm = LlmModel(LlmConfig(backend=backend, **{key: model},
-                                       **leg_kw))
+    backend = str(backend or "qwen").lower()
+    if is_cloud_backend(backend):
+        # Simple switch: stock LangChain model used directly.
+        cloud_model = model if model != "Qwen/Qwen3-0.6B" else ""
+        agent.llm = None
+        agent.chat_model = make_chat_model(backend, cloud_model)
+        agent._worker_warmed = True
+        status = f"cloud {backend} {cloud_model or 'default'}"
     else:
+        from src.models.llm import LlmConfig, LlmModel, assert_ready_leg
+
+        leg_kw = {} if max_tokens is None else {"max_tokens": int(max_tokens)}
         agent.llm = LlmModel(LlmConfig(model=model, backend=backend,
                                        **leg_kw))
-    print(f"warming LLM {model} [{backend}] ...", flush=True)
-    await agent.llm.warm()
-    # the agent loop runs through chat_model: rewrap so it sees this leg
-    # (VoiceAgent rebuilds the graph every turn, so the rewrap takes effect).
-    # Keep the MCP-fs mapping flag: without it terminal read/write/edit die
-    # on the tool-name collision when extras are attached.
-    from src.agent.chat_model import LocalChatModel
+        print(f"warming LLM {model} [{backend}] ...", flush=True)
+        await agent.llm.warm()
+        from src.agent.chat_model import LocalChatModel
 
-    agent.chat_model = LocalChatModel(
-        llm=agent.llm, use_mcp_fs=bool(agent._extra_tools))
+        agent.chat_model = LocalChatModel(
+            llm=agent.llm, use_mcp_fs=bool(agent._extra_tools))
+        status = assert_ready_leg(agent.llm)
+    if hasattr(agent.chat_model, "use_mcp_fs"):
+        agent.chat_model.use_mcp_fs = bool(agent._extra_tools)
+    try:
+        await agent.open_mcp_sessions()
+        status += f" + mcp {len(agent._extra_tools)} tools"
+    except Exception as exc:
+        print(f"mcp sessions unavailable ({exc}); stateless tools only",
+              flush=True)
     agent.tts = None
-    print(f"agent ready (llm-only) on {assert_ready_leg(agent.llm)}.", flush=True)
+    print(f"agent ready (llm-only) on {status}.", flush=True)
     return agent
 
 
-def anchor_workdir(agent, workdir):
-    """Point one task's file ops at its temp workdir.
+async def areanchor_workdir(agent, workdir):
+    """Point one task's file ops at its temp workdir (async).
 
     Two channels, both rooted per task (the graph rebuilds every turn,
     so swaps take effect on the next turn):
-    - MCP servers snapshot os.environ at spawn, so re-spawn the extras
-      after setting VOICE_WORKDIR (seconds per task; the LLM stays warm).
+    - MCP servers snapshot os.environ at spawn, so reopen the stateful
+      sessions after setting VOICE_WORKDIR (seconds per task; LLM warm).
     - the shell backend is rooted at construction: swap in a fresh
       LocalShellBackend rooted at the workdir (cheap object, no spawn).
     """
     import os
-
-    from src.agent.mcp.client import load_extra_tools
 
     os.environ["VOICE_WORKDIR"] = workdir
     try:
@@ -70,10 +78,43 @@ def anchor_workdir(agent, workdir):
     except Exception:
         pass
     try:
-        agent._mcp_client, agent._extra_tools = load_extra_tools()
+        await agent.reopen_mcp_sessions()
     except Exception:
         pass
-    agent.chat_model.use_mcp_fs = bool(agent._extra_tools)
+    if hasattr(agent.chat_model, "use_mcp_fs"):
+        agent.chat_model.use_mcp_fs = bool(agent._extra_tools)
+
+
+def anchor_workdir(agent, workdir):
+    """Point one task's file ops at its temp workdir.
+
+    Sync fallback: re-roots the shell backend and reloads stateless
+    tools. Prefers the stateful pool when the loop is already running
+    (see :func:`areanchor_workdir`); otherwise respawns statelessly.
+    """
+    import os
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        os.environ["VOICE_WORKDIR"] = workdir
+        try:
+            from deepagents.backends import LocalShellBackend
+
+            agent.backend = LocalShellBackend(root_dir=workdir, timeout=30)
+        except Exception:
+            pass
+        try:
+            from src.agent.mcp.client import load_extra_tools
+
+            agent._mcp_client, agent._extra_tools = load_extra_tools()
+        except Exception:
+            pass
+        if hasattr(agent.chat_model, "use_mcp_fs"):
+            agent.chat_model.use_mcp_fs = bool(agent._extra_tools)
+        return
+    raise RuntimeError("anchor_workdir called inside a running loop; "
+                       "await areanchor_workdir instead")
 
 
 def make_workdir(files=None, attachments=None, src_root="."):
