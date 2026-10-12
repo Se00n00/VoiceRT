@@ -7,6 +7,9 @@ client alive as long as the tools are used (each tool call opens a
 session through it); :class:`src.main.VoiceAgent` holds it on
 ``self._mcp_client``.
 
+Prefer :mod:`src.agent.mcp.session` for new code: it holds one persistent
+session per server instead of reconnecting on every tool call.
+
 Loop-safe: loading is async under the hood, but this entry point works
 from sync code with or without a running event loop (a helper thread
 gets a fresh loop when the caller's thread already runs one).
@@ -17,8 +20,9 @@ import concurrent.futures
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from src.agent.mcp.config import load_connections
+from src.agent.mcp.session import McpSessions, open_sessions
 
-__all__ = ["load_extra_tools"]
+__all__ = ["McpSessions", "load_extra_tools", "open_sessions"]
 
 
 def _await_sync(factory, timeout_s: float = 180.0):

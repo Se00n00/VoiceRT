@@ -9,7 +9,8 @@ callers can do either::
 Layout:
 
 - :mod:`src.prompts.base` — ``SYSTEM_PROMPT`` (voice base)
-- :mod:`src.prompts.terminal` — ``TERMINAL_PREAMBLE``, ``BROWSER_PREAMBLE``
+- :mod:`src.prompts.terminal` — ``TERMINAL_PREAMBLE``,
+  ``TERMINAL_TOOL_CATALOGUE``, ``BROWSER_PREAMBLE``
 - :mod:`src.prompts.voice` — front/fast/text/voice turn prompts + reply templates
 - :mod:`src.prompts.delegate` — boolean routing contract + retired tool spec
 - :mod:`src.prompts.title` — two-word session titles
@@ -25,8 +26,12 @@ homes (``src.models.llm``, ``src.main``, ``src.agent.delegate``,
 from here for backward compatibility.
 """
 
-from src.prompts.base import SYSTEM_PROMPT
-from src.prompts.terminal import BROWSER_PREAMBLE, TERMINAL_PREAMBLE
+from src.prompts.base import SYSTEM_PROMPT, WORKER_STANCE
+from src.prompts.terminal import (
+    BROWSER_PREAMBLE,
+    TERMINAL_PREAMBLE,
+    TERMINAL_TOOL_CATALOGUE,
+)
 from src.prompts.voice import (
     DEGENERATE_REPLY,
     FRONT_CHAT_MAX_TOKENS,
@@ -35,6 +40,7 @@ from src.prompts.voice import (
     VOICE_FAST_SYSTEM,
     VOICE_SUFFIX,
     WORKER_DOWN_TEMPLATE,
+    identity_sentence,
 )
 from src.prompts.delegate import (
     BOOLEAN_FEWSHOT,
@@ -69,7 +75,9 @@ from src.prompts.memory import (
 
 __all__ = [
     "SYSTEM_PROMPT",
+    "WORKER_STANCE",
     "TERMINAL_PREAMBLE",
+    "TERMINAL_TOOL_CATALOGUE",
     "BROWSER_PREAMBLE",
     "FRONT_SYSTEM",
     "VOICE_FAST_SYSTEM",
@@ -78,6 +86,7 @@ __all__ = [
     "WORKER_DOWN_TEMPLATE",
     "DEGENERATE_REPLY",
     "FRONT_CHAT_MAX_TOKENS",
+    "identity_sentence",
     "BOOLEAN_SYSTEM",
     "BOOLEAN_FEWSHOT",
     "BOOLEAN_MAX_TOKENS",

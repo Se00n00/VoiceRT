@@ -12,6 +12,8 @@ from ..state import (
     _t_boot,
     _turns,
     get_agent,
+    get_brain_mode,
+    switch_brain_mode,
     switch_model,
 )
 
@@ -46,6 +48,23 @@ def model_info():
 @router.post("/model/switch")
 async def model_switch(payload: dict):
     return await switch_model((payload or {}).get("name", ""))
+
+
+@router.get("/brain")
+def brain_info():
+    mode = get_brain_mode()
+    return {"mode": mode,
+            "available": [{"name": "voice",
+                           "desc": "full voice agent on the main LLM harness",
+                           "current": mode == "voice"},
+                          {"name": "harness",
+                           "desc": "LLM harness only (text turns, no voice mode)",
+                           "current": mode == "harness"}]}
+
+
+@router.post("/brain/switch")
+async def brain_switch(payload: dict):
+    return await switch_brain_mode((payload or {}).get("mode", ""))
 
 
 def _vram() -> dict:

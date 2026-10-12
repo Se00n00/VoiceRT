@@ -341,6 +341,10 @@ async def talk_offer(payload: dict):
     """WebRTC offer/answer handshake for a duplex voice call."""
     from aiortc import RTCSessionDescription
 
+    from ..state import get_brain_mode
+
+    if get_brain_mode() != "voice":
+        return JSONResponse(status_code=409, content={"error": "voice mode off (harness brain active)"})
     if _active_call.get("call") is not None:
         return JSONResponse(status_code=409, content={"error": "call already active"})
     try:

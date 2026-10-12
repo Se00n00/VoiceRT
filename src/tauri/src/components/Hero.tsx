@@ -11,6 +11,7 @@ export const COMMANDS: { name: string; hint: string }[] = [
   { name: "/cwd", hint: "/cwd PATH — set the working directory" },
   { name: "/clear", hint: "clear the transcript" },
   { name: "/model", hint: "/model [name] — list or switch the model" },
+  { name: "/brain", hint: "/brain [voice|harness] — switch brains" },
   { name: "/voice", hint: "/voice [sec] — record a voice turn" },
   { name: "/dictate", hint: "/dictate [sec] — voice dictation input" },
   { name: "/mic", hint: "/mic — record 5s" },
@@ -48,6 +49,7 @@ export function suggestTypo(word: string): string | null {
 
 export type AgentMode = "Agent" | "Assistant";
 export type Perf = "High" | "Medium" | "Low";
+export type BrainMode = "voice" | "harness";
 
 export function Greeting() {
   return (
@@ -147,6 +149,8 @@ export function AskCard(props: {
   onToggleHistory: () => void;
   agentMode: AgentMode;
   onAgentMode: (m: AgentMode) => void;
+  brainMode: BrainMode;
+  onToggleBrain: () => void;
   perf: Perf;
   onPerf: (p: Perf) => void;
   models: { name: string; label: string }[];
@@ -266,6 +270,24 @@ export function AskCard(props: {
               >
                 <I d={P_PLUS} cls="h-4 w-4" />
               </button>
+              <button
+                title={props.brainMode === "voice" ? "Brain: voice agent (click for LLM harness)" : "Brain: LLM harness (click for voice agent)"}
+                aria-label="Switch brain"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  props.onToggleBrain();
+                }}
+                class={`flex h-7 items-center gap-1.5 rounded-full px-2.5 font-mono text-[11px] ring-1 transition ${
+                  props.brainMode === "voice"
+                    ? "bg-white/10 text-white ring-white/20 hover:bg-white/15"
+                    : "bg-sky-400/15 text-sky-200 ring-sky-300/30 hover:bg-sky-400/25"
+                }`}
+              >
+                <Show when={props.brainMode === "voice"} fallback={<I d={P_BOLT} cls="h-3.5 w-3.5" />}>
+                  <I d={P_USER} cls="h-3.5 w-3.5" />
+                </Show>
+                {props.brainMode === "voice" ? "Voice" : "Harness"}
+              </button>
             </div>
 
             <div class="ml-auto flex items-center gap-1.5">
@@ -300,25 +322,27 @@ export function AskCard(props: {
                     <Show
                       when={hasText()}
                       fallback={
-                        <button
-                          title="Voice mode"
-                          aria-label="Voice mode"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            props.onVoiceMode();
-                          }}
-                          class="voice-blob relative flex h-8 w-8 items-center justify-center overflow-hidden text-white transition active:scale-[0.96]"
-                        >
-                          <WarpOrb />
-                          <span class="relative drop-shadow-[0_1px_2px_rgba(0,0,0,0.6)]">
-                            <svg viewBox="0 0 20 20" class="h-5 w-5" fill="currentColor" aria-hidden="true">
-                              <rect x="3.5" y="8" width="2.4" height="4" rx="1.2" />
-                              <rect x="7.3" y="4.5" width="2.4" height="11" rx="1.2" />
-                              <rect x="11.1" y="7" width="2.4" height="6" rx="1.2" />
-                              <rect x="14.9" y="9.5" width="2.4" height="4" rx="1.2" />
-                            </svg>
-                          </span>
-                        </button>
+                        <Show when={props.brainMode === "voice"}>
+                          <button
+                            title="Voice mode"
+                            aria-label="Voice mode"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              props.onVoiceMode();
+                            }}
+                            class="voice-blob relative flex h-8 w-8 items-center justify-center overflow-hidden text-white transition active:scale-[0.96]"
+                          >
+                            <WarpOrb />
+                            <span class="relative drop-shadow-[0_1px_2px_rgba(0,0,0,0.6)]">
+                              <svg viewBox="0 0 20 20" class="h-5 w-5" fill="currentColor" aria-hidden="true">
+                                <rect x="3.5" y="8" width="2.4" height="4" rx="1.2" />
+                                <rect x="7.3" y="4.5" width="2.4" height="11" rx="1.2" />
+                                <rect x="11.1" y="7" width="2.4" height="6" rx="1.2" />
+                                <rect x="14.9" y="9.5" width="2.4" height="4" rx="1.2" />
+                              </svg>
+                            </span>
+                          </button>
+                        </Show>
                       }
                     >
                       <button
@@ -427,7 +451,7 @@ function RichText(props: { text: string }) {
   );
 }
 
-export function Transcript(props: { msgs: Msg[]; onSpeak: (text: string) => void }) {
+export function Transcript(props: { msgs: Msg[] }) {
   // When a real conversation exists, the panel flattens the dither behind
   // it exactly like the mouse hover does.
   const hasChat = () => props.msgs.some((m) => m.who === "you" || m.who === "agent" || m.who === "cot");
@@ -456,6 +480,7 @@ export function Transcript(props: { msgs: Msg[]; onSpeak: (text: string) => void
                   when={m.who === "you"}
                   fallback={
                     <div
+                      id={`msg-${m.id}`}
                       class={`px-1 py-0.5 text-sm ${
                         m.who === "agent"
                           ? "text-white/85"
@@ -466,17 +491,12 @@ export function Transcript(props: { msgs: Msg[]; onSpeak: (text: string) => void
                     >
                       <div class="mb-0.5 flex items-center justify-between text-[10px] uppercase tracking-widest opacity-60">
                         <span>{m.who === "agent" ? "Agent" : m.who === "err" ? "Error" : "System"}</span>
-                        <Show when={m.who === "agent"}>
-                          <button class="normal-case tracking-normal underline" onClick={() => props.onSpeak(m.text)}>
-                            Speak
-                          </button>
-                        </Show>
                       </div>
                       {m.who === "agent" ? <RichText text={m.text} /> : <p class="whitespace-pre-wrap break-words">{m.text}</p>}
                     </div>
                   }
                 >
-                  <div class="bub-you rounded-2xl bg-[#1b1c22]/70 px-4 py-3 text-sm text-white shadow-lg ring-1 ring-white/15 backdrop-blur-xl">
+                  <div id={`msg-${m.id}`} class="bub-you rounded-2xl bg-[#1b1c22]/70 px-4 py-3 text-sm text-white shadow-lg ring-1 ring-white/15 backdrop-blur-xl">
                     <div class="mb-0.5 text-[10px] uppercase tracking-widest opacity-60">
                       <span>You</span>
                     </div>
@@ -485,7 +505,9 @@ export function Transcript(props: { msgs: Msg[]; onSpeak: (text: string) => void
                 </Show>
               }
             >
-              <ChainOfThoughtThread steps={m.steps ?? []} />
+              <div id={`msg-${m.id}`}>
+                <ChainOfThoughtThread steps={m.steps ?? []} />
+              </div>
             </Show>
           )}
         </For>

@@ -112,6 +112,11 @@ class SimAgent:
         Yields the same term/* events as ``run_text`` (plus sys notes).
         """
         agent = self.agent
+        if getattr(agent, "llm", None) is None:
+            async for ev in agent.run_text(text, session_id=sid, cwd=cwd,
+                                           confirm_fn=confirm_fn):
+                yield ev
+            return
         # Phase 0 — plan (one cheap tool-free call).
         try:
             plan_res = await agent.llm.generate(

@@ -108,4 +108,4 @@ The two-brain split competes for the same card; `placement` in
 ## 5.8 See also
 
 - [01-agent.md](01-agent.md#16-two-brain-delegation) — who uses which
-- [07-inference.md](07-inference.md) — the custom runtime
+- [07-inference.md](07-inference.md) — retired runtime note

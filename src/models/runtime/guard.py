@@ -188,13 +188,11 @@ def release_tenant_lock() -> None:
 
 
 def sidecar_gpu_estimate(backend: str, config=None) -> tuple[bool, float]:
-    """(needs_gpu, vram_mb) for the sidecar-shaped backends.
+    """(needs_gpu, vram_mb) for the sidecar backend.
 
-    Only bonsai parks anything in VRAM (``-ngl`` layers); cloud legs
-    (``gemini``, ``groq``) and everything else return ``(False, 0.0)`` via the
-    branch below. Estimates are conservative by design — the
-    sidecar's own checks stay authoritative, this only stops a blind
-    claim on a card that has no room.
+    Only bonsai parks anything in VRAM (``-ngl`` layers); everything
+    else returns ``(False, 0.0)``. Cloud backends (groq/gemini) never
+    touch this path — they are stock LangChain models, not sidecars.
     """
     if str(backend) != "bonsai":
         return False, 0.0

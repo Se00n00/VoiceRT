@@ -1,9 +1,9 @@
 """Hand-written Triton kernels for the Qwen3-0.6B LLM leg (absolute-import package).
 
 Qwen-only: low-level ops (rmsnorm/rope/swiglu/attention) plus the per-leg
-surfaces (`qwen`, `qwen_fused`) and `paged_attention` for the paged runner.
+surfaces (`qwen`, `qwen_fused`).
 STT/TTS run pure torch (`src.models.pytorch.whisper/tts`) — no kernels here.
-Everything exported is imported by the Qwen leg, the paged runner, or a test.
+Everything exported is imported by the Qwen leg or a test.
 """
 from src.models.triton_kernels.utils import grid1d, next_pow2, cdiv, num_warps_for_width, tl_dtype, check_cuda
 from src.models.triton_kernels.activation import swiglu, silu, _swiglu_kernel, _silu_kernel

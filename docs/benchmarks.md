@@ -3,8 +3,9 @@
 Legs, turns and routing re-measured 2026-10-02 (means over n=4 steady-state
 turns unless noted; first-call warmup excluded). Rows marked historical
 were not re-run: kernel microbenches need a long exclusive GPU session,
-and the concurrency/cost tables are a Qwen2.5-era reference stack. Engine
-benches were re-run 2026-10-03 after the `src.inference` parser fix.
+and the concurrency/cost tables are a Qwen2.5-era reference stack. The
+custom paged runtime (`src/inference/`, `benchmarks/engine_bench.py`)
+is deleted; its numbers below stay for history only.
 
 All commands assume `PYTHONPATH=.` from inside `voice-pipeline/`.
 
@@ -15,12 +16,9 @@ All commands assume `PYTHONPATH=.` from inside `voice-pipeline/`.
 .venv/bin/python -m src.models.triton_kernels.qwen_fused --bench --save_path benchmarks/results
 .venv/bin/python -m src.models.triton_kernels.whisper_fused --bench --save_path benchmarks/results
 .venv/bin/python -m src.models.triton_kernels.tts_fused --bench --save_path benchmarks/results
-
-# inference engine features (real QwenRunner, isolated subprocess per config)
-.venv/bin/python benchmarks/engine_bench.py --num-requests 8 --max-tokens 32
 ```
 
-## LLM: inference engine features (Qwen3-0.6B, real QwenRunner, `num_blocks=16`)
+## Retired: paged inference engine (deleted, numbers kept for history)
 
 Re-run 2026-10-05 post cold boot. Real `QwenRunner` only — isolated
 subprocess per config. Workload: 8 requests × 32 tokens (256 total).
@@ -172,10 +170,11 @@ slower across the board than those rows.
 | Bonsai 27B worker | not runnable here: RAM guard refused (5.6 GB GGUF vs 3.9 GB available) — no tok/s |
 | Gemma-4-E4B sidecar | not runnable here: needs ~6 GB RAM |
 
-CUDA-graphs, engine features and kernel plots are blocked behind the
-2026-10-02 GPU wedge (`ERR!`, cold boot required) plus the pre-existing
-`src/inference` breakage — see `docs/plans/gpu-memory-guard.md` for the
-pre-execution guard plan written up after the incident.
+CUDA-graphs and kernel plots are blocked behind the
+2026-10-02 GPU wedge (`ERR!`, cold boot required); the custom paged
+runtime (`src/inference/`) is deleted — its numbers above stay for
+history. See `docs/plans/gpu-memory-guard.md` for the pre-execution
+guard plan written up after the incident.
 
 ## Capacity: VRAM-probed sessions (RTX 3050 4096 MB, Qwen3-0.6B)
 
@@ -189,8 +188,8 @@ Recomputed 2026-10-02 via `src/models/runtime/capacity.py`
 | Usable | ~1300 MB | ~1300 MB |
 | Per session (~270 MB) | **~4 sessions** | **~4 sessions** |
 
-Server auto-derives this at boot (`src/models/runtime/capacity.py`, `auto_engine_config`).
+Session VRAM math lives in `src/models/runtime/capacity.py`.
 
 ---
 
-All plots in `benchmarks/results/plots_fused/` · engine bench in `benchmarks/engine_bench.py` · capacity math in `src/models/runtime/capacity.py`.
+All plots in `benchmarks/results/plots_fused/` · capacity math in `src/models/runtime/capacity.py`.

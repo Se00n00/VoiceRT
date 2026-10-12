@@ -78,15 +78,17 @@ Two different caps, two different resources:
 
 ## 5. Retuning (no YAML — dataclass fields)
 
-All serving knobs are `VoiceAgentConfig` fields (`per_turn_mb`,
-`vram_budget_mb`, `max_inflight`, `queue_timeout_s`, `max_sessions`,
-`session_ttl_s`); estimator constants (`headroom_*`, `safety_factor`)
-live in `src/models/runtime/capacity.py` next to the math:
+All serving knobs are config fields (`CascadeConfig`: `per_turn_mb`,
+`vram_budget_mb`; `LongRunningConfig`: `max_inflight`, `queue_timeout_s`,
+`max_sessions`, `session_ttl_s`); estimator constants (`headroom_*`,
+`safety_factor`) live in `src/models/runtime/capacity.py` next to the math:
 
 ```python
+from src.long_running import LongRunningConfig
 from src.main import VoiceAgent, VoiceAgentConfig
 
-agent = VoiceAgent(VoiceAgentConfig(max_inflight=4, queue_timeout_s=10))
+agent = VoiceAgent(VoiceAgentConfig(harness=LongRunningConfig(
+    max_inflight=4, queue_timeout_s=10)))
 ```
 
 And `llm.max_tokens` (generation length) re-prices sessions. Verify any

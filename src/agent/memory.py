@@ -32,10 +32,12 @@ from src.agent.budget import estimate_tokens
 try:
     from langchain_core.chat_history import BaseChatMessageHistory
     from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+    from langchain_core.messages.utils import trim_messages
     _HAVE_LC = True
 except Exception:  # pragma: no cover - langchain absent (never in prod)
     _HAVE_LC = False
     BaseChatMessageHistory = object  # type: ignore
+    trim_messages = None  # type: ignore
 
     class _Msg:  # minimal Human/AI stand-ins (dict-backed, test-safe)
         def __init__(self, content=""):
@@ -138,18 +140,38 @@ class LangChainSessionMemory:
         cap = max(1, self.max_turns) * 2  # user+assistant per turn
         if len(h.messages) > cap:
             del h.messages[:len(h.messages) - cap]
-        if self.max_tokens > 0 and len(h.messages) > 2:
-            counts = [estimate_tokens(_to_dict(m).get("content", ""),
-                                      self.tokenizer_url)
-                      for m in h.messages]
-            total = sum(counts)
-            i = 0
-            # newest-first fill within budget, always keep last 2 (turn)
-            while total > self.max_tokens and i < len(h.messages) - 2:
-                total -= counts[i]
-                i += 1
-            if i:
-                del h.messages[:i]
+        if self.max_tokens > 0 and len(h.messages) > 2 and _HAVE_LC:
+            # Token-budget window via langchain trim_messages (newest-first
+            # fill, same estimator); always keep the last turn on failure.
+            # Counts memoized per message: trim_messages probes prefixes
+            # (binary search), the estimator must stay one pass.
+            counts = {id(m): estimate_tokens(_to_dict(m).get("content", ""),
+                                             self.tokenizer_url)
+                      for m in h.messages}
+
+            def _count(ms) -> int:
+                n = 0
+                for m in ms:
+                    c = counts.get(id(m))
+                    if c is None:
+                        c = estimate_tokens(
+                            str(getattr(m, "content", "") or ""))
+                    n += c
+                return n
+
+            try:
+                trimmed = trim_messages(
+                    list(h.messages),
+                    max_tokens=int(self.max_tokens),
+                    token_counter=_count,
+                    strategy="last",
+                    allow_partial=False,
+                )
+            except Exception:
+                trimmed = []
+            if len(trimmed) < min(2, len(h.messages)):
+                trimmed = h.messages[-min(2, len(h.messages)):]
+            del h.messages[:len(h.messages) - len(trimmed)]
 
     # -- LangChain surface ----------------------------------------------
     def lc_history(self, sid) -> LCSessionHistory:

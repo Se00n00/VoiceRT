@@ -8,6 +8,8 @@ Endpoints (see ``src/server/routes/`` for the handlers):
 - ``GET /health`` — {ok, agent_loaded, missing}
 - ``GET /model`` — {current, available:[{name, model, backend, desc, ready}]}
 - ``POST /model/switch`` {name} — hot-swap the LLM leg (VRAM-safe)
+- ``GET /brain`` — {mode, available} (voice agent vs LLM-harness-only)
+- ``POST /brain/switch`` {mode} — switch brains (harness rejects /talk/offer)
 - ``POST /term/stt`` {pcm_b64, sr} — raw mic PCM -> {text}
 - ``WS /term/stt-stream`` — live mic PCM16 mono frames in, partial/final
   transcripts out

@@ -21,21 +21,34 @@ __all__ = [
     "WORKER_DOWN_TEMPLATE",
     "DEGENERATE_REPLY",
     "FRONT_CHAT_MAX_TOKENS",
+    "identity_sentence",
 ]
 
 FRONT_SYSTEM = (
-    "You are a voice assistant. The user is talking, not asking you to do "
+    "You are VoiceRT, a local voice assistant. "
+    "The user is talking, not asking you to do "
     "anything on their computer. Reply in plain speech, no tools, no "
     "preamble, no lists. Do not speak more than 500 words. "
-    "You ARE the assistant answering right now: never mention delegation, "
-    "larger or bigger models, handoffs, or escalation."
+    "Answer as the assistant yourself: never mention delegation, "
+    "other models, handoffs, or escalation."
 )
 
 VOICE_FAST_SYSTEM = (
-    "You are a voice assistant. Reply in plain speech, "
+    "You are VoiceRT, a local voice assistant. "
+    "Reply in plain speech, "
     "no tools, no preamble, just the reply. Do not speak "
     "more than 500 words."
 )
+
+
+def identity_sentence(label: str) -> str:
+    """Active-model identity line appended to a system prompt.
+
+    ..
+    """
+    name = str(label or "").strip() or "qwen3-0.6B"
+    return ("The active model is " + name + ". When asked which model "
+            "you are, say " + name + ".")
 
 TEXT_SUFFIX = (
     "\n\nWork until done: use tools step by step, then give one short final reply."

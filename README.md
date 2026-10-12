@@ -135,10 +135,9 @@
 
 ─── 07 / INFERENCE ───────────────────────────────────────────────────────────────────────────
 
-  paged KV · FCFS admission · continuous batching · stall detection at 500 empty steps
-  ✓ FIXED 2026-10-03: the `for o in outs:` body is re-indented, src.inference
-    imports, and the 14 collection errors are gone (634 run, 0 errors).
-    Not on the live path: LlmModel is fused or a llama.cpp sidecar.
+  Retired: the custom paged runtime (`src/inference/`, paged KV, prefix
+  cache, CUDA graphs) is deleted. Legs run fused kernels or sidecars;
+  batching is one-request-at-a-time. Historical numbers stay below.
 
 ─── 08 / TUI (v0.0.1) ────────────────────────────────────────────────────────────────────────
 
@@ -192,10 +191,10 @@ are the cited detail:
 | 04 | [Sessions](docs/architecture/04-sessions.md) | identity, window ownership, persistence, resume |
 | 05 | [Models](docs/architecture/05-models.md) | the four legs, `LlmConfig`, 7 backends, streaming, VRAM |
 | 06 | [Processes](docs/architecture/06-processes.md) | bridge/server endpoints, and the startup-warm trap |
-| 07 | [Inference](docs/architecture/07-inference.md) | the custom runtime (parser fixed 2026-10-03, bench re-run) |
+| 07 | [Inference](docs/architecture/07-inference.md) | retired (custom paged runtime deleted) |
 | 08 | [TUI](docs/architecture/08-tui.md) | command palette, shades, exit card |
 
-Docs: [`docs/architecture/`][arch-index] · [`docs/architecture.md`](docs/architecture.md) (legacy single-file) · [`docs/capacity.md`](docs/capacity.md) · [`docs/inference_engine.md`](docs/inference_engine.md) · [`docs/benchmarks.md`](docs/benchmarks.md) · [`docs/README.md`](docs/README.md)
+Docs: [`docs/architecture/`][arch-index] · [`docs/architecture.md`](docs/architecture.md) (legacy single-file) · [`docs/capacity.md`](docs/capacity.md) · [`docs/benchmarks.md`](docs/benchmarks.md) · [`docs/README.md`](docs/README.md)
 
 [arch-index]: docs/architecture/README.md
 
@@ -217,21 +216,8 @@ Docs: [`docs/architecture/`][arch-index] · [`docs/architecture.md`](docs/archit
                       │     │       │                 │ (no tool) │
                       │     │       ▼ (escalated)    │           │
                      │     │  worker LLM Bonsai 27B ─┤           │
-                     │     │  ┌────────────────┴──────────────────┐  │
-              │     │  │      Inference Engine (paged)     │  │
-              │     │  │  scheduling  ContinuousScheduler  │  │
-              │     │  │  batching    make_batch + token  │  │
-              │     │  │  KV cache    PagedKVCache/Pool   │  │
-              │     │  │  memory      BlockManager +      │  │
-              │     │  │              auto num_blocks     │  │
-              │     │  │  features: prefix cache / chunked│  │
-              │     │  │           prefill / CUDA-graph / │  │
-              │     │  │           fused paged attention  │  │
-              │     │  │  runner    QwenRunner (real     │  │
-              │     │  │            weights, no dummy)   │  │
-              │     │  └────────────┬────────────────────┘  │
-              │     │       │       │ streaming tokens      │
-              │     │  sentence splitter (overlap)          │
+                     │     │       │ streaming tokens      │
+                     │     │  sentence splitter (overlap)          │
               │     │       │                                 │
               │     │  TTS  Kokoro-82M ─┐                   │
               │     │  batched post     │ fused in1d_silu / │
@@ -242,9 +228,7 @@ Docs: [`docs/architecture/`][arch-index] · [`docs/architecture.md`](docs/archit
 ```
 
 **How a kernel is built (same for Qwen/Whisper/Kokoro):**
-`src/models/triton_kernels/qwen_fused.py` — *one file* = all fused kernels + `@triton.testing.perf_report` bench + torch exact fallback. `src/models/pytorch/qwen.py` is the PyTorch reference. `src/models/qwen.py:QwenFused` loops it `28×` with `KVCacheBatched` and `check_budget`. Same pattern for `whisper_fused` (6×) and `tts_fused`. Facades `src/models/llm.py:SttModel/TtsModel` are mandatory fused (no legacy `engines/*` fallback). `LlmModel(use_paged=True)` wraps the same weights in the paged engine; `VoiceAgent(llm_paged=True)` / `server.py` on CUDA activates it — `GET /health → engine.active` proves it.
-
-**Inference engine (live, re-verified 2026-10-03):** paged KV cache, continuous batching, prefix caching, chunked prefill, CUDA graphs — `src/inference/` runs the real QwenRunner (28 layers, real weights, no dummy fallback) behind `InferenceEngine.generate`, with FCFS admission, block reservation, and a 500-empty-step stall watchdog. Throughput re-measured below via `benchmarks/engine_bench.py`.
+`src/models/triton_kernels/qwen_fused.py` — *one file* = all fused kernels + `@triton.testing.perf_report` bench + torch exact fallback. `src/models/pytorch/qwen.py` is the PyTorch reference. `src/models/qwen.py:QwenFused` loops it `28×` with `KVCacheBatched` and `check_budget`. Same pattern for `whisper_fused` (6×) and `tts_fused`. Facades `src/models/llm.py:SttModel/TtsModel` are mandatory fused (no legacy `engines/*` fallback).
 
 Verbose specs → docs: capacity model, queue, Triton details, API and config.
 
@@ -337,7 +321,7 @@ backstop catching a miss. Skew is recorded, never used to decide.
 | --- | --- | --- |
 | `VOICE_DELEGATE=0` | on | single brain — the llm leg answers everything |
 | `VOICE_DELEGATE_CONFIG` | `configs/delegate.yaml` | path to the placement/routing config |
-| `VoiceAgentConfig(delegate=...)` | **off** | library default: no second set of weights unless asked |
+| `VoiceAgentConfig(harness=LongRunningConfig(delegate=...))` | **off** | library default: no second set of weights unless asked |
 
 The library default is off on purpose: delegation builds a *second* set of
 weights, so a bare `VoiceAgent()` that never asked for two brains should
@@ -427,58 +411,25 @@ All commands assume `PYTHONPATH=.` from inside `voice-pipeline/`.
 .venv/bin/python -m src.models.triton_kernels.qwen_fused --bench --save_path benchmarks/results
 .venv/bin/python -m src.models.triton_kernels.whisper_fused --bench --save_path benchmarks/results
 .venv/bin/python -m src.models.triton_kernels.tts_fused --bench --save_path benchmarks/results
-
-# inference engine features (real QwenRunner, isolated subprocess per config)
-.venv/bin/python benchmarks/engine_bench.py --num-requests 8 --max-tokens 32
 ```
 
 ### Fused Triton speedup (measured 2026-10-05, same box, real weights)
 
-How many × faster the paged engine runs with fused Triton vs pure torch
+How many × faster the fused Triton leg runs vs pure torch
 (same workload both sides, steady state, warmup excluded):
 
 ![Fused Triton speedup per model](benchmarks/results/plots/triton_speedup.png)
 
-Raw pairs (torch → triton): LLM leg 18.5 → 65.9 tok/s (Qwen3-0.6B,
-64+16, TTFT 407ms → 17ms) · paged engine 25.2 → 58.9 tok/s (Qwen3-0.6B,
-8×32, torch side from the purge-era run). Only Qwen keeps Triton now — STT/TTS are pure torch by design, so
+Raw pair (torch → triton): LLM leg 18.5 → 65.9 tok/s (Qwen3-0.6B,
+64+16, TTFT 407ms → 17ms). Only Qwen keeps Triton now — STT/TTS are pure torch by design, so
 there is no Triton bar for them (their last paired runs tied at 1.0×:
-encoder-dominated Whisper, synthesis-dominated Kokoro). Reproduce:
+encoder-dominated Whisper, synthesis-dominated Kokoro). The chart's
+second row is the retired paged engine's last pair, kept for history.
+Reproduce:
 `benchmark_pytorch.py` vs `benchmark_triton.py` in `benchmarks/llm/`
-(same flags both sides), engine via `benchmarks/engine_bench.py`;
+(same flags both sides);
 regenerate the chart with `benchmarks/plot_triton_speedup.py` (extend
 `ROWS`, raw leg CSVs under `benchmarks/results/quick_20261005_qwen3/`).
-
-### LLM: inference engine features (Qwen3-0.6B, real QwenRunner, `num_blocks=16`)
-
-Re-run 2026-10-05 post cold boot. Real `QwenRunner` only — isolated
-subprocess per config. Workload: 8 requests × 32 tokens (256 total).
-
-| config | tok/s | delta vs base |
-|---|---|---|
-| base (no features) | 58.9 | — |
-| + prefix caching | 58.9 | +0.0% |
-| + chunked prefill | 59.1 | +0.3% |
-| + CUDA graph | 56.6 | -3.9% |
-| all features | 56.3 | -4.5% |
-
-Honest read: on this all-distinct-prompts workload the features do not
-pay — prefix cache records 0 hits and CUDA graphs stay enabled-but-never-
-captured, so each feature is pure overhead and base wins. (Earlier run on
-a shorter-burst workload showed up to +49.4% for all-features; kept below
-for reference.)
-
-<details><summary>Earlier run (different workload mix)</summary>
-
-| config | 32 tok/req: tok/s | delta | 8 tok/req: tok/s | delta |
-|---|---|---|---|---|
-| base (no features) | 42.0 | — | 21.7 | — |
-| + prefix caching | 48.8 | **+16.4%** | 19.4 | -10.5% |
-| + chunked prefill | 49.3 | **+17.4%** | 30.6 | **+41.3%** |
-| + CUDA graph | 48.4 | **+15.3%** | 31.8 | **+46.7%** |
-| all features | 48.0 | **+14.4%** | 32.4 | **+49.4%** |
-
-</details>
 
 ### Fused kernel microbenchmarks (single layer vs eager torch)
 
@@ -602,11 +553,11 @@ Recomputed 2026-10-02 via `src/models/runtime/capacity.py`
 | Usable | ~1300 MB | ~1300 MB |
 | Per session (~270 MB) | **~4 sessions** | **~4 sessions** |
 
-Server auto-derives this at boot (`src/models/runtime/capacity.py`, `auto_engine_config`).
+Session VRAM math lives in `src/models/runtime/capacity.py`.
 
 ---
 
-All plots in `benchmarks/results/plots_fused/` · engine bench in `benchmarks/engine_bench.py` · capacity math in `src/models/runtime/capacity.py`.
+All plots in `benchmarks/results/plots_fused/` · capacity math in `src/models/runtime/capacity.py`.
 
 ## References
 
@@ -640,7 +591,7 @@ All plots in `benchmarks/results/plots_fused/` · engine bench in `benchmarks/en
 - [9]: https://www.langchain.com/blog/context-engineering-for-agents | Context Engineering for Agents - by LangChain
 - [10]: https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents | Effective context engineering for AI agents - by Anthropic (Applied AI team)
 
-More: [`docs/architecture.md`](docs/architecture.md) startup + WS flow, [`docs/inference_engine.md`](docs/inference_engine.md) scheduling/batching/KV/memory, [`docs/capacity.md`](docs/capacity.md) VRAM math, plots in `benchmarks/results/plots_fused/`.
+More: [`docs/architecture.md`](docs/architecture.md) startup + WS flow, [`docs/capacity.md`](docs/capacity.md) VRAM math, plots in `benchmarks/results/plots_fused/`.
 
 ---
 
@@ -673,26 +624,35 @@ The trade is deliberate: errors and confirm prompts stop being red and yellow, s
 ## Sandboxed tool execution (docker)
 
 Terminal tools run on the host by default. Pass a `SandboxConfig` to run
-`exec`/`exec_bg`/`poll` inside a per-turn container instead
-(`src/sandbox/docker.py:DockerSandbox`, a deepagents `BaseSandbox` over
-the docker CLI — no new dependencies):
+each worker turn inside a fresh per-turn container instead
+(`src/sandbox/docker.py:SandboxShellBackend`, host file ops + container
+`execute`, over the docker CLI — no new dependencies):
 
 ```python
+from src.long_running import LongRunningConfig
 from src.main import VoiceAgent, VoiceAgentConfig
 from src.sandbox.docker import SandboxConfig
-agent = VoiceAgent(VoiceAgentConfig(sandbox=SandboxConfig()))
-# or: PYTHONPATH=. .venv/bin/python llm_chat.py --sandbox
+agent = VoiceAgent(VoiceAgentConfig(
+    harness=LongRunningConfig(sandbox=SandboxConfig())))
 ```
 
-What it is (honest version): separate pid/network/mount namespaces,
-`--cap-drop ALL`, memory/cpu/pids limits, no privileged flag. The turn
-cwd is bind-mounted at `/work`, so file ops work on host files unchanged
-— containment covers processes, network, devices and resources, not
-filesystem secrecy. Policy deny-list + `y/n` confirm stay on top.
-`read`/`write`/`edit`/`grep`/`list` stay host-side on the same tree.
-`python_exec`/`docker_exec` always run containerized (MCP or local).
+What it is (honest version): one `--rm` container per turn, separate
+pid/network/mount namespaces, `--cap-drop ALL`, memory/cpu/pids limits,
+no privileged flag. The turn cwd is jailed (no `/`, system prefixes,
+`~/.ssh`, or the session store) then bind-mounted at `/work`, so file
+ops work on host files unchanged — containment covers processes,
+network, devices and resources, not filesystem secrecy. Policy
+deny-list + `y/n` confirm stay on top. `read`/`write`/`edit`/`grep`/
+`list` stay host-side on the same tree. `exec` and `python_exec` run
+containerized (`VOICE_SANDBOX_CONTAINER` switches `python_exec` from
+host `sys.executable` to `docker exec`). Sessions persist globally in
+`~/.voicert/<id>.json` regardless of where the turn runs.
 
-Defaults: image `python:3.12-slim` (needs `bash`, `python3`, GNU
-`timeout`), `--network none`, `--memory 1g`, `--cpus 2`. Requirements:
+Image policy: one pinned global image, `python:3.12-slim` (needs
+`bash`, `python3`, GNU `timeout`) — never one image per session. Images
+are immutable, so runs can't grow them: turn output lands in the
+container layer (discarded by `--rm`) or the mounted workdir.
+Defaults: `--network none`, `--memory 1g`, `--cpus 2`. Requirements:
 docker daemon access (`sudo usermod -aG docker $USER` + re-login) —
-without it the turn fails fast with the fix printed.
+without it the turn fails fast with the fix printed, never silently
+on the host.

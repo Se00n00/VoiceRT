@@ -43,16 +43,17 @@ NOISE = [
 
 
 async def run_condition(llm_cfg, mem_cfg, tag, workdir):
+    from src.long_running import LongRunningConfig
     from src.main import VoiceAgent, VoiceAgentConfig
 
-    cfg = VoiceAgentConfig(
+    cfg = VoiceAgentConfig(harness=LongRunningConfig(
         llm=llm_cfg, work_dir=workdir, speak_text_turns=False,
         max_session_turns=mem_cfg["turns"],
         memory_tokens=mem_cfg["tokens"],
         memory_recall=mem_cfg["recall"],
         memory_store=mem_cfg["store"],
         memory_dir=mem_cfg["dir"],
-        sessions_dir=os.path.join(mem_cfg["dir"], "sessions"))
+        sessions_dir=os.path.join(mem_cfg["dir"], "sessions")))
     agent = VoiceAgent(cfg)
     await agent.llm.warm()
     from src.agent.budget import estimate_tokens

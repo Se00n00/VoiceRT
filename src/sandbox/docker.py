@@ -38,6 +38,7 @@ from deepagents.backends.protocol import (
     FileDownloadResponse,
     FileUploadResponse,
 )
+from deepagents.backends import LocalShellBackend
 from deepagents.backends.sandbox import BaseSandbox
 
 from src.agent.shell import JobManager, PersistentShell, _Job
@@ -289,6 +290,32 @@ class SandboxConfig:
             pull=self.pull)
 
 
+class SandboxShellBackend(LocalShellBackend):
+    """Host file ops + container exec: the per-turn graph backend.
+
+    Filesystem methods (ls/read/write/edit/grep) are inherited unchanged
+    and run host-side on the bind-mounted tree; only ``execute()`` runs
+    inside the turn container. The sandbox must be running
+    (``ensure_running``) before the graph invokes this backend.
+    ..
+    """
+
+    def __init__(self, sandbox: "DockerSandbox", timeout: int = 30) -> None:
+        """Bind to a running turn container.
+
+        ..
+        """
+        self.sandbox = sandbox
+        super().__init__(root_dir=sandbox.host_cwd, timeout=int(timeout))
+
+    def execute(self, command: str, *, timeout: int | None = None):
+        """Run one command inside the turn container. Never raises.
+
+        ..
+        """
+        return self.sandbox.execute(command, timeout=timeout)
+
+
 class DockerShell(PersistentShell):
     """Persistent bash INSIDE the turn container (same sentinel protocol).
 
@@ -307,7 +334,7 @@ class DockerShell(PersistentShell):
         return DockerJobs(self)
 
     def _spawn_argv(self):
-        return (["docker", "exec", "-i", self.sandbox.container,
+        return ([self.sandbox.docker, "exec", "-i", self.sandbox.container,
                  "bash", "--noprofile", "--norc", "-s"], None)
 
     def pwd(self) -> str:
@@ -361,4 +388,4 @@ class DockerJobs(JobManager):
 
 
 __all__ = ["DockerSandbox", "DockerSandboxError", "DockerShell", "DockerJobs",
-           "SandboxConfig", "BOX_DIR"]
+           "SandboxConfig", "SandboxShellBackend", "BOX_DIR"]

@@ -199,7 +199,6 @@ def front_llm_config(cfg: DelegateConfig):
         max_tokens=int(f.get("max_tokens", 64) or 64),
         max_seq=int(f.get("max_seq", 4096) or 4096),
         device=device,
-        use_paged=False,
         thinking=bool(f.get("thinking", False)),
     )
 
@@ -455,7 +454,8 @@ _STRONG_VERB = (
     r"compile|deploy|commit|push|pull|merge|rebase|kill|migrate|patch|"
     r"reinstall|rebuild|regenerate|convert|export|scrape|crawl|"
     r"write|edit|create|build|execute|run|fix|debug|implement|generate|"
-    r"download|install|grep|search|fetch|browse|install"
+    r"download|install|grep|search|fetch|browse|install|"
+    r"post|publish|tweet"
 )
 _WEAK_VERB = (
     r"list|read|open|show|find|check|get|set|print|dump|count|inspect|"

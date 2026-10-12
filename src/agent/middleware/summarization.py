@@ -19,15 +19,21 @@ from src.agent.chat_model import LocalChatModel
 __all__ = ["SummarizationMiddleware"]
 
 
-def SummarizationMiddleware(*, llm, backend):
+def SummarizationMiddleware(*, llm=None, backend=None, model=None):
     """Build the summarization middleware, or None when unavailable."""
     try:
-        backend_id = str(getattr(
-            getattr(llm, "config", None), "backend", ""))
-        ctx = int(CONTEXT_TOKENS.get(backend_id, 8192))
-        summarizer = LocalChatModel(llm=llm, no_tools=True)
+        if model is None and llm is not None and hasattr(llm, "config"):
+            from src.agent.chat_model import LocalChatModel
+
+            backend_id = str(getattr(llm.config, "backend", ""))
+            ctx = int(CONTEXT_TOKENS.get(backend_id, 8192))
+            model = LocalChatModel(llm=llm, no_tools=True)
+        elif model is not None:
+            ctx = int(CONTEXT_TOKENS.get("groq", 8192))
+        else:
+            return None
         return _DeepSummarizationMiddleware(
-            model=summarizer,
+            model=model,
             backend=backend,
             trigger=("tokens", max(2048, int(ctx * 0.9))),
             keep=("messages", 6),

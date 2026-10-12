@@ -1,5 +1,5 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
-import { AskCard, Greeting, Transcript, suggestTypo, type AgentMode, type Msg, type Perf } from "./components/Hero.js";
+import { AskCard, Greeting, Transcript, suggestTypo, type AgentMode, type BrainMode, type Msg, type Perf } from "./components/Hero.js";
 import { SAMPLES, SAMPLE_CONVERSATION, SAMPLE_NAMES } from "./components/samples.js";
 import { DitherBg } from "./components/DitherBg.js";
 import { ReactVoiceMode } from "./components/ReactVoiceMode.js";
@@ -7,10 +7,9 @@ import { KbdCombo } from "./components/Kbd.js";
 import { WarpOrb } from "./components/WarpOrb.js";
 import collapseSvg from "./assets/collapse.svg?raw";
 import expandSvg from "./assets/expand.svg?raw";
-import { API, TurnSocket, fetchHistory, fetchTitle, getLegs, getMetrics, getMetricsContext, getModel, health, say, setAPI, stt, switchModel, type Legs, type Metrics, type TurnEvent } from "./api/client.js";
+import { API, TurnSocket, fetchHistory, fetchTitle, getBrain, getLegs, getMetrics, getMetricsContext, getModel, health, setAPI, stt, switchBrain, switchModel, type Legs, type Metrics, type TurnEvent } from "./api/client.js";
 import type { CotStepData } from "./components/chain-of-thought.js";
-import { b64ToF32 } from "./audio/dsp.js";
-import { createRecorder, playF32, recordSecs, type Recorder } from "./audio/webaudio.js";
+import { createRecorder, recordSecs, type Recorder } from "./audio/webaudio.js";
 
 const uid = () => Math.random().toString(16).slice(2, 10);
 const newSessionId = () => `ses_${uid()}${uid().slice(0, 2)}`;
@@ -87,6 +86,7 @@ export function App() {
   const [codeMode, setCodeMode] = createSignal(false);
   const [autoMode, setAutoMode] = createSignal(false);
   const [agentMode, setAgentMode] = createSignal<AgentMode>("Agent");
+  const [brain, setBrain] = createSignal<BrainMode>("voice");
   const [perf, setPerf] = createSignal<Perf>("Medium");
   const [showHistory, setShowHistory] = createSignal(true);
   const [recState, setRecState] = createSignal<{ rec: Recorder; levels: number[] } | null>(null);
@@ -101,6 +101,10 @@ export function App() {
 
   async function enterVoiceMode(): Promise<void> {
     if (voiceMode()) return;
+    if (brain() !== "voice") {
+      push("sys", "voice mode is off while the harness brain is active (dictation still works)");
+      return;
+    }
     if (recState()) cancelDictate();
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -122,6 +126,33 @@ export function App() {
       stream?.getTracks().forEach((t) => t.stop());
     } catch {
       /* ignore */
+    }
+  }
+
+  async function toggleBrain(): Promise<void> {
+    const next: BrainMode = brain() === "voice" ? "harness" : "voice";
+    try {
+      const r = await switchBrain(next);
+      if (r.kind !== "ok") {
+        push("err", r.message ?? "brain switch failed");
+        return;
+      }
+      setBrain(next);
+      if (next === "harness") {
+        // Harness brain has no duplex voice: drop the overlay, keep dictation.
+        stopVoiceMode();
+        push("sys", "brain -> harness (LLM harness only — voice mode off, dictation stays)");
+      } else {
+        push("sys", "brain -> voice (full voice agent)");
+      }
+      const m = (r as { model?: { kind?: string; current?: string; label?: string; message?: string } }).model;
+      if (m) {
+        if (m.kind === "ok") push("sys", `model -> ${m.current ?? m.label ?? "?"}`);
+        else push("err", `model auto-switch failed: ${m.message ?? "?"}`);
+      }
+      await refresh();
+    } catch {
+      push("err", "brain switch failed (bridge down?)");
     }
   }
 
@@ -178,6 +209,7 @@ export function App() {
     if (id === sessionId() && msgs().length > 0) return;
     setSessionId(id);
     setMsgs([]);
+    setStreamId(null);
     setBusy(false);
     setConfirmAction(null);
     // Past conversations live in sessions/<sid>.json — restore the whole
@@ -262,6 +294,7 @@ export function App() {
     if (mod && (e.key === "v" || e.key === "V")) {
       if (isTypingTarget()) return; // let paste work
       e.preventDefault();
+      if (brain() !== "voice") return; // harness brain: no voice mode
       if (voiceMode()) setVoiceMode(false);
       else enterVoiceMode();
       return;
@@ -293,9 +326,80 @@ export function App() {
 
   const sock = new TurnSocket("/term");
   let pollTimer = 0;
+  // Live harness stream: id of the agent bubble token pieces append to.
+  const [streamId, setStreamId] = createSignal<string | null>(null);
+  let scrollQueued = false;
 
-  function push(who: Msg["who"], text: string): void {
-    setMsgs((m) => [...m, { id: uid(), who, text }]);
+  function push(who: Msg["who"], text: string): string {
+    const id = uid();
+    setMsgs((m) => [...m, { id, who, text }]);
+    return id;
+  }
+
+  /** Instant scroll to the very bottom (past the end spacer). Smooth
+      scrolling never settles while tokens pour in, so this is always
+      instant — every call lands completely at the down. */
+  function scrollToEnd(): void {
+    try {
+      const el = document.getElementById("hero-scroll");
+      if (el) el.scrollTo({ top: el.scrollHeight });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /** Scroll after Solid flushes the pushed message to the DOM. */
+  function scrollAfterPush(): void {
+    try {
+      requestAnimationFrame(() => requestAnimationFrame(scrollToEnd));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /** Throttled follow-scroll for the live token stream (one layout per frame). */
+  function scrollLive(): void {
+    if (scrollQueued) return;
+    scrollQueued = true;
+    try {
+      requestAnimationFrame(() => {
+        scrollQueued = false;
+        scrollToEnd();
+      });
+    } catch {
+      scrollQueued = false;
+    }
+  }
+
+  /** Pin a fresh user question to the top of the viewport so the previous
+      turn scrolls out of view above it. Falls back to the bottom. */
+  function scrollToQuestion(id: string): void {
+    try {
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          try {
+            const cont = document.getElementById("hero-scroll");
+            const el = document.getElementById(`msg-${id}`);
+            if (cont && el) {
+              const c = cont.getBoundingClientRect();
+              const r = el.getBoundingClientRect();
+              cont.scrollTo({ top: Math.max(0, cont.scrollTop + (r.top - c.top)) });
+            } else {
+              scrollToEnd();
+            }
+          } catch {
+            /* ignore */
+          }
+        }),
+      );
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /** Clear a half-streamed bubble without dropping its partial text. */
+  function endStream(): void {
+    setStreamId(null);
   }
 
   /** Session-JSON roles -> transcript bubbles (unknown roles read as system lines). */
@@ -326,17 +430,48 @@ export function App() {
   function onEvent(e: TurnEvent): void {
     if (e.event === "thinking") {
       setPhase("thinking");
-      if (typeof e.text === "string" && e.text.trim()) push("sys", e.text.slice(0, 400));
+      if (typeof e.text === "string" && e.text.trim()) {
+        push("sys", e.text.slice(0, 400));
+        scrollLive();
+      }
     } else if (e.event === "token") {
       setPhase("streaming");
+      const piece = String((e as unknown as { piece?: unknown }).piece ?? "");
+      if (!piece) return;
+      const sid = streamId();
+      if (sid) {
+        setMsgs((ms) => ms.map((m) => (m.id === sid ? { ...m, text: m.text + piece } : m)));
+      } else {
+        const id = uid();
+        setStreamId(id);
+        setMsgs((ms) => [...ms, { id, who: "agent", text: piece }]);
+      }
+      scrollLive();
     } else if (e.event === "action") {
       const a = (e as { action: Record<string, unknown> }).action ?? {};
       push("sys", `tool: ${String(a.op ?? a.tool ?? "run")} ${JSON.stringify(a).slice(0, 220)}`);
+      scrollLive();
     } else if (e.event === "observation") {
       push("sys", String((e as { observation: string }).observation).slice(0, 800));
-    } else if (e.event === "chat" || e.event === "summary") {
+      scrollLive();
+    } else if (e.event === "chat") {
       const reply = String((e as { reply: string }).reply ?? "");
-      if (reply.trim()) push("agent", reply);
+      const sid = streamId();
+      setStreamId(null);
+      if (sid && reply.trim()) {
+        // The live bubble already holds the streamed draft — swap in the
+        // final reply instead of pushing a second bubble.
+        setMsgs((ms) => ms.map((m) => (m.id === sid ? { ...m, text: reply } : m)));
+      } else if (reply.trim()) {
+        push("agent", reply);
+      }
+      setPhase("idle");
+      setBusy(false);
+      scrollAfterPush();
+    } else if (e.event === "summary") {
+      // Summary re-sends the final chat reply for bookkeeping — never
+      // render it, or every turn shows twice.
+      endStream();
       setPhase("idle");
       setBusy(false);
     } else if (e.event === "title") {
@@ -347,16 +482,22 @@ export function App() {
       }
     } else if (e.event === "stuck") {
       push("err", `stuck: ${String((e as { reason: string }).reason ?? "")}`);
+      endStream();
       setBusy(false);
       setPhase("idle");
+      scrollAfterPush();
     } else if (e.event === "error") {
       push("err", String((e as { message: string }).message ?? "error"));
+      endStream();
       setBusy(false);
       setPhase("idle");
+      scrollAfterPush();
     } else if (e.event === "cancelled") {
       push("sys", "turn cancelled");
+      endStream();
       setBusy(false);
       setPhase("idle");
+      scrollAfterPush();
     }
   }
 
@@ -393,6 +534,15 @@ export function App() {
           setModelChoices(m.available.map((a) => ({ name: a.name, label: a.label, desc: a.desc })));
         } catch {
           /* model endpoint optional */
+        }
+        try {
+          const b = await getBrain();
+          if (b.mode === "harness" || b.mode === "voice") {
+            if (b.mode === "harness" && brain() === "voice") stopVoiceMode();
+            setBrain(b.mode);
+          }
+        } catch {
+          /* brain endpoint optional */
         }
         try {
           const met = await getMetrics();
@@ -441,11 +591,14 @@ export function App() {
       return;
     }
     const tagged = withDirectives(text);
-    push("you", text);
+    const qid = push("you", text);
     setInput("");
     setBusy(true);
     setPhase("working");
     touchRecent(sessionId(), sessionName());
+    // New question goes to the top: the previous turn scrolls out above it,
+    // then the answer streams in below and follows to its final words.
+    scrollToQuestion(qid);
     sock.turn(tagged, sessionId(), cwd());
   }
 
@@ -491,10 +644,12 @@ export function App() {
       setSessionId(sid);
       setSessionName("New session");
       setMsgs([]);
+      setStreamId(null);
       touchRecent(sid, "New session");
       push("sys", `fresh session ${sid}`);
     } else if (cmd === "/clear") {
       setMsgs([]);
+      setStreamId(null);
     } else if (cmd === "/cwd") {
       if (!arg) push("sys", `cwd: ${cwd()}`);
       else {
@@ -514,7 +669,22 @@ export function App() {
           push("err", "model switch failed (bridge down?)");
         }
       }
-    } else if (cmd === "/voice" || cmd === "/dictate" || cmd === "/mic") {
+    } else if (cmd === "/brain") {
+      if (!arg) {
+        push("sys", `brain: ${brain()}  (available: voice, harness)`);
+      } else if (arg === "voice" || arg === "harness") {
+        if (arg === brain()) push("sys", `brain: ${brain()} (already active)`);
+        else await toggleBrain();
+      } else {
+        push("err", `unknown brain ${arg} (available: voice, harness)`);
+      }
+    } else if (cmd === "/voice") {
+      if (brain() !== "voice") {
+        push("sys", "voice mode is off while the harness brain is active — try /dictate");
+      } else {
+        await recordTurn(Math.min(30, Number(arg) || 5), false);
+      }
+    } else if (cmd === "/dictate" || cmd === "/mic") {
       await recordTurn(cmd === "/mic" ? 5 : Math.min(30, Number(arg) || 5), cmd === "/dictate");
     } else if (cmd === "/sample") {
       const key = (arg || "chain").toLowerCase();
@@ -526,7 +696,7 @@ export function App() {
         push("sys", `sample: ${key}`);
       }
     } else if (cmd === "/help") {
-      push("sys", "/new /cwd /clear /model /voice /dictate /mic /sample /help — Tab completes, Enter sends what you typed.");
+      push("sys", "/new /cwd /clear /model /brain /voice /dictate /mic /sample /help — Tab completes, Enter sends what you typed.");
     } else {
       const sug = suggestTypo(cmd ?? "");
       push("err", `unknown command ${cmd ?? ""}${sug ? ` — did you mean ${sug}?` : ""}`);
@@ -658,17 +828,6 @@ export function App() {
     }
   }
 
-  async function speak(text: string): Promise<void> {
-    try {
-      const r = await say(text);
-      if (r.kind === "audio" && r.wav_b64) {
-        await playF32(b64ToF32(r.wav_b64), r.sr ?? 24000);
-      } else push("err", `tts: ${r.message ?? "failed"}`);
-    } catch (e) {
-      push("err", `tts: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
-
   onMount(() => {
     setIsTauri("__TAURI_INTERNALS__" in window);
     // Restore the session from the URL path (?sid=...) so a refresh or a
@@ -763,6 +922,8 @@ export function App() {
           onToggleHistory={() => setShowHistory((v) => !v)}
           agentMode={agentMode()}
           onAgentMode={setAgentMode}
+          brainMode={brain()}
+          onToggleBrain={() => void toggleBrain()}
           perf={perf()}
           onPerf={setPerf}
           models={modelChoices().map((c) => ({ name: c.name, label: c.label }))}
@@ -801,7 +962,7 @@ export function App() {
               </Show>
               <Show when={notices().length > 0}>
                 <div class="mt-4">
-                  <Transcript msgs={notices()} onSpeak={(t) => void speak(t)} />
+                  <Transcript msgs={notices()} />
                 </div>
               </Show>
             </div>
@@ -853,9 +1014,10 @@ export function App() {
 
             <Show when={showHistory()}>
               <div class="mx-auto mt-4 w-full px-6 pb-2 md:max-w-4xl md:px-0">
-                <Transcript msgs={msgs()} onSpeak={(t) => void speak(t)} />
+                <Transcript msgs={msgs()} />
               </div>
             </Show>
+            <div aria-hidden="true" class="mx-auto w-full max-w-4xl px-6" style={{ height: "55vh" }} />
           </Show>
         </div>
 
@@ -1037,18 +1199,20 @@ export function App() {
               </svg>
             </Show>
           </button>
-          <button
-            title={voiceMode() ? "Exit voice mode" : "Enter voice mode"}
-            aria-label="Toggle voice mode"
-            onClick={() => void (voiceMode() ? stopVoiceMode() : enterVoiceMode())}
-            class={`relative h-5 w-5 shrink-0 overflow-hidden rounded-full transition active:scale-95 ${
-              voiceMode()
-                ? "opacity-100 ring-2 ring-blue-400"
-                : "opacity-70 ring-1 ring-white/20 hover:opacity-100"
-            }`}
-          >
-            <WarpOrb />
-          </button>
+          <Show when={brain() === "voice"}>
+            <button
+              title={voiceMode() ? "Exit voice mode" : "Enter voice mode"}
+              aria-label="Toggle voice mode"
+              onClick={() => void (voiceMode() ? stopVoiceMode() : enterVoiceMode())}
+              class={`relative h-5 w-5 shrink-0 overflow-hidden rounded-full transition active:scale-95 ${
+                voiceMode()
+                  ? "opacity-100 ring-2 ring-blue-400"
+                  : "opacity-70 ring-1 ring-white/20 hover:opacity-100"
+              }`}
+            >
+              <WarpOrb />
+            </button>
+          </Show>
           <button
             title="Sample conversation"
             aria-label="Open sample conversation"

@@ -135,10 +135,9 @@ class LocalChatModel(BaseChatModel):
             return None
         tools = self.bound_tools
         backend = str(getattr(getattr(self.llm, "config", None), "backend", ""))
-        if tools is None and backend in ("bonsai", "qwen", "gemini", "groq"):
+        if tools is None and backend in ("bonsai", "qwen"):
             # Native-spec legs get the narrowed defs as REAL function specs
-            # (qwen: chat-template tools=; bonsai/groq: OpenAI tools[];
-            # gemini: function declarations). Small
+            # (qwen: chat-template tools=; bonsai: OpenAI tools[]). Small
             # models drown in 11 — the semantic shortlist wins when
             # InjectToolMiddleware set one, else the keyword router decides.
             ops = current_ops()
@@ -155,6 +154,17 @@ class LocalChatModel(BaseChatModel):
             routable = re.sub(r"\nCWD: .*?(\s+SHELL: \w+)?\s*$", "", text)
             tools = tools_for_request(routable, observation)
         return tools
+
+    def _needs_catalogue(self) -> bool:
+        """Prose op catalogue wanted only without native tool specs.
+
+        bonsai receives real function specs beside the messages — pure
+        English suffices. Qwen's template may ignore the specs kwarg,
+        so it keeps the catalogue. Unknown backends keep it (fail open).
+        ..
+        """
+        backend = str(getattr(getattr(self.llm, "config", None), "backend", ""))
+        return backend not in ("bonsai",)
 
     def _step_budget(self) -> int:
         # Think + tool call must fit in ONE step (the old harness learned
@@ -450,7 +460,9 @@ class LocalChatModel(BaseChatModel):
             # (and its words stay the reply).
             text = f"{text}\n{note}"
         tools = self._prompt_tools(text, observation)
-        msgs = self.llm.messages_for_terminal(text, history, cwd="", observation="")
+        msgs = self.llm.messages_for_terminal(text, history, cwd="",
+                                              observation="",
+                                              catalogue=self._needs_catalogue())
         raw = await self._collect_raw(msgs, self._step_budget(), tools)
         return ChatResult(generations=[ChatGeneration(message=self._final_message(raw))])
 
@@ -471,7 +483,9 @@ class LocalChatModel(BaseChatModel):
             text = f"{text}\n{note}"
         tools = self._prompt_tools(text, observation)
         max_tokens = self._step_budget()
-        msgs = self.llm.messages_for_terminal(text, history, cwd="", observation="")
+        msgs = self.llm.messages_for_terminal(text, history, cwd="",
+                                              observation="",
+                                              catalogue=self._needs_catalogue())
 
         acc0: dict = {}
         # NOTE: nested async-generator drain (no return values allowed).

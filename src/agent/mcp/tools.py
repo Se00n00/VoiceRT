@@ -80,12 +80,44 @@ def _load_dotenv() -> None:
 _load_dotenv()
 
 
+def _python_exec_box(container: str, src: str, timeout: int) -> str:
+    """Run code in the turn container via ``docker exec``. Never raises.
+
+    The container shares the turn workdir at ``/work`` and always has
+    ``python3`` (image contract), so the same base64 bootstrap runs
+    unquoted on either side of the wall.
+    ..
+    """
+    b64 = base64.b64encode(src.encode("utf-8")).decode("ascii")
+    argv = ["docker", "exec", "-i", container, "python3", "-c",
+            ("import base64,sys; exec(compile(base64.b64decode(sys.argv[1])"
+             ".decode('utf-8'), '<agent>', 'exec'))"), b64]
+    try:
+        p = subprocess.run(argv, capture_output=True, text=True,
+                           timeout=timeout + 15,
+                           stdin=subprocess.DEVNULL)
+    except FileNotFoundError:
+        return "error: docker CLI not found ('docker'). Install Docker first."
+    except subprocess.TimeoutExpired:
+        return f"timeout after {timeout}s"
+    except Exception as exc:
+        return f"error: {exc}"
+    if p.returncode != 0 and "No such container" in (p.stderr or ""):
+        return ("error: sandbox container is gone "
+                f"({container}); retry the turn.")
+    out = ((p.stdout or "") + (p.stderr or "")).strip() or "(no output)"
+    return f"rc={p.returncode}\n{out[:6000]}"
+
+
 def python_exec(code: str, timeout: int = 30) -> str:
-    """Run Python code on this host. Never raises.
+    """Run Python code, in the turn container when sandboxed. Never raises.
 
     Same trust level as shell execution — for local use only. The source
     is base64-piped to ``python3 -`` so arbitrary payloads need no shell
     quoting. One-shot per call with a process kill on timeout.
+    ``VOICE_SANDBOX_CONTAINER`` (set per sandboxed turn) switches this
+    from host ``sys.executable`` to ``docker exec`` in that container.
+    ..
     """
     src = str(code or "")
     if not src.strip():
@@ -94,6 +126,9 @@ def python_exec(code: str, timeout: int = 30) -> str:
         t = max(1, int(timeout))
     except Exception:
         t = 30
+    box = (_os.environ.get("VOICE_SANDBOX_CONTAINER") or "").strip()
+    if box:
+        return _python_exec_box(box, src, t)
     b64 = base64.b64encode(src.encode("utf-8")).decode("ascii")
     cmd = [sys.executable or "python3", "-c",
            ("import base64,sys; exec(compile(base64.b64decode(sys.argv[1])"

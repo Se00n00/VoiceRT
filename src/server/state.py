@@ -12,6 +12,7 @@ import numpy as np
 
 __all__ = [
     "MODEL_PROFILES",
+    "_brain",
     "_build_llm",
     "_compact_sessions",
     "_compacted_for",
@@ -28,9 +29,11 @@ __all__ = [
     "console_subscribe",
     "console_unsubscribe",
     "get_agent",
+    "get_brain_mode",
     "note_turn_end",
     "note_turn_start",
     "qwen_leg",
+    "switch_brain_mode",
 ]
 
 _t_boot = time.time()
@@ -70,10 +73,69 @@ MODEL_PROFILES = {
         "desc": "27B ternary sidecar via Prism-fork llama-server (ngl auto, 16K ctx)",
         "ready": True,
     },
+    "groq": {
+        "name": "groq",
+        "label": "gpt-oss-120b",
+        "model": "openai/gpt-oss-120b",
+        "backend": "groq",
+        "desc": "Groq cloud via LangChain (no GPU; needs GROQ_API_KEY)",
+        "ready": True,
+    },
 }
 
 
 _current_model = {"name": "qwen"}
+
+
+# Brain mode: "voice" runs the full voice agent (voice pipeline on top of
+# the main LLM harness); "harness" runs just the LLM harness (text turns
+# only, no duplex voice). The LLM harness itself (groq/bonsai via
+# MODEL_PROFILES) is shared by both brains. The harness brain defaults to
+# groq: entering it stashes the voice brain's model in "prev_model" and
+# auto-switches, leaving it restores the stash.
+_brain = {"mode": "voice", "prev_model": ""}
+
+
+def get_brain_mode() -> str:
+    """Current brain mode, "voice" or "harness".
+
+    ..
+    """
+    mode = str((_brain or {}).get("mode") or "voice").lower()
+    return mode if mode in ("voice", "harness") else "voice"
+
+
+async def switch_brain_mode(mode: str) -> dict:
+    """Switch brains, defaulting the harness to groq. Never raises.
+
+    Entering "harness" auto-switches the shared harness to groq (the
+    local qwen leg is a chat/router, not an agentic brain) and stashes
+    the voice brain's model; returning to "voice" restores the stash
+    when it is still groq. Model failures ride along as out["model"],
+    the brain switch itself still lands.
+    ..
+    """
+    name = str(mode or "").strip().lower()
+    if name not in ("voice", "harness"):
+        return {"kind": "error",
+                "message": f"unknown brain {mode!r}; available: ['voice', 'harness']"}
+    if name == get_brain_mode():
+        return {"kind": "ok", "mode": name, "note": "already active"}
+    _brain["mode"] = name
+    out: dict = {"kind": "ok", "mode": name}
+    try:
+        if name == "harness":
+            if (_current_model.get("name") or "") != "groq":
+                _brain["prev_model"] = str(_current_model.get("name") or "")
+                out["model"] = await switch_model("groq")
+        else:
+            prev = str(_brain.get("prev_model") or "")
+            _brain["prev_model"] = ""
+            if prev and prev in MODEL_PROFILES and (_current_model.get("name") or "") == "groq":
+                out["model"] = await switch_model(prev)
+    except Exception as exc:
+        out["model"] = {"kind": "error", "message": str(exc)[:200]}
+    return out
 
 
 def _build_llm(profile: dict):
@@ -226,8 +288,11 @@ async def _compact_sessions(agent, target: str,
     """Compact active sessions for a model switch (never raises)."""
     old_llm = getattr(agent, "llm", None)
     sessions = getattr(agent, "sessions", None)
-    generate = getattr(old_llm, "generate", None)
-    if not callable(generate) or sessions is None:
+    if sessions is None:
+        return ""
+    generate = getattr(old_llm, "generate", None) if old_llm is not None else None
+    chat_model = getattr(agent, "chat_model", None)
+    if not callable(generate) and chat_model is None:
         return ""
     history = getattr(sessions, "history", None)
     reset = getattr(sessions, "reset", None)
@@ -249,11 +314,20 @@ async def _compact_sessions(agent, target: str,
             "%s: %s" % (m.get("role", "?"), m.get("content", ""))
             for m in hist[:-2])[:6000]
         try:
-            res = await generate(
-                [{"role": "user",
-                  "content": SUMMARIZE_PROMPT + chunk}],
-                max_tokens=256)
-            summary = str(getattr(res, "text", "") or "").strip()
+            if callable(generate):
+                res = await generate(
+                    [{"role": "user",
+                      "content": SUMMARIZE_PROMPT + chunk}],
+                    max_tokens=256)
+                summary = str(getattr(res, "text", "") or "").strip()
+            else:
+                from langchain_core.messages import HumanMessage
+
+                from src.agent.cloud_models import chat_text
+
+                out = await chat_model.ainvoke(
+                    [HumanMessage(content=SUMMARIZE_PROMPT + chunk)])
+                summary = chat_text(getattr(out, "content", "")).strip()
         except Exception:
             continue
         if not summary:
@@ -274,6 +348,67 @@ async def _compact_sessions(agent, target: str,
     return ""
 
 
+async def _switch_to_cloud(name: str, profile: dict, agent) -> dict:
+    """Swap the worker to a stock cloud chat model. Returns the switch dict.
+
+    ..
+    """
+    from src.agent.cloud_models import make_chat_model
+
+    backend = str(profile.get("backend", "") or "").lower()
+    try:
+        chat_model = make_chat_model(backend, str(profile.get("model", "") or ""))
+    except Exception as exc:
+        return {"kind": "error",
+                "message": f"new leg failed to warm: {exc}"[:300]}
+    try:
+        from langchain_core.messages import HumanMessage
+
+        await asyncio.wait_for(chat_model.ainvoke(
+            [HumanMessage(content="ok")]), timeout=30)
+    except Exception as exc:
+        return {"kind": "error",
+                "message": f"new leg failed smoke: {exc}"[:200]}
+    try:
+        compact_note = await _compact_sessions(agent, name)
+    except Exception:
+        compact_note = ""
+    old = getattr(agent, "llm", None)
+    try:
+        old_leg = getattr(old, "_leg", None) if old is not None else None
+        if getattr(old_leg, "is_sidecar", False):
+            old_leg.close()
+    except Exception:
+        pass
+    agent.llm = None
+    try:
+        agent.active_model_label = str(profile.get("label", "") or name)
+        agent.chat_model = chat_model
+        agent.agent = agent._build_agent()
+    except Exception:
+        pass
+    try:
+        del old
+    except Exception:
+        pass
+    _free_llm_gpu()
+    try:
+        agent.missing = [m for m in (getattr(agent, "missing", []) or [])
+                         if not str(m).startswith("llm leg")]
+    except Exception:
+        pass
+    try:
+        agent._worker_warmed = True
+        agent._worker_unavailable = None
+    except Exception:
+        pass
+    _current_model["name"] = name
+    out = {"kind": "ok", "current": name, "label": profile["label"]}
+    if compact_note:
+        out["compacted"] = compact_note
+    return out
+
+
 async def switch_model(name: str) -> dict:
     """Hot-swap the LLM leg. Keeps sessions/TTS/STT/VAD. Never raises."""
     name = str(name or "").strip().lower()
@@ -291,6 +426,13 @@ async def switch_model(name: str) -> dict:
         if name == _current_model.get("name"):
             return {"kind": "ok", "current": name, "note": "already active"}
         agent = get_agent()
+        try:
+            from src.agent.cloud_models import is_cloud_backend
+
+            if is_cloud_backend(str(profile.get("backend", "") or "")):
+                return await _switch_to_cloud(name, profile, agent)
+        except Exception:
+            pass
         try:
             new_llm = _build_llm(profile)
             await new_llm.warm()
@@ -312,9 +454,7 @@ async def switch_model(name: str) -> dict:
             compact_note = ""
         old = getattr(agent, "llm", None)
         try:
-
-
-            old_leg = getattr(old, "_leg", None)
+            old_leg = getattr(old, "_leg", None) if old is not None else None
             if getattr(old_leg, "is_sidecar", False):
                 old_leg.close()
         except Exception:
@@ -329,6 +469,15 @@ async def switch_model(name: str) -> dict:
             return {"kind": "error",
                     "message": f"re-warm after switch failed: {exc}"[:300]}
         agent.llm = new_llm
+        try:
+            from src.agent.chat_model import LocalChatModel
+
+            agent.active_model_label = str(profile.get("label", "") or name)
+            agent.chat_model = LocalChatModel(
+                llm=new_llm, use_mcp_fs=bool(getattr(agent, "_extra_tools", [])))
+            agent.agent = agent._build_agent()
+        except Exception:
+            pass
         try:
             del old
         except Exception:
@@ -371,16 +520,25 @@ def get_agent():
     if _agent is None:
         import os
 
+        from src.long_running import LongRunningConfig
         from src.main import VoiceAgent, VoiceAgentConfig
 
         text_only = os.environ.get("VOICE_TEXT_ONLY", "").strip() == "1"
         delegate = os.environ.get("VOICE_DELEGATE", "").strip()
-        cfg = VoiceAgentConfig(speak_text_turns=not text_only,
-                               delegate=delegate not in ("0", "false", "no"))
+        harness = LongRunningConfig(speak_text_turns=not text_only,
+                                    delegate=delegate not in ("0", "false", "no"))
         dpath = os.environ.get("VOICE_DELEGATE_CONFIG", "").strip()
         if dpath:
-            cfg = cfg.model_copy(update={"delegate_config": dpath})
+            harness = harness.model_copy(update={"delegate_config": dpath})
+        cfg = VoiceAgentConfig(harness=harness)
         _agent = VoiceAgent(cfg)
+        try:
+            _agent.active_model_label = str(
+                MODEL_PROFILES.get(
+                    str(_current_model.get("name", "") or ""),
+                    {}).get("label", "") or "qwen3-0.6B")
+        except Exception:
+            pass
     return _agent
 
 

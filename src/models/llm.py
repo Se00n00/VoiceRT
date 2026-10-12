@@ -9,9 +9,9 @@ from src.prompts.base import SYSTEM_PROMPT  # noqa: F401  (re-exported for back-
 # Backends that own their inference instead of in-process weights.
 # They need no local tokenizer, hold no VRAM we manage, and are
 # incompatible with the paged GPU engine. Single source of truth:
-# adding such a backend means adding it HERE ("bonsai" = local
-# llama-server sidecar; "gemini"/"groq" = cloud APIs).
-SIDECAR_BACKENDS = ("bonsai", "gemini", "groq")
+# only "bonsai" is a sidecar now (local llama-server); "groq"/"gemini"
+# are stock LangChain chat models via src/agent/cloud_models.py.
+SIDECAR_BACKENDS = ("bonsai",)
 
 _THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE)
 _THINK_OPEN_RE = re.compile(r"<think\s*>", re.IGNORECASE)
@@ -154,13 +154,8 @@ class LlmConfig(BaseModel):
     #  - "bonsai" = Ternary Bonsai 2 27B via Prism-fork llama.cpp sidecar
     #    (-ngl auto from free VRAM, 16K ctx) — the WORKER brain for the
     #    full tool harness; STT/TTS keep the GPU, the rest offloads.
-    #  - "gemini" = Google Gemini via cloud API (no local weights, no
-    #    VRAM, no server binary) — the agentic leg when no usable GPU or
-    #    sidecar exists. Needs GEMINI_API_KEY. Selects GeminiCloud
-    #    (src/models/gemini.py), a sidecar-shaped leg (is_sidecar).
-    #  - "groq" = Groq Cloud via OpenAI-compatible API (no local weights,
-    #    no VRAM, no server binary). Needs GROQ_API_KEY. Selects GroqCloud
-    #    (src/models/groq.py), a sidecar-shaped leg (is_sidecar).
+    #  - "gemini"/"groq" = stock LangChain cloud chat models (no local
+    #    weights) — use src/agent/cloud_models.make_chat_model, not here.
     backend: str = "qwen"
     max_tokens: int = 48
     max_seq: int = 8192
@@ -185,23 +180,14 @@ class LlmConfig(BaseModel):
     # turn. Agentic scores were measured thinking-on; raise or set None
     # when quality matters more than latency.
     bonsai_bin: str = "auto"  # explicit Prism-fork llama-server or "auto"
-    # Google Gemini cloud leg (no local weights/VRAM/server).
-    # Select with backend="gemini". Needs GEMINI_API_KEY (env or .env).
-    gemini_model: str = "gemini-3.8-flash"  # free-tier flash model
-    gemini_api_key: str = "auto"  # explicit key or "auto" (env/.env)
-    # Groq cloud leg (OpenAI-compatible API, no local weights/VRAM/server).
-    # Select with backend="groq". Needs GROQ_API_KEY (env or .env).
-    groq_model: str = "openai/gpt-oss-120b"  # tool-capable, 131K ctx
-    groq_api_key: str = "auto"  # explicit key or "auto" (env/.env)
-    groq_reasoning_effort: str = "low"  # low/medium/high ("" = API default)
-    # paged inference engine (real QwenRunner, no dummy). Disabled by default
-    # so tests stay fast; enable in VoiceAgent/server for batching.
-    use_paged: bool = False
-    paged_blocks: int = 16
-    paged_batch_size: int = 4
-    enable_prefix_caching: bool = True
-    enable_chunked_prefill: bool = True
-    enable_cuda_graph: bool = False
+    # Cloud model names (used by src/agent/cloud_models, kept here so old
+    # configs with backend="groq"/"gemini" still parse; LlmModel itself
+    # no longer serves cloud backends).
+    gemini_model: str = "gemini-3.5-flash"
+    gemini_api_key: str = "auto"
+    groq_model: str = "openai/gpt-oss-120b"
+    groq_api_key: str = "auto"
+    groq_reasoning_effort: str = "low"
 
 
 class LlmResult(BaseModel):
@@ -229,16 +215,13 @@ class LlmModel:
     """Async facade over the proven Qwen leg + HF chat template.
 
     Fused path is mandatory (QwenFused batched, KV-cache aware) — no legacy
-    fallback. Optional paged path via :mod:`src.inference` when
-    ``config.use_paged`` is True (real QwenRunner, paged KV, continuous
-    batching, prefix cache / chunked / CUDA-graph).
+    fallback.
     """
 
     def __init__(self, config: LlmConfig | None = None):
         self.config = config or LlmConfig()
         self._leg = None
         self._tok = None
-        self._paged_engine_inst = None
         # Per-run preamble override (Sim-Agent subtasks). None = default.
         self.terminal_preamble = None
 
@@ -266,28 +249,12 @@ class LlmModel:
                     server_bin=getattr(self.config, "bonsai_bin", "auto"),
                 )
                 return self._leg
-            if backend == "gemini":
-                # Cloud leg (Google AI Studio API, key from env/.env).
-                from src.models.gemini import GeminiCloud
-
-                self._leg = GeminiCloud(
-                    model=getattr(self.config, "gemini_model",
-                                  "gemini-3.8-flash"),
-                    api_key=getattr(self.config, "gemini_api_key", "auto"),
+            if backend in ("gemini", "groq"):
+                raise SystemExit(
+                    f"ABORT: backend={backend!r} is a stock LangChain cloud "
+                    f"model now — use src/agent/cloud_models.make_chat_model, "
+                    f"not LlmModel."
                 )
-                return self._leg
-            if backend == "groq":
-                # Cloud leg (Groq OpenAI-compatible API, key from env/.env).
-                from src.models.groq import GroqCloud
-
-                self._leg = GroqCloud(
-                    model=getattr(self.config, "groq_model",
-                                  "openai/gpt-oss-120b"),
-                    api_key=getattr(self.config, "groq_api_key", "auto"),
-                    reasoning_effort=getattr(
-                        self.config, "groq_reasoning_effort", "low"),
-                )
-                return self._leg
             import torch
 
             device = self.config.device
@@ -303,45 +270,6 @@ class LlmModel:
                 max_new_tokens=self.config.max_tokens,
             )
         return self._leg
-
-    def _paged_engine(self):
-        """Lazily build paged InferenceEngine (real QwenRunner, no dummy)."""
-        if not getattr(self.config, "use_paged", False):
-            return None
-        if str(getattr(self.config, "backend", "")) in SIDECAR_BACKENDS:
-
-            # Sidecar legs own their inference (llama-server); the paged
-            # GPU engine is incoherent here — and must never warm GPU
-            # weights behind a sidecar backend's back.
-            return None
-        if self._paged_engine_inst is not None:
-            return self._paged_engine_inst
-        try:
-            from src.inference import EngineConfig, InferenceEngine
-            import torch
-            device = self.config.device
-            if device.startswith("cuda") and not torch.cuda.is_available():
-                device = "cpu"
-            # auto-size blocks from VRAM but keep small for 4GB demo
-            cfg = EngineConfig(
-                model=self.config.model,
-                device=device,
-                max_seq_len=self.config.max_seq,
-                num_blocks=getattr(self.config, "paged_blocks", 0) or 16,
-                max_batch_size=getattr(self.config, "paged_batch_size", 4),
-                default_max_tokens=self.config.max_tokens,
-                enable_prefix_caching=getattr(self.config, "enable_prefix_caching", True),
-                enable_chunked_prefill=getattr(self.config, "enable_chunked_prefill", True),
-                enable_cuda_graph=getattr(self.config, "enable_cuda_graph", False),
-                enable_fused_attention=True,
-            )
-            eng = InferenceEngine(cfg, device=device, runner="qwen")
-            if not getattr(eng.runner, "loaded", False):
-                return None
-            self._paged_engine_inst = eng
-            return eng
-        except Exception:
-            return None
 
     def _tokenizer(self):
         if self._tok is None:
@@ -378,24 +306,12 @@ class LlmModel:
         # would fail here instead of at the leg with a clear message).
         if str(getattr(self.config, "backend", "")) not in SIDECAR_BACKENDS:
             await asyncio.to_thread(self._tokenizer)
-        if getattr(self.config, "use_paged", False):
-            # paged path owns its own QwenRunner weights — don't also warm fused leg
-            try:
-                await asyncio.to_thread(self._paged_engine)
-            except Exception:
-                pass
-            # still warm fused as fallback if engine fails
-            if self._paged_engine_inst is None:
-                leg = await asyncio.to_thread(self._backend)
-                if getattr(leg, "is_sidecar", False):
-                    await asyncio.to_thread(leg.warm)
-        else:
-            leg = await asyncio.to_thread(self._backend)
-            if getattr(leg, "is_sidecar", False):
-                # Sidecar legs own a server subprocess: construct isn't
-                # enough — attach or spawn here so the first chat never
-                # meets conn-refused.
-                await asyncio.to_thread(leg.warm)
+        leg = await asyncio.to_thread(self._backend)
+        if getattr(leg, "is_sidecar", False):
+            # Sidecar legs own a server subprocess: construct isn't
+            # enough — attach or spawn here so the first chat never
+            # meets conn-refused.
+            await asyncio.to_thread(leg.warm)
         return self
 
     def messages(self, text: str, history: list | None = None) -> list:
@@ -430,17 +346,24 @@ class LlmModel:
         return msgs
 
     def messages_for_terminal(self, text: str, history: list | None = None,
-                              cwd: str = "", observation: str = "") -> list:
+                              cwd: str = "", observation: str = "",
+                              catalogue: bool = True) -> list:
         """Same-model terminal prompt: system + preamble + cwd + user.
 
         No sidecar, no router model — the SAME Qwen weights decide between
         plain chat text and one JSON ``TerminalAction`` (see
         src/tools/terminal.py). Keep bodies small so prompt+max_tokens
-        fits the paged KV block pool.
+        fits the paged KV block pool. ``catalogue`` appends the prose op
+        catalogue (for legs whose template may ignore native tool specs);
+        native-function legs pass False — pure English suffices there.
         """
         from src.prompts.terminal import TERMINAL_PREAMBLE
 
         preamble = getattr(self, "terminal_preamble", None) or TERMINAL_PREAMBLE
+        if catalogue:
+            from src.prompts.terminal import TERMINAL_TOOL_CATALOGUE
+
+            preamble = preamble + " " + TERMINAL_TOOL_CATALOGUE
         system = self.config.system_prompt + " " + preamble
         msgs = [{"role": "system", "content": system}]
         msgs.extend(history or [])
@@ -514,24 +437,6 @@ class LlmModel:
         native stop support (MiniCPM HF) so a tool call ends cleanly at
         the envelope close; legs without it ignore the kwarg.
         """
-        # paged path: real InferenceEngine (continuous batching)
-        eng = self._paged_engine()
-        if eng is not None:
-            ids = await self.encode(messages, tools=tools)
-            limit = int(max_tokens or self.config.max_tokens)
-            from src.inference.config import SamplingParams as _SP
-            sp = _SP(max_tokens=limit, temperature=0.0)
-            # unique id per call: a stuck/timed-out call must never poison
-            # later ones with "duplicate request_id" (fixed "req0" did).
-            import time as _t
-            rid = f"req-{int(_t.time_ns())}"
-            def _run_paged():
-                out = eng.generate([ids], sp, request_ids=[rid])
-                return list(out.get(rid, []))
-            out_ids = await asyncio.to_thread(_run_paged)
-            text = await self.decode(out_ids)
-            return LlmResult(text=text, ttft_s=0.0, tps=0.0,
-                             output_ids=tuple(out_ids))
         leg = self._backend()
         if getattr(leg, "is_sidecar", False):
             # CPU sidecar (Gemma): (messages, tools) straight through, no
@@ -582,75 +487,6 @@ class LlmModel:
         calls the non-streamed path makes). ``stop`` is forwarded to legs
         with native stop support so a tool call ends at the envelope.
         """
-        # paged path streams via InferenceEngine step loop
-        eng = self._paged_engine()
-        if eng is not None:
-            ids = await self.encode(messages, tools=tools)
-            limit = int(max_tokens or self.config.max_tokens)
-            from src.inference.config import SamplingParams as _SP
-            sp = _SP(max_tokens=limit, temperature=0.0)
-            queue: asyncio.Queue = asyncio.Queue()
-            loop = asyncio.get_running_loop()
-            import time as _t
-            rid = f"stream-{int(_t.time_ns())}"
-            empty_steps = {"n": 0}  # worker-side stall counter (sees step outs)
-            def _run_paged():
-                try:
-                    eng.add_request(rid, list(ids), sp)
-                    first = True
-                    while eng.has_unfinished():
-                        outs = eng.step()
-                        if not outs:
-                            # Nothing scheduled for anyone: a few empties are
-                            # normal at admission; hundreds mean the prompt can
-                            # never fit the block pool (livelock).
-                            empty_steps["n"] += 1
-                            if empty_steps["n"] >= 500:
-                                try:
-                                    eng.abort_request(rid)
-                                except Exception:
-                                    pass
-                                loop.call_soon_threadsafe(
-                                    queue.put_nowait, ("err", RuntimeError(
-                                        "inference stalled: prompt likely exceeds KV block pool; "
-                                        "shorten history/snapshot or raise paged blocks")))
-                                return
-                            continue
-                        empty_steps["n"] = 0
-                        mine = [o for o in outs if o.request_id == rid]
-                        for o in mine:
-                            loop.call_soon_threadsafe(queue.put_nowait, ("tok", (o.token_id, first)))
-                            first = False
-                            if o.finished:
-                                loop.call_soon_threadsafe(queue.put_nowait, ("end", None))
-                                return
-                    loop.call_soon_threadsafe(queue.put_nowait, ("end", None))
-                except Exception as exc:
-                    loop.call_soon_threadsafe(queue.put_nowait, ("err", exc))
-            worker = loop.run_in_executor(None, _run_paged)
-            try:
-                while True:
-                    try:
-                        # Stall backstop: worker only posts tokens; silence
-                        # here means it is wedged — abort and fail loudly.
-                        kind, payload = await asyncio.wait_for(queue.get(), timeout=180)
-                    except asyncio.TimeoutError:
-                        try:
-                            eng.abort_request(rid)
-                        except Exception:
-                            pass
-                        raise RuntimeError("LLM stream timed out (180s without a token)")
-                    if kind == "end":
-                        return
-                    if kind == "err":
-                        raise payload
-                    tok_id, first = payload
-                    piece = await self.decode([tok_id])
-                    yield LlmToken(token_id=int(tok_id), piece=piece, first=bool(first))
-            finally:
-                await worker
-            return
-
         import torch
 
         leg = self._backend()

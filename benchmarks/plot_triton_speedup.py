@@ -1,10 +1,9 @@
 """Horizontal speedup chart: fused Triton vs pure torch.
 
-Current world (post-trim 2026-10-05): only Qwen3-0.6B keeps Triton
-(fused leg + paged engine). STT/TTS are pure torch by design, so they
-have no Triton bar. The one remaining measured pair is the paged engine
-(base 8x32: torch 25.2 tok/s, triton 45.8 tok/s — engine_bench.py runs,
-Qwen path untouched by the trim).
+Current world: only the Qwen3-0.6B fused leg keeps Triton.
+STT/TTS are pure torch by design, so they have no Triton bar. The
+second row below is the retired paged engine's last measured pair,
+kept for history (engine_bench.py is deleted; numbers frozen).
 
 After the GPU cold boot, re-take the Qwen3-0.6B leg pair
 (benchmark_pytorch.py vs benchmark_triton.py, same flags), extend ROWS

@@ -18,11 +18,12 @@ async def warm_agent(model="Qwen/Qwen3-0.6B", backend="qwen",
                      sessions_dir=None, max_tokens=None):
     """Build VoiceAgent with warmed LLM leg, TTS disabled."""
     from src.agent.cloud_models import is_cloud_backend, make_chat_model
+    from src.long_running import LongRunningConfig
     from src.main import VoiceAgent, VoiceAgentConfig
 
     # sessions_dir kept for API compat (JsonSessionMemory persists per sid).
-    cfg = VoiceAgentConfig(
-        **({"sessions_dir": sessions_dir} if sessions_dir else {}))
+    cfg = VoiceAgentConfig(harness=LongRunningConfig(
+        **({"sessions_dir": sessions_dir} if sessions_dir else {})))
     agent = VoiceAgent(cfg)
     backend = str(backend or "qwen").lower()
     if is_cloud_backend(backend):
@@ -71,6 +72,9 @@ async def areanchor_workdir(agent, workdir):
     import os
 
     os.environ["VOICE_WORKDIR"] = workdir
+    # Eval turns always run on the host: drop any stale turn-container
+    # pointer so python_exec never targets a removed box.
+    os.environ.pop("VOICE_SANDBOX_CONTAINER", None)
     try:
         from deepagents.backends import LocalShellBackend
 
@@ -98,6 +102,7 @@ def anchor_workdir(agent, workdir):
         asyncio.get_running_loop()
     except RuntimeError:
         os.environ["VOICE_WORKDIR"] = workdir
+        os.environ.pop("VOICE_SANDBOX_CONTAINER", None)
         try:
             from deepagents.backends import LocalShellBackend
 

@@ -14,7 +14,7 @@ are labeled as such rather than smoothed over.
 | 04 | [Sessions](04-sessions.md) | identity, window ownership, persistence, serialization, resume |
 | 05 | [Models](05-models.md) | the four legs, `LlmConfig`, backends, streaming, VRAM |
 | 06 | [Processes](06-processes.md) | bridge, server, their endpoints, and the startup-warm trap |
-| 07 | [Inference](07-inference.md) | the custom runtime (parser fixed 2026-10-03, bench re-run) |
+| 07 | [Inference](07-inference.md) | retired (custom paged runtime deleted) |
 | 08 | [TUI](08-tui.md) | the OpenTUI client, command palette, shades, exit card |
 
 ## The short version
@@ -65,13 +65,10 @@ no listener at all ([06](06-processes.md#64-the-startup-warm-trap)).
 | GPU | available, no model resident |
 
 The 4 skips are intentional `@unittest.skipUnless` gates (CUDA/live-voice
-tests). The suite previously read 564 run with 14 errors, all from one
-indentation slip at `src/inference/engine.py:431` — fixed 2026-10-03. See
-[07](07-inference.md).
+tests). See [07](07-inference.md) for the retired runtime note.
 
 ## Companion docs
 
 - [`benchmarks.md`](../benchmarks.md) — the eval harnesses and measured results
 - [`capacity.md`](../capacity.md) — how generation length prices sessions
-- [`inference_engine.md`](../inference_engine.md) — the runtime design in depth
 - [`../README.md`](../../README.md) — the voice pipeline

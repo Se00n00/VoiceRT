@@ -12,11 +12,15 @@ raise — errors become strings).
 - ``download_file`` streams to disk with a byte cap (httpx, in
   requirements).
 - ``browser_click`` / ``browser_type`` / ``browser_scroll`` drive a real
-  Chromium via Playwright (optional: ``pip install playwright`` +
-  ``playwright install chromium``). Each call is stateless — launch,
+  Chromium via Playwright (needs the bridge venv: ``.venv/bin/python -m
+  pip install playwright`` + ``.venv/bin/python -m playwright install
+  chromium`` — never bare system pip, it is externally managed here).
+  Each call is stateless — launch,
   navigate to ``url``, act, report a compact snapshot, close — which
   fits the MCP server's fresh-process-per-call shape with no daemon.
 """
+import asyncio as _asyncio
+import concurrent.futures as _futures
 import os as _os
 import re as _re
 import shutil as _shutil
@@ -151,41 +155,80 @@ def download_file(url: str, dest: str, max_bytes: int = 50_000_000,
 
 def _playwright():
     try:
-        from playwright.sync_api import sync_playwright
-        return sync_playwright
+        from playwright.async_api import async_playwright
+        return async_playwright
     except Exception:
         return None
 
 
-def _snapshot(page) -> str:
-    """Compact page report: title + url + body-text head."""
-    title = page.title()
-    cur = page.url
-    body = page.evaluate(
-        "() => (document.body && document.body.innerText) || ''")
+def _run_async(coro, timeout_s: int):
+    """Drive one coroutine to completion from sync code.
+
+    Plain ``asyncio.run`` when no loop runs in this thread; otherwise a
+    helper thread with its own loop (a sync caller cannot share the
+    running loop, and the sync Playwright API refuses to run under it).
+    ..
+    """
+    try:
+        _asyncio.get_running_loop()
+    except RuntimeError:
+        return _asyncio.run(coro)
+    with _futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(_asyncio.run, coro).result(timeout=timeout_s)
+
+
+async def _drive_async(url: str, op: tuple, timeout_ms: int,
+                       headless: bool) -> str:
+    """Async core: launch Chromium, run ``op``, snapshot, close.
+
+    ``op`` is ("click", sel, ms), ("type", sel, text, submit, ms), or
+    ("scroll", dy). The browser always closes (finally), so a failed
+    action still reports instead of leaking a process.
+    ..
+    """
+    from playwright.async_api import async_playwright
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=bool(headless))
+        try:
+            page = await browser.new_page()
+            await page.goto(url, timeout=timeout_ms,
+                            wait_until="domcontentloaded")
+            kind = op[0]
+            if kind == "click":
+                await page.click(op[1], timeout=op[2])
+            elif kind == "type":
+                await page.fill(op[1], op[2], timeout=op[4])
+                if op[3]:
+                    await page.keyboard.press("Enter")
+            elif kind == "scroll":
+                await page.evaluate(f"window.scrollBy(0, {int(op[1])})")
+            title = await page.title()
+            cur = page.url
+            body = await page.evaluate(
+                "() => (document.body && document.body.innerText) || ''")
+        finally:
+            await browser.close()
     body = _re.sub(r"\s+", " ", str(body)).strip()[:_SNAPSHOT_CHARS]
     return f"title: {title}\nurl: {cur}\n{body or '(no text)'}"
 
 
-def _drive(url: str, action: str, timeout: int, headless: bool) -> str:
-    """Launch Chromium, goto url, run ``action(page)``, snapshot, close."""
+def _drive(url: str, op: tuple, timeout: int, headless: bool) -> str:
+    """Launch Chromium, goto url, run ``op``, snapshot, close.
+
+    Sync wrapper around the async driver: safe with or without a
+    running asyncio loop in this thread. Total — errors become strings.
+    ..
+    """
     try:
-        sync_playwright = _playwright()
-        if sync_playwright is None:
-            return ("error: browser automation needs playwright "
-                    "(pip install playwright && playwright install chromium)")
+        if _playwright() is None:
+            return ("error: browser automation needs playwright in the bridge "
+                    "venv (.venv/bin/python -m pip install playwright && "
+                    ".venv/bin/python -m playwright install chromium)")
         u = _check_url(url)
         if not u:
             return "error: only http(s) URLs may be driven"
-        t = max(5, min(_to_int(timeout, 15), 120)) * 1000
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=bool(headless))
-            page = browser.new_page()
-            page.goto(u, timeout=t, wait_until="domcontentloaded")
-            action(page)
-            out = _snapshot(page)
-            browser.close()
-            return out
+        t = max(5, min(_to_int(timeout, 15), 120))
+        return _run_async(_drive_async(u, op, t * 1000, headless), t + 60)
     except Exception as exc:
         return f"error: browser action failed ({exc})"[:400]
 
@@ -196,11 +239,8 @@ def browser_click(url: str, selector: str, timeout: int = 15,
     sel = str(selector or "").strip()
     if not sel:
         return "error: empty selector"
-
-    def _act(page):
-        page.click(sel, timeout=max(5, min(int(timeout), 120)) * 1000)
-
-    return _drive(url, _act, timeout, headless)
+    ms = max(5, min(_to_int(timeout, 15), 120)) * 1000
+    return _drive(url, ("click", sel, ms), timeout, headless)
 
 
 def browser_type(url: str, selector: str, text: str, submit: bool = False,
@@ -212,14 +252,9 @@ def browser_type(url: str, selector: str, text: str, submit: bool = False,
     src = str(text or "")
     if len(src) > 2000:
         return "error: text over 2000 chars (split it up)"
-
-    def _act(page):
-        page.fill(sel, src,
-                  timeout=max(5, min(int(timeout), 120)) * 1000)
-        if submit:
-            page.keyboard.press("Enter")
-
-    return _drive(url, _act, timeout, headless)
+    ms = max(5, min(_to_int(timeout, 15), 120)) * 1000
+    return _drive(url, ("type", sel, src, bool(submit), ms), timeout,
+                  headless)
 
 
 def browser_scroll(url: str, direction: str = "down", pixels: int = 800,
@@ -230,8 +265,4 @@ def browser_scroll(url: str, direction: str = "down", pixels: int = 800,
         return "error: direction must be 'up' or 'down'"
     px = max(1, min(_to_int(pixels, 800), 10000))
     dy = px if d == "down" else -px
-
-    def _act(page):
-        page.evaluate(f"window.scrollBy(0, {dy})")
-
-    return _drive(url, _act, timeout, headless)
+    return _drive(url, ("scroll", dy), timeout, headless)

@@ -21,6 +21,8 @@ import numpy as np
 
 
 def build_agent(args):
+    from src.cascade import CascadeConfig
+    from src.long_running import LongRunningConfig
     from src.main import VoiceAgent, VoiceAgentConfig
     from src.models.llm import LlmConfig
     from src.models.tts import TtsConfig
@@ -28,9 +30,11 @@ def build_agent(args):
     llm = LlmConfig(model=args.model, backend=args.backend,
                     max_tokens=args.max_tokens)
     tts = TtsConfig(speed=args.speed)
-    cfg = VoiceAgentConfig(llm=llm, tts=tts,
-                           sessions_dir="/tmp/voice-lat-sessions",
-                           fast_voice=args.fast)
+    cfg = VoiceAgentConfig(
+        cascade=CascadeConfig(tts=tts),
+        harness=LongRunningConfig(
+            llm=llm, sessions_dir="/tmp/voice-lat-sessions"),
+        fast_voice=args.fast)
     return VoiceAgent(cfg)
 
 

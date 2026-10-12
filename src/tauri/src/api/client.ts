@@ -184,6 +184,22 @@ export async function switchModel(name: string): Promise<{ kind: string; current
   return json(r);
 }
 
+export type BrainMode = "voice" | "harness";
+
+export async function getBrain(): Promise<{ mode: string }> {
+  const r = await fetch(`${API}/brain`);
+  return json(r);
+}
+
+export async function switchBrain(mode: string): Promise<{ kind: string; mode?: string; message?: string; model?: { kind?: string; current?: string; label?: string; message?: string } }> {
+  const r = await fetch(`${API}/brain/switch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode }),
+  });
+  return json(r);
+}
+
 export type HistoryMsg = { role: string; content: string };
 
 export async function fetchHistory(sid: string): Promise<{
