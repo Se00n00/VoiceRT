@@ -1,9 +1,12 @@
 """Canonical computer-control implementations (OS-level GUI + apps).
 
-Single-definition rule (same as :mod:`src.agent.mcp.tools`): these plain
-functions are THE implementations — :mod:`src.agent.mcp.server` exposes
-them over MCP as thin wrappers. All functions are sync and total (never
-raise — errors become strings).
+These plain functions are THE ComputerUse tool implementations —
+:mod:`src.agent.mcp.mcp` registers them over MCP via ``app.add_tool``.
+All functions are sync and total (never raise — errors become strings).
+
+contract, dependencies, who calls it: screenshot/click/type/keys plus
+window/app control; depends on optional OS backends only (lazy probes);
+used by the MCP registry.
 
 Backends are optional and probed lazily so a headless box still imports
 and runs everything else:

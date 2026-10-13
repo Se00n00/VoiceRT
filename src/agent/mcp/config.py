@@ -52,7 +52,7 @@ def server_connection() -> dict:
         if env.get("PYTHONPATH") else pp
     return {
         "command": sys.executable or "python3",
-        "args": ["-m", "src.agent.mcp.server"],
+        "args": ["-m", "src.agent.mcp.mcp"],
         "transport": "stdio",
         "cwd": str(root),
         "env": env,

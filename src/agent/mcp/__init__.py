@@ -1,26 +1,33 @@
-"""Agent-local MCP package: extra tools + stdio server + client.
-
-- ``tools``: single-definition implementations (``python_exec``,
-  ``fetch``, ``web_search``).
-- ``computer``: OS-level GUI + apps (``screenshot``, ``click``,
-  ``type_text``, ``press_key``, ``scroll``, ``get_active_window``,
-  ``list_windows``, ``open_app``).
-- ``filesystem``: host paths (``list_directory``, ``search_files``,
-  ``read_file``, ``write_file``, ``edit_file``, ``move_file``,
-  ``delete_file``).
-- ``web``: browser + download (``search_web``, ``open_url``,
-  ``extract_page``, ``browser_click``, ``browser_type``,
-  ``browser_scroll``, ``download_file``).
-- ``defs``: model-facing specs (``MCP_TOOL_DEFS``/``MCP_TOOL_NAMES``).
-- ``server``: thin FastMCP wrappers for stdio consumers.
-- ``client``: stdio loader returning LangChain tools for the agent.
 """
-from src.agent.mcp import computer
-from src.agent.mcp import defs
-from src.agent.mcp import filesystem
-from src.agent.mcp import tools
-from src.agent.mcp import web
-from src.agent.mcp.computer import (
+Agent-local MCP package: category tools + registry + client.
+
+- ``ShellUse``: bash, python_exec, read, write, edit, list, glob,
+  grep, move, delete.
+- ``BrowserUse``: webfetch, websearch, open_url, browser_click,
+  browser_type, browser_scroll, download_file.
+- ``ComputerUse``: screenshot, click, type_text, press_key, scroll,
+  get_active_window, list_windows, open_app.
+- ``PlanningTools``: task, question, skill (todos live in middleware).
+- ``specs``: model-facing specs derived from docstrings + signatures
+  (``MCP_TOOL_DEFS``/``MCP_TOOL_NAMES``/``TAG_NAMES``/``TOOL_TAGS``).
+- ``mcp``: thin FastMCP registry (``app.add_tool`` per tool).
+- ``client``/``session``/``config``: stdio loading for the agent.
+"""
+from src.agent.mcp import BrowserUse
+from src.agent.mcp import ComputerUse
+from src.agent.mcp import PlanningTools
+from src.agent.mcp import ShellUse
+from src.agent.mcp import specs
+from src.agent.mcp.BrowserUse import (
+    browser_click,
+    browser_scroll,
+    browser_type,
+    download_file,
+    open_url,
+    webfetch,
+    websearch,
+)
+from src.agent.mcp.ComputerUse import (
     click,
     get_active_window,
     list_windows,
@@ -30,42 +37,52 @@ from src.agent.mcp.computer import (
     scroll,
     type_text,
 )
-from src.agent.mcp.defs import MCP_TOOL_DEFS, MCP_TOOL_NAMES
-from src.agent.mcp.filesystem import (
-    delete_file,
-    edit_file,
-    list_directory,
-    move_file,
-    read_file,
-    search_files,
-    write_file,
+from src.agent.mcp.specs import MCP_TOOL_DEFS, MCP_TOOL_NAMES, TAG_NAMES, TOOL_TAGS
+from src.agent.mcp.PlanningTools import (
+    question,
+    skill,
+    task,
 )
-from src.agent.mcp.tools import (
-    fetch,
+from src.agent.mcp.ShellUse import (
+    bash,
+    delete,
+    edit,
+    glob,
+    grep,
+    list,
+    move,
     python_exec,
-    web_search,
-)
-from src.agent.mcp.web import (
-    browser_click,
-    browser_scroll,
-    browser_type,
-    download_file,
-    extract_page,
-    open_url,
-    search_web,
+    read,
+    write,
 )
 
 __all__ = [
-    "tools",
-    "computer",
-    "filesystem",
-    "web",
-    "defs",
+    "ShellUse",
+    "BrowserUse",
+    "ComputerUse",
+    "PlanningTools",
+    "specs",
     "MCP_TOOL_DEFS",
     "MCP_TOOL_NAMES",
-    "fetch",
+    "TAG_NAMES",
+    "TOOL_TAGS",
+    "bash",
     "python_exec",
-    "web_search",
+    "read",
+    "write",
+    "edit",
+    "list",
+    "glob",
+    "grep",
+    "move",
+    "delete",
+    "webfetch",
+    "websearch",
+    "open_url",
+    "browser_click",
+    "browser_type",
+    "browser_scroll",
+    "download_file",
     "screenshot",
     "click",
     "type_text",
@@ -74,18 +91,7 @@ __all__ = [
     "get_active_window",
     "list_windows",
     "open_app",
-    "list_directory",
-    "search_files",
-    "read_file",
-    "write_file",
-    "edit_file",
-    "move_file",
-    "delete_file",
-    "search_web",
-    "open_url",
-    "extract_page",
-    "browser_click",
-    "browser_type",
-    "browser_scroll",
-    "download_file",
+    "task",
+    "question",
+    "skill",
 ]
