@@ -30,7 +30,7 @@ from src.prompts.sim import (  # noqa: F401  (single home, re-exported)
     SYSTEM_SLIVER,
 )
 from src.prompts.terminal import TERMINAL_PREAMBLE
-from src.tools.terminal import TERMINAL_TOOLS, tools_for_request
+from src.agent.tool_router import TERMINAL_TOOLS, tools_for_request
 
 __all__ = ["SimAgent", "parse_plan", "SYSTEM_SLIVER",
            "build_subtask_preamble", "MAX_SUBTASKS", "PLAN_PROMPT",

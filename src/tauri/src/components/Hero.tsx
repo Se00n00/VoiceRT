@@ -129,6 +129,7 @@ export function AskCard(props: {
   value: string;
   onInput: (v: string) => void;
   onSubmit: () => void;
+  onStop: () => void;
   busy: boolean;
   autoComplete: boolean;
   recording: boolean;
@@ -307,6 +308,9 @@ export function AskCard(props: {
               <Show
                 when={props.recording}
                 fallback={
+                  <Show
+                    when={props.busy}
+                    fallback={
                   <>
                     <button
                       title="Dictation (T)"
@@ -361,6 +365,23 @@ export function AskCard(props: {
                       </button>
                     </Show>
                   </>
+                    }
+                  >
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        props.onStop();
+                      }}
+                      title="Stop the running turn"
+                      aria-label="Stop the running turn"
+                      class="flex h-8 items-center gap-2 rounded-[10px] bg-red-500/90 px-3 text-sm font-semibold text-white transition hover:bg-red-500 active:scale-[0.96]"
+                    >
+                      <svg viewBox="0 0 20 20" class="h-3.5 w-3.5" fill="currentColor" aria-hidden="true">
+                        <path d={P_STOP} />
+                      </svg>
+                      Stop
+                    </button>
+                  </Show>
                 }
               >
                 <button

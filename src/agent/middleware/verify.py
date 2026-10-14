@@ -16,13 +16,30 @@ import os as _os
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import ToolMessage
 
-from src.agent.mcp.filesystem import _resolve as _anchor
 from src.prompts.chat import VERIFY_RETRY
 
 __all__ = ["VerifyMiddleware", "verify_strikes"]
 
 verify_strikes: _ContextVar = _ContextVar("verify_strikes", default=0)
 """Consecutive verify mismatches (ContextVar, reset on match)."""
+
+
+def _anchor(path: str) -> str:
+    """Workdir-anchored abspath, same rule as the file tools.
+
+    Relative paths anchor at ``VOICE_WORKDIR`` when set, else the
+    process cwd. Empty stays empty (caller treats it as missing).
+    ..
+    """
+    p = str(path or "").strip()
+    if not p:
+        return ""
+    p = _os.path.expanduser(_os.path.expandvars(p))
+    if not _os.path.isabs(p):
+        base = (_os.environ.get("VOICE_WORKDIR", "") or "").strip()
+        if base:
+            p = _os.path.join(base, p)
+    return _os.path.abspath(p)
 
 
 def _text_of(result) -> str:
@@ -84,14 +101,14 @@ class VerifyMiddleware(AgentMiddleware):
         raw = lambda k: str(args.get(k, "") or "")
         exists = lambda p: bool(p) and _os.path.lexists(p)
         size = lambda p: _os.path.getsize(p) if p else -1
-        if name == "write_file":
+        if name == "write":
             p = get("path")
             if not exists(p):
                 return f"file at {p} exists", f"nothing at {p}"
             if raw("content") and size(p) <= 0:
                 return f"file at {p} non-empty", f"empty file at {p}"
             return None
-        if name == "edit_file":
+        if name == "edit":
             p = get("path")
             want = raw("new_string")
             if not exists(p):
@@ -104,14 +121,14 @@ class VerifyMiddleware(AgentMiddleware):
                     return (f"{want[:60]!r} in {p}",
                             f"replacement not found in {p}")
             return None
-        if name == "move_file":
+        if name == "move":
             s, d = get("src"), get("dst")
             if not exists(d):
                 return f"moved file at {d}", f"nothing at {d}"
             if exists(s):
                 return f"{s} gone after move", f"{s} still present"
             return None
-        if name == "delete_file":
+        if name == "delete":
             p = get("path")
             if exists(p):
                 return f"{p} deleted", f"{p} still present"
@@ -143,7 +160,7 @@ class VerifyMiddleware(AgentMiddleware):
         verify_strikes.set(n)
         note = (f"\nverify: called {name} expecting {expected}, "
                 f"but observed {observed}. Re-check with "
-                f"list_directory/read_file before acting further.")
+                f"list/read before acting further.")
         if n >= 3:
             note += " " + VERIFY_RETRY
             verify_strikes.set(0)

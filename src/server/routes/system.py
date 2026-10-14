@@ -223,7 +223,7 @@ async def metrics_context(sid: str = ""):
 async def legs():
     agent = get_agent()
     try:
-        from src.tools.terminal import ALLOWED_OPS
+        from src.agent.tool_router import ALLOWED_OPS
         ops = sorted(set(ALLOWED_OPS))
     except Exception:
         ops = []

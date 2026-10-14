@@ -42,6 +42,6 @@ REPEAT_NOTE_TEMPLATE = (
 VERIFY_RETRY = (
     "Three tool results in a row did not match what the tools "
     "claimed. Stop and restate: what observable evidence do you "
-    "have, and which single check (list_directory/read_file) "
+    "have, and which single check (list/read) "
     "settles it next?"
 )

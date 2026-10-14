@@ -111,7 +111,7 @@ def to_openai_tools(tools) -> list:
 
     Every caller in this repo speaks the flat house shape
     (``{"name", "description", "parameters"}`` — see
-    ``src.tools.terminal.TERMINAL_TOOLS``) because the sidecar legs convert
+    ``src.agent.tool_router.TERMINAL_TOOLS``) because the sidecar legs convert
     it themselves on the way to ``/v1/chat/completions``. HF chat
     templates want the OpenAI shape instead, so the fused legs need this
     hop too. Already-converted specs pass through untouched, which lets
@@ -352,7 +352,7 @@ class LlmModel:
 
         No sidecar, no router model — the SAME Qwen weights decide between
         plain chat text and one JSON ``TerminalAction`` (see
-        src/tools/terminal.py). Keep bodies small so prompt+max_tokens
+        src/agent/chat_model.py). Keep bodies small so prompt+max_tokens
         fits the paged KV block pool. ``catalogue`` appends the prose op
         catalogue (for legs whose template may ignore native tool specs);
         native-function legs pass False — pure English suffices there.

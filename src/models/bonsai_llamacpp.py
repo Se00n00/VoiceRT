@@ -23,7 +23,7 @@ upstream. Stock builds refuse PTQ1_0/PQ2_0, and a Q2_0 file loads silent
 + outputs gibberish. :func:`resolve_server_bin` enforces the fork tag.
 
 Tool-call grammar: composed raw text (contract for
-``parse_gemma_action`` in :mod:`src.tools.terminal`) — optional chat
+``parse_gemma_action`` in :mod:`src.agent.chat_model`) — optional chat
 ``content``, then zero or more ``<|tool_call>call:NAME ARGS <tool_call|>``
 blocks. One parser serves both sidecars.
 

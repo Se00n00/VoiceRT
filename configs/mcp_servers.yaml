@@ -19,7 +19,7 @@ servers:
     enabled: true
     transport: stdio
     command: null
-    args: ["-m", "src.agent.mcp.server"]
+    args: ["-m", "src.agent.mcp.mcp"]
     cwd: "."
     env: {}
 

@@ -35,6 +35,7 @@ from src.agent.facts import format_block, load_facts
 from src.agent.mcp.client import load_extra_tools
 from src.agent.memory import JsonSessionMemory
 from src.agent.middleware import (
+    ErrorHintMiddleware,
     InjectToolMiddleware,
     PolicyMiddleware,
     SummarizationMiddleware,
@@ -60,7 +61,7 @@ from src.prompts.voice import (
     identity_sentence,
 )
 
-from src.tools.terminal import (
+from src.agent.chat_model import (
     is_degenerate,
     parse_bare_tail,
     parse_terminal_action,
@@ -85,7 +86,8 @@ class LongRunningConfig(BaseModel):
     exec_timeout_s: float = 30.0
     tool_timeout_s: float = 30.0
     mcp_config: str | None = None
-    use_tool_router: bool = True
+    use_tool_router: bool = False
+    tool_top_k: int = 5
     max_agent_steps: int = 6
     recursion_limit: int = 10
     speak_text_turns: bool = True
@@ -331,14 +333,19 @@ class LongRunningAgent:
     def _build_agent(self, confirmer=None, backend=None):
         """Assemble the deep agent: model, shell backend, tools, middleware.
 
-        The middleware list lives here directly: todo tracking,
-        observation trimming, policy gate, result verification,
-        optional tool-shortlist injection, and always-on in-turn
-        summarization. ``confirmer`` (async (name, args) -> yes/no) backs
-        confirm verdicts; None auto-allows (announced nowhere on server
-        — the WS gate passes one per turn below). ``backend`` overrides
-        ``self.backend`` for the turn (sandbox box); None keeps it.
+        Layers around each tool call, outermost first: todo tracking,
+        observation trimming, permission gate, error hints, result
+        verification, optional tool-shortlist injection, and always-on
+        in-turn summarization. ``confirmer`` (async (name, args) -> yes/no)
+        backs confirm verdicts; None auto-allows (announced nowhere on
+        server — the WS gate passes one per turn below). ``backend``
+        overrides ``self.backend`` for the turn (sandbox box); None
+        keeps it. Execution tools come from the listing layer
+        (collect + tag-filter); the semantic top-K stays prompt-side
+        and off unless ``use_tool_router`` is set.
         """
+        from src.agent.tool_router import build_execution_tools
+
         turn_backend = backend if backend is not None else self.backend
         middleware = [
             TodoListMiddleware(
@@ -347,9 +354,11 @@ class LongRunningAgent:
             ),
             TrimObservationsMiddleware(limit=1500),
             PolicyMiddleware(confirmer=confirmer),
+            ErrorHintMiddleware(),
             VerifyMiddleware(),
             *(
-                [InjectToolMiddleware()]
+                [InjectToolMiddleware(
+                    k=int(getattr(self.config, "tool_top_k", 5) or 5))]
                 if getattr(self.config, "use_tool_router", False)
                 else []
             ),
@@ -362,7 +371,7 @@ class LongRunningAgent:
         return create_deep_agent(
             model=self.chat_model,
             backend=turn_backend,
-            tools=list(self._extra_tools or []),
+            tools=build_execution_tools(self._extra_tools),
             middleware=middleware,
             system_prompt=SYSTEM_PROMPT
             + " "

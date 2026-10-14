@@ -30,7 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def _required_args():
-    from src.tools.terminal import TERMINAL_TOOLS
+    from src.agent.tool_router import TERMINAL_TOOLS
 
     return {t["name"]: set(t.get("parameters", {}).get("required", []))
             for t in TERMINAL_TOOLS}
@@ -63,7 +63,7 @@ async def _attempt(cm, llm, msgs, max_tokens, tools, counter):
 
 async def run_case(cm, llm, case, max_tokens):
     """Returns (predicted_action_or_None, retries, seconds, raws)."""
-    from src.tools.terminal import tools_for_request
+    from src.agent.tool_router import tools_for_request
 
     text = case["prompt"]
     msgs = llm.messages_for_terminal(text, [], cwd=".", observation="")

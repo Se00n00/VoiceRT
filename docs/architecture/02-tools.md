@@ -5,14 +5,14 @@ policy gates in front of execution.
 
 ## 2.1 The ops
 
-`ALLOWED_OPS` (`src/tools/terminal.py:41`) — twelve, and `done` is not really a
+`ALLOWED_OPS` (`src/agent/tool_router.py`) — the MCP ops plus `done` is not really a
 tool, it is the "I am finished talking" sentinel:
 
 ```
 exec  exec_bg  poll  read  write  edit  grep  list  python_exec  fetch  searxng  done
 ```
 
-`TERMINAL_TOOLS` (`terminal.py:47-109`) declares eleven JSON-Schema specs for
+`TERMINAL_TOOLS` (`src/agent/tool_router.py`) declares JSON-Schema specs for
 models whose chat template supports tools natively (Qwen renders them into
 `<tools>` XML, Bonsai takes OpenAI-style `tools[]`).
 
@@ -30,9 +30,10 @@ models whose chat template supports tools natively (Qwen renders them into
 | `fetch` | `path` (a URL) | page as text |
 | `searxng` | `pattern` | search |
 
-The same three capabilities are also reachable over MCP
-(`src/agent/mcp/tools.py:25-30`): `python_exec(code, timeout)`,
-`fetch(url, max_chars, timeout)`, `web_search(query, n, timeout, provider)`.
+The same capabilities are also reachable over MCP
+(`src/agent/mcp/ShellUse.py` + `src/agent/mcp/BrowserUse.py`,
+registered in `src/agent/mcp/mcp.py`): `python_exec(code, timeout)`,
+`webfetch(url, max_chars)`, `websearch(query, count)`.
 
 ## 2.2 Parsing a call out of text
 
@@ -62,7 +63,7 @@ gemma270 `<end_function_call>` branch was retired with that backend).
 `<function`, `<start_function_call>`, `action`, or a paired `"name"`/`"arguments"`
 — used to decide whether a retry is warranted.
 
-`_norm_op` (`terminal.py:183-218`) fuzzy-maps the op name. It matches on
+`_norm_op` (`src/agent/chat_model.py`) fuzzy-maps the op name. It matches on
 op-specific boundaries rather than prefix, which is what stops `python_exec`
 and `exec_bg` from collapsing into `exec` — a bug two eval runs found.
 
@@ -99,11 +100,11 @@ backends (`bonsai`, `qwen`) it skips the embedding router entirely
 
 ## 2.4 Policy
 
-Two gates, both in `src/tools/terminal.py`, checked before anything runs.
+Two gates, both in `src/agent/middleware/policy.py`, checked before anything runs.
 
 ### Deny — never runs, no confirmation can unlock it
 
-`_DENY_RES` (`terminal.py:114-126`):
+`_DENY_RES` (`src/agent/middleware/policy.py`):
 
 ```
 fork bomb              rm -rf /   rm -rf ~/   mkfs   dd of=/dev/
@@ -113,7 +114,7 @@ mv … /dev
 
 ### Confirm — runs only after explicit user yes
 
-`_CONFIRM_RES` (`terminal.py:129-147`):
+`_CONFIRM_RES` (`src/agent/middleware/policy.py`):
 
 ```
 sudo   eval   $(…)   `…`   process substitution
@@ -152,7 +153,7 @@ A blocked or cancelled call comes back as an observation string starting with
 explicit path → $MCP_CONFIG → configs/mcp_servers.yaml → server_connection()
 ```
 
-The fallback builds a stdio connection to `python -m src.agent.mcp.server`
+The fallback builds a stdio connection to `python -m src.agent.mcp.mcp`
 with cwd at repo root and a merged `PYTHONPATH` (`config.py:45-57`).
 `_remote_connection` handles `http(s)` transports (`config.py:86-91`).
 `load_connections` returns `(connections, tool_name_prefix)` so multiple

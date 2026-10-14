@@ -83,7 +83,8 @@ async def repl(agent) -> None:
         print(reply, flush=True)
 
 
-async def amain(backend: str, model: str, workdir: str) -> int:
+async def amain(backend: str, model: str, workdir: str,
+              use_router: bool = False) -> int:
     from deepagents import create_deep_agent
     from deepagents.backends import LocalShellBackend
     from langchain.agents.middleware import TodoListMiddleware
@@ -95,10 +96,12 @@ async def amain(backend: str, model: str, workdir: str) -> int:
         make_chat_model,
     )
     from src.agent.mcp.session import open_sessions
+    from src.agent.middleware.errors import ErrorHintMiddleware
     from src.agent.middleware.inject import InjectToolMiddleware
     from src.agent.middleware.policy import PolicyMiddleware
     from src.agent.middleware.trim import TrimObservationsMiddleware
     from src.agent.middleware.verify import VerifyMiddleware
+    from src.agent.tool_router import build_execution_tools
     from src.models.llm import LlmConfig, LlmModel
     from src.agent.chat_model import LocalChatModel
     from src.prompts.base import SYSTEM_PROMPT
@@ -148,7 +151,7 @@ async def amain(backend: str, model: str, workdir: str) -> int:
     agent = create_deep_agent(
         model=chat_model,
         backend=LocalShellBackend(root_dir=workdir, timeout=30),
-        tools=list(extra_tools or []),
+        tools=build_execution_tools(extra_tools),
         middleware=[
             TodoListMiddleware(
                 system_prompt=TODO_SYSTEM_PROMPT,
@@ -156,8 +159,9 @@ async def amain(backend: str, model: str, workdir: str) -> int:
             ),
             TrimObservationsMiddleware(limit=1500),
             PolicyMiddleware(announce=_announce),
+            ErrorHintMiddleware(),
             VerifyMiddleware(),
-            InjectToolMiddleware(),
+            *([InjectToolMiddleware()] if use_router else []),
         ],
         system_prompt=SYSTEM_PROMPT,
     )
@@ -181,10 +185,13 @@ def main() -> int:
     ap.add_argument("--model", default="",
                     help=f"model id (default: {GROQ_DEFAULT} on groq)")
     ap.add_argument("--workdir", default="")
+    ap.add_argument("--router", action="store_true",
+                    help="enable semantic tool shortlisting (off by default)")
     args = ap.parse_args()
     workdir = args.workdir or tempfile.mkdtemp(prefix=f"{args.backend}-console-")
     try:
-        return asyncio.run(amain(args.backend, args.model, workdir))
+        return asyncio.run(amain(args.backend, args.model, workdir,
+                                 use_router=bool(args.router)))
     except KeyboardInterrupt:
         return 0
 

@@ -513,7 +513,11 @@ export function App() {
           setConfirmAction(a);
         }
       };
-      sock.onClose = () => setPhase("idle");
+      sock.onClose = () => {
+        setPhase("idle");
+        setBusy(false);
+        setStreamId(null);
+      };
       await sock.connect();
       return true;
     } catch {
@@ -600,6 +604,16 @@ export function App() {
     // then the answer streams in below and follows to its final words.
     scrollToQuestion(qid);
     sock.turn(tagged, sessionId(), cwd());
+  }
+
+  function stopTurn(): void {
+    if (!busy()) return;
+    setPhase("stopping");
+    try {
+      sock.cancel();
+    } catch {
+      /* dead socket — busy clears on the next event */
+    }
   }
 
   /** Toggles + dropdowns become trailing directives on the outgoing turn. */
@@ -902,6 +916,7 @@ export function App() {
           value={input()}
           onInput={setInput}
           onSubmit={() => void sendText(input())}
+          onStop={stopTurn}
           busy={busy()}
           autoComplete
           recording={recState() !== null}
@@ -978,7 +993,24 @@ export function App() {
           </Show>
 
           <Show when={busy()}>
-            <p class="mt-3 animate-pulse text-center text-xs text-white/50">{phase()}…</p>
+            <div class="mx-auto mt-3 flex max-w-4xl items-center justify-center gap-2.5 px-6">
+              <span class="relative flex h-2 w-2">
+                <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+                <span class="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
+              </span>
+              <p class="animate-pulse text-xs text-white/60">agent is executing · {phase()}…</p>
+              <button
+                onClick={stopTurn}
+                title="Stop the running turn"
+                aria-label="Stop the running turn"
+                class="flex items-center gap-1.5 rounded-full bg-red-500/90 px-3 py-1 text-xs font-semibold text-white transition hover:bg-red-500 active:scale-95"
+              >
+                <svg viewBox="0 0 20 20" class="h-3 w-3" fill="currentColor" aria-hidden="true">
+                  <rect x="5" y="5" width="10" height="10" rx="2" />
+                </svg>
+                Stop
+              </button>
+            </div>
           </Show>
 
           <Show when={confirmAction()}>

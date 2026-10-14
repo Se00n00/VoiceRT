@@ -27,8 +27,10 @@ voice-pipeline/
 │   ├── contacts.py             # telegram / baileys / callmebot legs (666)
 │   ├── pairing.py              # Telegram creator-token pairing (395)
 │   ├── tg_poll.py              # long-poll loop (79)
-│   └── mcp/                    # MCP config + client + server
-├── src/tools/terminal.py       # op schemas, policy regexes, parsers
+│   ├── mcp/                    # MCP config + client + server
+│   ├── chat_model.py           # action parsing + local chat wrapper
+│   ├── tool_router.py          # op schemas, routing, tool listing
+│   └── middleware/             # policy/error/verify layers (one file each)
 ├── bridge.py                   # TUI backend, :8004
 └── server.py                   # voice API, :8003
 ```
