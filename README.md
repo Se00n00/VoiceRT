@@ -2,6 +2,45 @@
 
 ---
 
+![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
+![CUDA 12.4](https://img.shields.io/badge/CUDA-12.4-green)
+![VRAM 4GB](https://img.shields.io/badge/VRAM-4GB-orange)
+![E2E 551ms](https://img.shields.io/badge/E2E-551ms-brightgreen)
+![TUI 158 checks](https://img.shields.io/badge/TUI-158_checks-brightgreen)
+![Python 630/634](https://img.shields.io/badge/python-630%2F634-brightgreen)
+
+VoiceRT — real-time voice agent for one small GPU: mic in, VAD →
+STT → LLM → TTS out in ≈0.5–1.0 s, no cloud. A 0.6B front model
+routes chat vs work with one yes/no; real tasks escalate to a 27B
+ternary worker with the full tool harness. Sessions persist,
+memory compounds, everything runs local on 4GB VRAM.
+
+## Why?
+
+Cloud voice agents rent you latency, per-token bills, and your own
+audio on someone else's disk. A 27B does the thinking but cannot
+hold a conversation in real time on a laptop GPU — and a 0.6B can
+talk but cannot work. So VoiceRT splits the job: the small brain
+owns the loop and the big brain owns the task, sharing one harness,
+one memory, one voice. Local weights, local sessions, no round
+trip, no meter running.
+
+## Index
+
+Architecture first — each entry is a chart below:
+
+- 01 ~ 1 / HIGH LEVEL — the four-leg voice pipeline
+- 01 ~ 2 / TWO BRAINS — front routes, worker works
+- 01 ~ 3 / CONTEXT BUDGET — the 16K prompt assembly
+- 02 / TOOLS — 12 ops, parsers, gates, router
+- 03 / MEMORY — L1/L2/L3, middleware, sim-agent
+- 04 / SESSIONS — windows, locks, persistence
+- 05 / MODELS — legs, backends, voices
+- 06 / PROCESSES — bridge, server, REPL
+- 07 / INFERENCE — retired paged runtime (history)
+- 08 / TUI — palette, shades, commands
+
+
 ```
 ─── 01 ~ 1 / HIGH LEVEL ──────────────────────────────────────────────────────────────────────────────
 
@@ -157,12 +196,6 @@
   what you typed. A palette that silently ran /model for /mode is worse than none.
 ```
 
-![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
-![CUDA 12](https://img.shields.io/badge/CUDA-12-green)
-![VRAM 4GB](https://img.shields.io/badge/VRAM-4GB-orange)
-![TTFT 14ms](https://img.shields.io/badge/TTFT-14ms-brightgreen)
-![TUI 158 checks](https://img.shields.io/badge/TUI-158_checks-brightgreen)
-![Python 630/634](https://img.shields.io/badge/python-630%2F634-brightgreen)
 
 **Full voice loop — speech in, speech out — on a single 4GB laptop GPU.** Mic/wav → text → reply → voice in ≈0.5–1.0 s, no cloud.
 
@@ -239,8 +272,8 @@ voice-pipeline/
 ├── src/
 │   ├── main.py / long_running.py / cascade.py  # VoiceAgent turn loops
 │   ├── agent/            # chat face, memory, tools, middleware
-│   │   ├── model.py / cloud_models.py / keystore.py
-│   │   ├── chat_model.py / tool_router.py / budget.py / delegate.py
+│   │   ├── keystore.py
+│   │   ├── tool_router.py / budget.py / delegate.py
 │   │   ├── events.py / memory.py / episodic.py / facts.py / contacts.py
 │   │   ├── prompts.py / title.py / simtask.py / shell.py
 │   │   ├── pairing.py / tg_poll.py
@@ -248,7 +281,8 @@ voice-pipeline/
 │   │   └── mcp/          # client / session / specs / config / mcp +
 │   │                       #   BrowserUse / ComputerUse / PlanningTools / ShellUse
 │   ├── models/           # every model lives here (one file, one class)
-│   │   ├── llm.py / bonsai_llamacpp.py / vad.py / stt.py / tts.py
+│   │   ├── llm.py / bonsai.py / vad.py / stt.py / tts.py
+│   │   ├── provider.py / chat_model.py
 │   │   ├── qwen.py / whisper.py / kokoro.py
 │   │   ├── download.py
 │   │   ├── engines/      # qwen / whisper / tts (legacy engine path)
@@ -280,12 +314,13 @@ voice-pipeline/
 Models in this project:
 
 ```
-# VAD Model : Silero VAD
-# STT Model : Whisper
-# LLM Model : Qwen3-0.6B
-# Worker Model : Bonsai 2 27B
-# TTS Model : Kokoro TTS
-# Provider Models : Groq / Gemini / Anthropic / OpenAI / OpenRouter / DeepSeek / OpenAI-compat
+# VAD Model : Silero VAD — src/models/vad.py : VadModel
+# STT Model : Whisper — src/models/stt.py : SttModel
+# LLM Model : Qwen3-0.6B — src/models/llm.py : LlmModel
+# Worker Model : Bonsai 2 27B — src/models/bonsai.py : BonsaiLlamaCpp
+# TTS Model : Kokoro TTS — src/models/tts.py : TtsModel
+# Provider Models : Groq / Gemini / Anthropic / OpenAI / OpenRouter / DeepSeek / OpenAI-compat — src/models/provider.py : ChatModel
+# Chat Model : LangChain face over LlmModel — src/models/chat_model.py : LocalChatModel
 ```
 
 ## Agent — text in, tools out, reply back
