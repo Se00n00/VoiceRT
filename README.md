@@ -228,9 +228,65 @@ Docs: [`docs/architecture/`][arch-index] · [`docs/architecture.md`](docs/archit
 ```
 
 **How a kernel is built (same for Qwen/Whisper/Kokoro):**
-`src/models/triton_kernels/qwen_fused.py` — *one file* = all fused kernels + `@triton.testing.perf_report` bench + torch exact fallback. `src/models/pytorch/qwen.py` is the PyTorch reference. `src/models/qwen.py:QwenFused` loops it `28×` with `KVCacheBatched` and `check_budget`. Same pattern for `whisper_fused` (6×) and `tts_fused`. Facades `src/models/llm.py:SttModel/TtsModel` are mandatory fused (no legacy `engines/*` fallback).
+`src/models/triton_kernels/qwen_fused.py` — *one file* = all fused kernels + `@triton.testing.perf_report` bench + torch exact fallback. `src/models/pytorch/qwen.py` is the PyTorch reference. `src/models/qwen.py:QwenFused` loops it `28×` with `KVCacheBatched` and `check_budget`. Same pattern for `whisper_fused` (6×) and `tts_fused`. Facades `src/models/stt.py:SttModel` / `src/models/tts.py:TtsModel` are mandatory fused (no legacy `engines/*` fallback).
 
 Verbose specs → docs: capacity model, queue, Triton details, API and config.
+
+### Project structure
+
+```
+voice-pipeline/
+├── src/
+│   ├── main.py / long_running.py / cascade.py  # VoiceAgent turn loops
+│   ├── agent/            # chat face, memory, tools, middleware
+│   │   ├── model.py / cloud_models.py / keystore.py
+│   │   ├── chat_model.py / tool_router.py / budget.py / delegate.py
+│   │   ├── events.py / memory.py / episodic.py / facts.py / contacts.py
+│   │   ├── prompts.py / title.py / simtask.py / shell.py
+│   │   ├── pairing.py / tg_poll.py
+│   │   ├── middleware/   # errors / inject / policy / summarization / trim / verify
+│   │   └── mcp/          # client / session / specs / config / mcp +
+│   │                       #   BrowserUse / ComputerUse / PlanningTools / ShellUse
+│   ├── models/           # every model lives here (one file, one class)
+│   │   ├── llm.py / bonsai_llamacpp.py / vad.py / stt.py / tts.py
+│   │   ├── qwen.py / whisper.py / kokoro.py
+│   │   ├── download.py
+│   │   ├── engines/      # qwen / whisper / tts (legacy engine path)
+│   │   ├── pytorch/      # qwen / whisper / tts (torch reference)
+│   │   ├── triton_kernels/  # qwen_fused / qwen / attention / rmsnorm /
+│   │                       #   rope / activation / utils
+│   │   └── runtime/      # guard / capacity / device / memory /
+│   │                       #   scheduler / profiler / tensor
+│   ├── server/           # state / console_cli + routes/
+│   │                       #   (talk / voice / chat / turns / sessions /
+│   │                       #    keys / console / system)
+│   ├── prompts/          # base / chat / terminal / voice / memory /
+│   │                       #   delegate / sim / middleware / title
+│   ├── sandbox/          # docker
+│   └── tauri/            # desktop app (src/ + src-tauri/)
+├── engine/               # audio / inference_engine / session / streaming
+├── benchmarks/           # leg_profile / leg_stages / voice_latency / tts_ab /
+│                         #   toolcall_eval / memory_eval + common / harness /
+│                         #   llm / stt / tts / profiling
+├── eval/                 # evaluate + gaia / bfcl
+├── configs/              # delegate.yaml / mcp_servers.yaml
+├── docs/                 # architecture/ (01-08) / benchmarks / capacity / plans
+├── sessions/             # persisted session json
+├── third_party/          # vendored deps
+├── test.py / MODEL.md / PLAN.md / COMPLETE.md / AGENTS.md
+└── .env / .env.example
+```
+
+Models in this project:
+
+```
+# VAD Model : Silero VAD
+# STT Model : Whisper
+# LLM Model : Qwen3-0.6B
+# Worker Model : Bonsai 2 27B
+# TTS Model : Kokoro TTS
+# Provider Models : Groq / Gemini / Anthropic / OpenAI / OpenRouter / DeepSeek / OpenAI-compat
+```
 
 ## Agent — text in, tools out, reply back
 
@@ -430,6 +486,37 @@ Reproduce:
 (same flags both sides);
 regenerate the chart with `benchmarks/plot_triton_speedup.py` (extend
 `ROWS`, raw leg CSVs under `benchmarks/results/quick_20261005_qwen3/`).
+
+### Worker sweep — Bonsai 27B TTFT/decode (measured 2026-10-15)
+
+TTFT + wall per (prompt, gen) cell through the production sidecar path
+(`benchmarks/worker_profile.py`, warm sidecar :8081, first rep per cell
+excluded; VRAM lives server-side):
+
+| Prompt | Gen | TTFT | Decode | Wall |
+|---|---|---|---|---|
+| ~40 toks (56 ids) | 32 | 2.80 s | **1.4 tok/s** | 25.8 s |
+
+![Bonsai worker sweep](benchmarks/results/plots/worker_sweep.png)
+
+Full sweep (`--max-tokens 32 128 512`, prompts ~40/500/2000) pending —
+re-run `benchmarks/worker_profile.py`, then
+`benchmarks/plot_worker_longctx.py` to extend chart and tables.
+
+### Long-context — prefill scale + needle recall (measured 2026-10-15)
+
+`benchmarks/longctx_eval.py` (qwen backend, ctx 8192; fused legs report
+TTFT 0.0 so wall carries the prefill signal):
+
+| Length | Prompt ids | Wall (gen 16) | Needle d=0.5 |
+|---|---|---|---|
+| ~256 | 224 | 1.84 s | HIT |
+
+![Prefill scaling](benchmarks/results/plots/longctx_scale.png)
+![Needle recall](benchmarks/results/plots/longctx_needle.png)
+
+Full sweep (`--lengths 1024 2048 4096 8192 --depths 0.0 0.5 1.0`, then
+`--backend bonsai` to 16K) pending — same re-run procedure as above.
 
 ### Fused kernel microbenchmarks (single layer vs eager torch)
 
