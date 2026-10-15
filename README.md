@@ -17,28 +17,29 @@ memory compounds, everything runs local on 4GB VRAM.
 
 ## Why?
 
-Cloud voice agents rent you latency, per-token bills, and your own
-audio on someone else's disk. A 27B does the thinking but cannot
-hold a conversation in real time on a laptop GPU — and a 0.6B can
-talk but cannot work. So VoiceRT splits the job: the small brain
-owns the loop and the big brain owns the task, sharing one harness,
-one memory, one voice. Local weights, local sessions, no round
-trip, no meter running.
+- Cloud voice agents rent you latency, per-token bills, and your own
+  audio on someone else's disk. Local weights end all three.
+- A 27B thinks but cannot talk in real time on a laptop GPU; a 0.6B
+  talks but cannot work. Split the job: small brain owns the loop,
+  big brain owns the task — one harness, one memory, one voice.
+- No round trip, no meter running: sessions persist and memory
+  compounds on your own machine.
 
 ## Index
 
-Architecture first — each entry is a chart below:
+Architecture first — one part per file:
 
-- 01 ~ 1 / HIGH LEVEL — the four-leg voice pipeline
-- 01 ~ 2 / TWO BRAINS — front routes, worker works
-- 01 ~ 3 / CONTEXT BUDGET — the 16K prompt assembly
-- 02 / TOOLS — 12 ops, parsers, gates, router
-- 03 / MEMORY — L1/L2/L3, middleware, sim-agent
-- 04 / SESSIONS — windows, locks, persistence
-- 05 / MODELS — legs, backends, voices
-- 06 / PROCESSES — bridge, server, REPL
-- 07 / INFERENCE — retired paged runtime (history)
-- 08 / TUI — palette, shades, commands
+| # | Part | |
+|---|---|---|
+| — | [Architecture](docs/architecture/README.md) | diagrams, legs, engine, kernels — start here |
+| 01 | [Agent](docs/architecture/01-agent.md) | `VoiceAgent`, warm order, turn loop, events, two-brain routing |
+| 02 | [Tools](docs/architecture/02-tools.md) | 12 ops, 5 parser formats, semantic router, deny/confirm policy |
+| 03 | [Memory](docs/architecture/03-memory.md) | L1 window, L2 episodic, L3 facts, the one injection point |
+| 04 | [Sessions](docs/architecture/04-sessions.md) | identity, window ownership, persistence, resume |
+| 05 | [Models](docs/architecture/05-models.md) | the four legs, `LlmConfig`, 7 backends, streaming, VRAM |
+| 06 | [Processes](docs/architecture/06-processes.md) | bridge/server endpoints, and the startup-warm trap |
+| 07 | [Inference](docs/architecture/07-inference.md) | retired (custom paged runtime deleted) |
+| 08 | [TUI](docs/architecture/08-tui.md) | command palette, shades, exit card |
 
 
 ```
@@ -213,19 +214,7 @@ curl http://localhost:8003/metrics
 
 `PYTHONPATH=.` is required — kernels live at `src.models.triton_kernels`.
 
-**Architecture, one part per file** — the charts above are the summaries, these
-are the cited detail:
-
-| # | Part | |
-|---|---|---|
-| 01 | [Agent](docs/architecture/01-agent.md) | `VoiceAgent`, warm order, turn loop, events, two-brain routing |
-| 02 | [Tools](docs/architecture/02-tools.md) | 12 ops, 5 parser formats, semantic router, deny/confirm policy |
-| 03 | [Memory](docs/architecture/03-memory.md) | L1 window, L2 episodic, L3 facts, the one injection point |
-| 04 | [Sessions](docs/architecture/04-sessions.md) | identity, window ownership, persistence, resume |
-| 05 | [Models](docs/architecture/05-models.md) | the four legs, `LlmConfig`, 7 backends, streaming, VRAM |
-| 06 | [Processes](docs/architecture/06-processes.md) | bridge/server endpoints, and the startup-warm trap |
-| 07 | [Inference](docs/architecture/07-inference.md) | retired (custom paged runtime deleted) |
-| 08 | [TUI](docs/architecture/08-tui.md) | command palette, shades, exit card |
+The charts above are the summaries; the cited detail is the [Index](#index) table at the top.
 
 Docs: [`docs/architecture/`][arch-index] · [`docs/architecture.md`](docs/architecture.md) (legacy single-file) · [`docs/capacity.md`](docs/capacity.md) · [`docs/benchmarks.md`](docs/benchmarks.md) · [`docs/README.md`](docs/README.md)
 
