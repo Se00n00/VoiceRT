@@ -269,3 +269,65 @@ body {
 .theme-light .barmini {
   color: rgba(28, 36, 56, 0.45) !important;
 }
+
+/* ---------- light theme: remap hardcoded dark utilities ----------
+   Dark-first components use literal white/*/black/* classes; in light
+   mode every one of them flips to ink-on-pale. Selected pills
+   (bg-white/* + text-white) become dark pills instead. */
+.theme-light .text-white { color: #10162a !important; }
+.theme-light .text-white\/90 { color: rgba(20, 26, 46, 0.92) !important; }
+.theme-light .text-white\/85 { color: rgba(20, 26, 46, 0.85) !important; }
+.theme-light .text-white\/80 { color: rgba(20, 26, 46, 0.8) !important; }
+.theme-light .text-white\/75 { color: rgba(20, 26, 46, 0.75) !important; }
+.theme-light .text-white\/70 { color: rgba(20, 26, 46, 0.72) !important; }
+.theme-light .text-white\/60 { color: rgba(20, 26, 46, 0.62) !important; }
+.theme-light .text-white\/55 { color: rgba(20, 26, 46, 0.6) !important; }
+.theme-light .text-white\/50 { color: rgba(20, 26, 46, 0.55) !important; }
+.theme-light .text-white\/45 { color: rgba(20, 26, 46, 0.5) !important; }
+.theme-light .text-white\/40 { color: rgba(20, 26, 46, 0.48) !important; }
+.theme-light .text-white\/35 { color: rgba(20, 26, 46, 0.42) !important; }
+.theme-light .text-white\/30 { color: rgba(20, 26, 46, 0.38) !important; }
+.theme-light .text-white\/25 { color: rgba(20, 26, 46, 0.32) !important; }
+.theme-light .placeholder\:text-white\/30::placeholder {
+  color: rgba(28, 36, 56, 0.35) !important;
+}
+.theme-light .text-amber-200 { color: #b45309 !important; }
+.theme-light .text-amber-200\/80 { color: rgba(180, 83, 9, 0.9) !important; }
+.theme-light .bg-black\/90 { background-color: rgba(255, 255, 255, 0.94) !important; }
+.theme-light .bg-black\/70 { background-color: rgba(255, 255, 255, 0.88) !important; }
+.theme-light .bg-black\/60 { background-color: rgba(20, 30, 60, 0.35) !important; }
+.theme-light .bg-black\/45 { background-color: rgba(255, 255, 255, 0.8) !important; }
+.theme-light .bg-black\/30 { background-color: rgba(20, 30, 60, 0.08) !important; }
+.theme-light .bg-black\/25 { background-color: rgba(255, 255, 255, 0.75) !important; }
+.theme-light .bg-black\/20 { background-color: rgba(255, 255, 255, 0.8) !important; }
+.theme-light .bg-white\/50 { background-color: #0284c7 !important; }
+.theme-light .bg-white\/25 { background-color: rgba(20, 30, 60, 0.25) !important; }
+.theme-light .bg-white\/20 { background-color: rgba(20, 30, 60, 0.08) !important; }
+.theme-light .bg-white\/15 { background-color: rgba(20, 30, 60, 0.06) !important; }
+.theme-light .bg-white\/10 { background-color: rgba(20, 30, 60, 0.06) !important; }
+.theme-light .bg-white\/\[0\.03\] { background-color: rgba(20, 30, 60, 0.04) !important; }
+.theme-light .bg-white\/20.text-white,
+.theme-light .bg-white\/15.text-white,
+.theme-light .bg-white\/10.text-white {
+  background-color: #141a2e !important;
+  color: #fff !important;
+}
+.theme-light .hover\:bg-white\/10:hover { background-color: rgba(20, 30, 60, 0.07) !important; }
+.theme-light .hover\:bg-white\/15:hover { background-color: rgba(20, 30, 60, 0.09) !important; }
+.theme-light .hover\:bg-white\/20:hover { background-color: rgba(20, 30, 60, 0.12) !important; }
+.theme-light .hover\:bg-white\/\[0\.03\]:hover { background-color: rgba(20, 30, 60, 0.05) !important; }
+.theme-light .hover\:text-white:hover { color: #141a2e !important; }
+.theme-light .hover\:text-white\/80:hover { color: rgba(20, 26, 46, 0.85) !important; }
+.theme-light .ring-white\/25 { --tw-ring-color: rgba(20, 30, 60, 0.25) !important; }
+.theme-light .ring-white\/20 { --tw-ring-color: rgba(20, 30, 60, 0.2) !important; }
+.theme-light .ring-white\/15 { --tw-ring-color: rgba(20, 30, 60, 0.15) !important; }
+.theme-light .ring-white\/10 { --tw-ring-color: rgba(20, 30, 60, 0.12) !important; }
+.theme-light .border-white\/20 { border-color: rgba(20, 30, 60, 0.2) !important; }
+.theme-light .border-white\/15 { border-color: rgba(20, 30, 60, 0.15) !important; }
+.theme-light .border-white\/10 { border-color: rgba(20, 30, 60, 0.12) !important; }
+.theme-light .border-b-white\/25 { border-bottom-color: rgba(20, 30, 60, 0.25) !important; }
+.theme-light .from-white\/15 { --tw-gradient-from: rgba(20, 30, 60, 0.1) !important; }
+.theme-light .to-white\/5 { --tw-gradient-to: rgba(20, 30, 60, 0.03) !important; }
+.theme-light .thin-scroll::-webkit-scrollbar-thumb {
+  background: rgba(20, 30, 60, 0.25);
+}

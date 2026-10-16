@@ -146,6 +146,8 @@ uniform sampler2D tDither;
 uniform vec2 resolution;
 uniform float colorNum;
 uniform float pixelSize;
+uniform vec2 mousePx;
+uniform float mouseOn;
 varying vec2 vUv;
 
 const float bayerMatrix8x8[64] = float[64](
@@ -173,7 +175,14 @@ vec3 dither(vec2 uv, vec3 color) {
 }
 
 void main() {
-  vec2 normalizedPixelSize = pixelSize / resolution;
+  // Mouse-cleared zone renders as coarse animated blocks, never static
+  // grain: same radius as the wave-pass hover erase.
+  vec2 muv = vec2(mousePx.x / resolution.x, 1.0 - mousePx.y / resolution.y);
+  float aspect = resolution.x / resolution.y;
+  float mdist = length((vUv - muv) * vec2(aspect, 1.0));
+  float mcover = (1.0 - smoothstep(0.0, 0.3, mdist)) * mouseOn;
+  float ps = pixelSize * mix(1.0, 4.0, mcover);
+  vec2 normalizedPixelSize = ps / resolution;
   vec2 uvPixel = normalizedPixelSize * floor(vUv / normalizedPixelSize);
   vec4 color = texture2D(tDither, uvPixel);
   color.rgb = dither(vUv, color.rgb);
@@ -223,6 +232,8 @@ export function DitherBg(props: { scrollId: string; light: boolean }) {
       resolution: { value: new THREE.Vector2(1, 1) },
       colorNum: { value: 4 },
       pixelSize: { value: 2 },
+      mousePx: { value: new THREE.Vector2(0, 0) },
+      mouseOn: { value: 1 },
     };
 
     const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
@@ -333,6 +344,10 @@ export function DitherBg(props: { scrollId: string; light: boolean }) {
       scrollPhase += (scrollTarget - scrollPhase) * 0.025;
       waveUniforms.time!.value = clock.getElapsedTime();
       waveUniforms.scrollPhase!.value = scrollPhase;
+      (ditherUniforms.mousePx!.value as THREE.Vector2).copy(
+        waveUniforms.mousePos!.value as THREE.Vector2,
+      );
+      ditherUniforms.mouseOn!.value = waveUniforms.enableMouseInteraction!.value;
       updateErase();
       renderer.setRenderTarget(rt);
       renderer.render(waveScene, cam);

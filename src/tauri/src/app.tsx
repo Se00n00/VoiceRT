@@ -4,10 +4,11 @@ import { SAMPLES, SAMPLE_CONVERSATION, SAMPLE_NAMES } from "./components/samples
 import { DitherBg } from "./components/DitherBg.js";
 import { ReactVoiceMode } from "./components/ReactVoiceMode.js";
 import { KbdCombo } from "./components/Kbd.js";
+import { CustomProviderPick } from "./components/Keys.js";
 import { WarpOrb } from "./components/WarpOrb.js";
 import collapseSvg from "./assets/collapse.svg?raw";
 import expandSvg from "./assets/expand.svg?raw";
-import { API, TurnSocket, fetchHistory, fetchTitle, getBrain, getLegs, getMetrics, getMetricsContext, getModel, health, setAPI, stt, switchBrain, switchModel, type Legs, type Metrics, type TurnEvent } from "./api/client.js";
+import { API, TurnSocket, fetchHistory, fetchTitle, getBrain, getLegs, getMetrics, getMetricsContext, getModel, health, stt, switchBrain, switchModel, type Legs, type Metrics, type TurnEvent } from "./api/client.js";
 import type { CotStepData } from "./components/chain-of-thought.js";
 import { createRecorder, recordSecs, type Recorder } from "./audio/webaudio.js";
 
@@ -26,6 +27,22 @@ function fmtDur(s: number): string {
 }
 
 type Recent = { id: string; name: string; ts: number };
+
+function storedModel(): string {
+  try {
+    return localStorage.getItem("voicert.model") ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function saveModel(name: string): void {
+  try {
+    if (name) localStorage.setItem("voicert.model", name);
+  } catch {
+    /* ignore */
+  }
+}
 
 function loadRecents(): Recent[] {
   const seed: Recent = { id: SAMPLE_SID, name: SAMPLE_NAME, ts: Date.now() };
@@ -65,7 +82,7 @@ function Spark(props: { data: number[]; stroke: string; label: string }) {
 }
 
 export function App() {
-  const [bridgeUrl, setBridgeUrl] = createSignal(API);
+  const [bridgeUrl] = createSignal(API);
   const [bridgeOk, setBridgeOk] = createSignal(false);
   const [agentLoaded, setAgentLoaded] = createSignal(false);
   const [missing, setMissing] = createSignal<string[]>([]);
@@ -80,7 +97,7 @@ export function App() {
   const [phase, setPhase] = createSignal("idle");
   const [confirmAction, setConfirmAction] = createSignal<Record<string, unknown> | null>(null);
   const [modelCurrent, setModelCurrent] = createSignal("…");
-  const [modelChoices, setModelChoices] = createSignal<{ name: string; label: string; desc: string }[]>([]);
+  const [modelChoices, setModelChoices] = createSignal<{ name: string; label: string; desc: string; backend: string; model: string }[]>([]);
   const [deepSearch, setDeepSearch] = createSignal(false);
   const [think, setThink] = createSignal(false);
   const [codeMode, setCodeMode] = createSignal(false);
@@ -170,6 +187,7 @@ export function App() {
   const [isTauri, setIsTauri] = createSignal(false);
   const [convOpen, setConvOpen] = createSignal(false);
   const [shortcutsOpen, setShortcutsOpen] = createSignal(false);
+  const [settingsOpen, setSettingsOpen] = createSignal(false);
   const [recents, setRecents] = createSignal<Recent[]>(loadRecents());
   const [hist, setHist] = createSignal<{ vram: number; gpu: number; cpu: number; ctx: number }[]>([]);
   const [theme, setTheme] = createSignal<"dark" | "light">(
@@ -287,6 +305,7 @@ export function App() {
   function onGlobalKeys(e: KeyboardEvent): void {
     if (e.key === "Escape") {
       setShortcutsOpen(false);
+      setSettingsOpen(false);
       setConvOpen(false);
       return;
     }
@@ -535,7 +554,33 @@ export function App() {
         try {
           const m = await getModel();
           setModelCurrent(m.current);
-          setModelChoices(m.available.map((a) => ({ name: a.name, label: a.label, desc: a.desc })));
+          setModelChoices(m.available.map((a) => ({ name: a.name, label: a.label, desc: a.desc, backend: a.backend, model: a.model })));
+          if (!modelRestored()) {
+            // First contact: re-apply the globally saved model choice so the
+            // user never re-picks bonsai vs a custom provider after restart.
+            setModelRestored(true);
+            const want = storedModel();
+            if (want && want !== m.current && m.available.some((a) => a.name === want)) {
+              try {
+                const r = await switchModel(want);
+                if (r.kind === "ok") {
+                  setModelCurrent(want);
+                  saveModel(want);
+                  push("sys", `model restored -> ${want} (saved preference)`);
+                } else {
+                  push("err", r.message ?? "model restore failed");
+                  saveModel(m.current);
+                }
+              } catch {
+                push("err", "model restore failed (bridge down?)");
+                saveModel(m.current);
+              }
+            } else {
+              saveModel(m.current);
+            }
+          } else {
+            saveModel(m.current);
+          }
         } catch {
           /* model endpoint optional */
         }
@@ -909,6 +954,12 @@ export function App() {
   const hasReal = createMemo(() => msgs().some((m) => m.who === "you" || m.who === "agent"));
   const notices = createMemo(() => msgs().filter((m) => m.who === "sys" || m.who === "err"));
 
+  const [modelRestored, setModelRestored] = createSignal(false);
+
+  function cloudModels() {
+    return modelChoices().filter((c) => c.backend !== "qwen" && c.backend !== "bonsai");
+  }
+
   function composer() {
     return (
       <div class="w-full">
@@ -1140,63 +1191,9 @@ export function App() {
                   )}
                 </Show>
               </div>
-              <div class="dpanel rounded-2xl bg-black/45 p-4 text-white ring-1 ring-white/10 shadow-2xl backdrop-blur">
-                <p class="mb-3 text-[11px] uppercase tracking-widest text-white/40">Settings</p>
-                <div class="space-y-2.5 text-xs">
-                  <div class="flex items-center gap-2">
-                    <span class="lbl w-14 shrink-0">Bridge</span>
-                    <input
-                      value={bridgeUrl()}
-                      onInput={(e) => setBridgeUrl(e.currentTarget.value)}
-                      onChange={(e) => setAPI(e.currentTarget.value)}
-                      class="dpanel-input min-w-0 flex-1 rounded-lg px-2.5 py-1.5 font-mono text-[11px] outline-none ring-1 ring-white/15"
-                    />
-                    <button onClick={() => void refresh()} class="dpanel-btn shrink-0 rounded-lg px-2.5 py-1.5">
-                      Retry
-                    </button>
-                  </div>
-                  <div class="flex items-center gap-2">
-                    <span class="lbl w-14 shrink-0">CWD</span>
-                    <input
-                      value={cwd()}
-                      onInput={(e) => setCwd(e.currentTarget.value)}
-                      class="dpanel-input min-w-0 flex-1 rounded-lg px-2.5 py-1.5 font-mono text-[11px] outline-none ring-1 ring-white/15"
-                    />
-                  </div>
-                  <div class="flex items-center gap-2">
-                    <span class="lbl w-14 shrink-0">Model</span>
-                    <div class="flex min-w-0 flex-1 flex-wrap gap-1.5">
-                      <For each={modelChoices()}>
-                        {(c) => (
-                          <button
-                            onClick={() => void sendText(`/model ${c.name}`)}
-                            class={`rounded-lg px-2.5 py-1.5 font-mono text-[11px] ring-1 ring-white/15 transition ${
-                              modelCurrent() === c.name || modelCurrent() === c.label
-                                ? "bg-white/20 text-white"
-                                : "dpanel-btn"
-                            }`}
-                          >
-                            {c.label}
-                          </button>
-                        )}
-                      </For>
-                      <Show when={modelChoices().length === 0}>
-                        <span class="lbl font-mono text-[11px]">{modelCurrent()}</span>
-                      </Show>
-                    </div>
-                  </div>
-                  <div class="flex items-center gap-2">
-                    <span class="lbl w-14 shrink-0">Session</span>
-                    <span class="val min-w-0 flex-1 truncate font-mono text-[11px]">{sessionId()}</span>
-                    <button onClick={() => void sendText("/new")} class="dpanel-btn shrink-0 rounded-lg px-2.5 py-1.5">
-                      New
-                    </button>
-                  </div>
-                </div>
-                </div>
-              </div>
             </div>
           </div>
+        </div>
         </div>
         <div class="winbar order-1 flex h-10 shrink-0 items-center justify-between px-2 text-white/60">
         <div class="flex min-w-0 items-center gap-2">
@@ -1324,6 +1321,18 @@ export function App() {
               <path d="M6 10h.01M10 10h.01M14 10h.01M7 13h6" />
             </svg>
           </button>
+          <button
+            title={`Settings — model: ${modelCurrent()}`}
+            aria-label={`Open settings (current model ${modelCurrent()})`}
+            onClick={() => setSettingsOpen((v) => !v)}
+            class="winbar-btn flex h-6 min-w-6 shrink-0 items-center gap-1.5 rounded-full px-1.5 text-white/70 transition-colors duration-200 hover:bg-white/10 hover:text-white"
+          >
+            <span class="max-w-28 truncate font-mono text-[11px]">{modelCurrent()}</span>
+            <svg viewBox="0 0 24 24" class="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            </svg>
+          </button>
           <span class="barmini truncate font-mono text-[11px] text-white/30">{metricsMini()}</span>
           <Show when={isTauri()}>
             <div class="flex shrink-0 items-center gap-1">
@@ -1390,6 +1399,46 @@ export function App() {
                   </div>
                 )}
               </For>
+            </div>
+          </div>
+        </div>
+      </Show>
+      <Show when={settingsOpen()}>
+        <div class="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={() => setSettingsOpen(false)}>
+          <div
+            class="w-full max-w-md overflow-hidden rounded-2xl bg-black/90 ring-1 ring-white/15 backdrop-blur"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div class="flex items-center justify-between px-4 pb-1 pt-3.5">
+              <p class="text-[10px] uppercase tracking-widest text-white/40">Settings</p>
+              <button
+                title="Close (Esc)"
+                aria-label="Close settings"
+                onClick={() => setSettingsOpen(false)}
+                class="flex h-6 w-6 items-center justify-center rounded-full text-white/55 transition hover:bg-white/10 hover:text-white"
+              >
+                <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+                  <path d="M4 4l8 8M12 4l-8 8" />
+                </svg>
+              </button>
+            </div>
+            <div class="space-y-4 p-4 pt-1">
+              <div class="flex items-center justify-between rounded-xl bg-white/[0.03] px-3 py-2 ring-1 ring-white/10">
+                <span class="text-[10px] uppercase tracking-widest text-white/40">Active model</span>
+                <span class="max-w-56 truncate font-mono text-xs text-white/85">{modelCurrent()}</span>
+              </div>
+              <div class="space-y-2">
+                <p class="text-[10px] uppercase tracking-widest text-white/40">Providers</p>
+                <p class="-mt-1 text-[11px] text-white/45">Pick a provider, paste its key to save it in the OS keychain. The dot shows a stored key.</p>
+                <CustomProviderPick
+                  choices={cloudModels().map((c) => ({ name: c.name, label: c.label, model: c.model }))}
+                  current={modelCurrent()}
+                  onSelect={(name) => {
+                    void sendText(`/model ${name}`);
+                    setSettingsOpen(false);
+                  }}
+                />
+              </div>
             </div>
           </div>
         </div>

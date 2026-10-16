@@ -168,7 +168,7 @@ export async function say(text: string): Promise<{ kind: string; wav_b64?: strin
   return json(r);
 }
 
-export type ModelInfo = { name: string; label: string; backend: string; desc: string; ready: boolean; current: boolean };
+export type ModelInfo = { name: string; label: string; backend: string; model: string; desc: string; ready: boolean; current: boolean };
 
 export async function getModel(): Promise<{ current: string; available: ModelInfo[] }> {
   const r = await fetch(`${API}/model`);
@@ -251,6 +251,36 @@ export type Legs = {
 export async function getLegs(): Promise<Legs> {
   const r = await fetch(`${API}/legs`);
   return json<Legs>(r);
+}
+
+export type KeyStatus = {
+  providers: Record<string, boolean>;
+  store: string;
+  available: boolean;
+};
+
+export async function getKeys(): Promise<KeyStatus> {
+  const r = await fetch(`${API}/keys`);
+  return json(r);
+}
+
+export async function storeKey(
+  provider: string,
+  key: string,
+): Promise<{ kind: string; message?: string }> {
+  const r = await fetch(`${API}/keys`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider, key }),
+  });
+  return json(r);
+}
+
+export async function deleteKey(provider: string): Promise<{ kind: string; message?: string }> {
+  const r = await fetch(`${API}/keys/${encodeURIComponent(provider)}`, {
+    method: "DELETE",
+  });
+  return json(r);
 }
 
 /** Persistent turn socket with confirm pump. One instance per app. */
