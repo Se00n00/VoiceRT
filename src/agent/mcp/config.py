@@ -1,7 +1,7 @@
 """MCP server configs from YAML (the one sanctioned YAML in new code).
 
-Selection order: explicit path > ``$MCP_CONFIG`` > repo-root
-``configs/mcp_servers.yaml`` > bundled voice-tools fallback (file absent).
+Selection order: explicit path > ``$MCP_CONFIG`` > XDG
+``~/.config/voicert/mcp.yaml`` > bundled voice-tools fallback (file absent).
 
 :func:`load_connections` returns ``(connections, tool_name_prefix)``
 ready for ``MultiServerMCPClient``. Secrets never live in the YAML —
@@ -31,7 +31,9 @@ def repo_root() -> Path:
 
 
 def default_config_path() -> str:
-    return str(repo_root() / "configs" / "mcp_servers.yaml")
+    from src.paths import VoicertPaths
+
+    return VoicertPaths.mcp_path()
 
 
 def resolve_config_path(explicit=None) -> str | None:
@@ -40,8 +42,8 @@ def resolve_config_path(explicit=None) -> str | None:
     env = (os.environ.get(CONFIG_ENV_VAR, "") or "").strip()
     if env:
         return env
-    default = default_config_path()
-    return default if os.path.isfile(default) else None
+    xdg = default_config_path()
+    return xdg if os.path.isfile(xdg) else None
 
 
 def server_connection() -> dict:

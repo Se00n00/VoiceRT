@@ -297,6 +297,16 @@ class JsonSessionMemory(LangChainSessionMemory):
             os.replace(tmp, self._path_locked(sid))
         except Exception:
             pass
+        try:
+            from src.store import VoicertStore
+
+            VoicertStore().save_session(
+                str(sid),
+                [_to_dict(m) for m in self._data[sid].messages],
+                str(self._titles.get(sid, "") or ""),
+            )
+        except Exception:
+            pass
         self._sweep_files_locked(time.time())
 
     def _sweep_files_locked(self, now: float) -> None:
@@ -316,6 +326,23 @@ class JsonSessionMemory(LangChainSessionMemory):
             pass
 
     def _load_locked(self, sid: str, now: float) -> "LCSessionHistory | None":
+        try:
+            from src.store import VoicertStore
+
+            hit = VoicertStore().load_session(str(sid))
+            if hit and isinstance(hit.get("messages"), list) and hit["messages"]:
+                h = LCSessionHistory()
+                for m in hit["messages"]:
+                    if isinstance(m, dict) and m.get("content"):
+                        h.messages.append(_to_pair(str(m.get("role", "user")),
+                                                  str(m.get("content"))))
+                h.at = now
+                if str(hit.get("title", "") or "").strip():
+                    self._titles[sid] = str(hit["title"])
+                self._prune_locked(h)
+                return h
+        except Exception:
+            pass
         try:
             with open(self._path_locked(sid), "r", encoding="utf-8") as f:
                 payload = _json.load(f)

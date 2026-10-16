@@ -25,6 +25,16 @@ class TrimObservationsMiddleware(AgentMiddleware):
                 if (isinstance(m, ToolMessage)
                         and isinstance(m.content, str)
                         and len(m.content) > self.limit):
+                    try:
+                        from src.app_config import AppConfig
+                        from src.store import VoicertStore
+
+                        VoicertStore().spill(
+                            "", str(getattr(m, "name", "") or "tool"),
+                            str(m.content), AppConfig.spill_chars(),
+                        )
+                    except Exception:
+                        pass
                     keep = m.content[:self.limit]
                     note = (f"\n…[{len(m.content) - self.limit} chars "
                             f"omitted]")

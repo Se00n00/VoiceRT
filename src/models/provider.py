@@ -5,13 +5,12 @@ contract, dependencies, who calls it: ChatModel.get(backend) returns a
 LangChain BaseChatModel with key from arg/env/keychain/.env and model
 from arg/global-file/.env/builtin; is_cloud_backend gates the switch
 and chat_text flattens replies; defaults live in
-~/.voicert/models.json seeded on first open and edited via save_model,
-keys via save_key into .env; depends on langchain provider packages,
-python-dotenv and src.agent.keystore; used by console_cli, VoiceAgent,
-eval instead of branching inline.
+~/.config/voicert/models.yaml seeded on first start and edited via
+save_model, keys via save_key into .env; depends on langchain provider
+packages, python-dotenv and src.agent.keystore + src.app_config; used
+by console_cli, VoiceAgent, eval instead of branching inline.
 """
 
-import json
 import os
 
 from dotenv import load_dotenv, set_key
@@ -21,6 +20,7 @@ from langchain_groq import ChatGroq
 from langchain_openai import ChatOpenAI
 
 from src.agent.keystore import get_secret
+from src.app_config import AppConfig
 
 __all__ = ["ChatModel"]
 
@@ -60,8 +60,8 @@ class ChatModel:
     OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
     DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 
-    GLOBAL_DIR = "~/.voicert"
-    GLOBAL_FILE = "models.json"
+    GLOBAL_DIR = "~/.config/voicert"
+    GLOBAL_FILE = "models.yaml"
 
     MODEL_ENVS = {
         "groq": ("GROQ_MODEL",),
@@ -103,11 +103,12 @@ class ChatModel:
     def _global_path() -> str:
         """Global models file path, seeded on first open.
 
-        VOICERT_DIR overrides the home dir for tests.
+        XDG config dir; VOICERT_CONFIG_DIR overrides for tests.
         ..
         """
-        base = os.environ.get("VOICERT_DIR", "").strip() or ChatModel.GLOBAL_DIR
-        return os.path.join(os.path.expanduser(base), ChatModel.GLOBAL_FILE)
+        from src.paths import VoicertPaths
+
+        return VoicertPaths.models_path()
 
     @classmethod
     def _seed_global(cls, path: str) -> dict:
@@ -116,13 +117,8 @@ class ChatModel:
         Returns the seeded mapping for immediate use.
         ..
         """
-        data = dict(cls.DEFAULTS)
-        data["openai_compat"] = ""
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, indent=2, sort_keys=True)
-            fh.write("\n")
-        return data
+        AppConfig.ensure_global()
+        return AppConfig.load_models()
 
     @classmethod
     def _global_models(cls) -> dict:
@@ -131,17 +127,7 @@ class ChatModel:
         A corrupt file falls back to builtins without crashing.
         ..
         """
-        path = cls._global_path()
-        if not os.path.isfile(path):
-            return cls._seed_global(path)
-        try:
-            with open(path, encoding="utf-8") as fh:
-                data = json.load(fh)
-        except (OSError, ValueError):
-            return dict(cls.DEFAULTS)
-        if not isinstance(data, dict):
-            return dict(cls.DEFAULTS)
-        return {str(k): str(v or "").strip() for k, v in data.items()}
+        return AppConfig.load_models()
 
     @classmethod
     def default_model(cls, backend: str) -> str:
@@ -170,20 +156,7 @@ class ChatModel:
         Returns the global file path written for confirmation.
         ..
         """
-        name = str(backend or "").lower().strip()
-        if name not in cls.BACKENDS:
-            raise ValueError(f"unknown chat backend {backend!r}")
-        value = str(model or "").strip()
-        if not value:
-            raise ValueError("refusing to save an empty model id")
-        path = cls._global_path()
-        data = cls._global_models()
-        data[name] = value
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, indent=2, sort_keys=True)
-            fh.write("\n")
-        return path
+        return AppConfig.save_model(backend, model)
 
     @classmethod
     def save_key(cls, backend: str, api_key: str) -> str:

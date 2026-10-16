@@ -55,6 +55,16 @@ from src.models.chat_model import is_degenerate
 __all__ = ["LongRunningConfig", "LongRunningAgent"]
 
 
+def _data_dir() -> str:
+    """Local data dir without importing paths at module top.
+
+    ..
+    """
+    from src.paths import VoicertPaths
+
+    return VoicertPaths.data_dir()
+
+
 class LongRunningConfig(BaseModel):
     """Agentic loop config. One class, one job.
 
@@ -78,11 +88,11 @@ class LongRunningConfig(BaseModel):
     max_session_turns: int = 8
     session_ttl_s: float = 1800.0
     max_sessions: int = 1000
-    sessions_dir: str = "~/.voicert"
+    sessions_dir: str = Field(default_factory=lambda: os.path.join(_data_dir(), "sessions"))
     memory_tokens: int = 0
     memory_recall: bool = False
     memory_store: bool = False
-    memory_dir: str = "memory"
+    memory_dir: str = Field(default_factory=lambda: os.path.join(_data_dir(), "memory"))
     worker_eager: bool = False
     sandbox: Any = None
 
@@ -256,7 +266,7 @@ class LongRunningAgent:
             self._mcp_client, self._extra_tools = None, []
         self._mcp_sessions = None
         self.sessions = JsonSessionMemory(
-            sessions_dir=os.path.expanduser(str(cfg.sessions_dir or "~/.voicert")),
+            sessions_dir=os.path.expanduser(str(cfg.sessions_dir or _data_dir() + "/sessions")),
             max_turns=cfg.max_session_turns,
             max_age_s=cfg.session_ttl_s,
             max_sessions=cfg.max_sessions,
@@ -543,7 +553,7 @@ class LongRunningAgent:
         ..
         """
         sessions_dir = os.path.expanduser(
-            str(getattr(self.config, "sessions_dir", "~/.voicert") or "~/.voicert")
+            str(getattr(self.config, "sessions_dir", "") or _data_dir() + "/sessions")
         )
         hit = _jail_turn_cwd(cwd, sessions_dir)
         if hit is not None:

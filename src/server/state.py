@@ -601,6 +601,16 @@ def get_agent():
         from src.long_running import LongRunningConfig
         from src.main import VoiceAgent, VoiceAgentConfig
 
+        try:
+            from src.app_config import AppConfig
+            from src.store import VoicertStore
+
+            AppConfig.ensure_global()
+            store = VoicertStore()
+            store.ensure()
+            store.log("info", "backend start")
+        except Exception:
+            pass
         text_only = os.environ.get("VOICE_TEXT_ONLY", "").strip() == "1"
         harness = LongRunningConfig(speak_text_turns=not text_only)
         cfg = VoiceAgentConfig(harness=harness)

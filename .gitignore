@@ -48,16 +48,13 @@ PLAN.md
 # test suites run locally, not versioned
 tests/
 
-# voice-agent JSON session memory (runtime state, per docs/architecture.md)
+# voice-agent JSON session memory (legacy runtime state, now XDG data dir)
 sessions/
 
 # secrets (API keys etc. — never commit)
 .env
 
-# local per-session conversation dotfiles (<store_dir>, default .voicert/)
-.voicert/
-
-# local memory tiers (episodic db, facts, distill logs — runtime state)
+# local memory tiers (legacy repo-relative; now ~/.local/share/voicert)
 memory/
 
 # node app build outputs (rebuild with npm install && npm run build)

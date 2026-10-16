@@ -28,14 +28,14 @@ narration case.
 Asymmetric by design. A false positive costs one slow worker turn; a false
 negative costs the user a confident lie about their own machine.
 
-Config: ``configs/delegate.yaml`` (see :func:`load_config`).
+Config: ``voicert.json`` defaults with optional ``delegate.yaml`` override.
+See :func:`load_config`.
 """
 from __future__ import annotations
 
 import json
 import os
 import re
-from pathlib import Path
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
@@ -66,7 +66,6 @@ __all__ = [
     "load_config",
     "parse_boolean",
     "parse_delegate",
-    "repo_root",
     "resolve_config_path",
     "task_score",
     "worker_llm_overrides",
@@ -75,23 +74,20 @@ __all__ = [
 CONFIG_ENV_VAR = "VOICE_DELEGATE_CONFIG"
 
 
-def repo_root() -> Path:
-    return Path(__file__).resolve().parents[2]
-
-
 def default_config_path() -> str:
-    return str(repo_root() / "configs" / "delegate.yaml")
+    from src.paths import VoicertPaths
+
+    return os.path.join(VoicertPaths.config_dir(), "delegate.yaml")
 
 
 def resolve_config_path(explicit: str | None = None) -> str | None:
-    """Explicit arg > ``$VOICE_DELEGATE_CONFIG`` > repo default > None."""
+    """Explicit arg > ``$VOICE_DELEGATE_CONFIG`` > None (voicert.json owns defaults)."""
     if explicit:
         return str(explicit)
     env = os.environ.get(CONFIG_ENV_VAR, "").strip()
     if env:
         return env
-    path = default_config_path()
-    return path if os.path.isfile(path) else None
+    return None
 
 
 # --------------------------------------------------------------------------
@@ -122,15 +118,22 @@ class DelegateConfig(BaseModel):
 
 
 def load_config(explicit: str | None = None) -> DelegateConfig:
-    """Read ``configs/delegate.yaml`` over the defaults. Never raises.
+    """Read delegate knobs over the defaults. Never raises.
 
-    A missing or malformed file yields working defaults rather than a dead
-    agent: routing is an enhancement, not a dependency. PyYAML is optional
-    here — without it the defaults still apply and the log says why.
+    Yaml override when present, else ``voicert.json`` defaults, else
+    builtins. A missing file yields working defaults, not a dead agent.
+    ..
     """
+    from src.app_config import AppConfig
+
+    settings = AppConfig.load_settings()
+    defaults = settings.get("defaults", {}) if isinstance(settings, dict) else {}
     path = resolve_config_path(explicit)
     if not path:
-        return DelegateConfig()
+        return DelegateConfig(
+            enabled=bool(defaults.get("delegate_enabled", True)),
+            worker_eager=bool(defaults.get("worker_eager", False)),
+        )
     try:
         with open(path, "r", encoding="utf-8") as fh:
             raw = fh.read()
@@ -170,7 +173,7 @@ def load_config(explicit: str | None = None) -> DelegateConfig:
     if placement not in ("fused", "cpu"):
         placement = "fused"
     return DelegateConfig(
-        enabled=_flag("enabled", True),
+        enabled=_flag("enabled", bool(defaults.get("delegate_enabled", True))),
         placement=placement,
         front=_dict("front"),
         worker=_dict("worker"),
@@ -178,7 +181,7 @@ def load_config(explicit: str | None = None) -> DelegateConfig:
         backstop_min_score=max(1, _int("backstop_min_score", 2)),
         max_task_chars=max(200, _int("max_task_chars", 1200)),
         emit_route=_flag("emit_route", True),
-        worker_eager=_flag("worker_eager", False),
+        worker_eager=_flag("worker_eager", bool(defaults.get("worker_eager", False))),
     )
 
 
