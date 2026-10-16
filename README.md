@@ -3,11 +3,11 @@
 ---
 
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
-![CUDA 12.4](https://img.shields.io/badge/CUDA-12.4-green)
+![two-brain](https://img.shields.io/badge/two--brain-local-green)
 ![VRAM 4GB](https://img.shields.io/badge/VRAM-4GB-orange)
 ![E2E 551ms](https://img.shields.io/badge/E2E-551ms-brightgreen)
-![TUI 158 checks](https://img.shields.io/badge/TUI-158_checks-brightgreen)
-![Python 630/634](https://img.shields.io/badge/python-630%2F634-brightgreen)
+![Qwen3-0.6B](https://img.shields.io/badge/front-Qwen3--0.6B-blue)
+![Bonsai-2-27B](https://img.shields.io/badge/worker-Bonsai--2--27B-blue)
 
 VoiceRT — real-time voice agent for one small GPU: mic in, VAD →
 STT → LLM → TTS out in ≈0.5–1.0 s, no cloud. A 0.6B front model
@@ -259,45 +259,224 @@ Verbose specs → docs: capacity model, queue, Triton details, API and config.
 ```
 voice-pipeline/
 ├── src/
-│   ├── main.py / long_running.py / cascade.py  # VoiceAgent turn loops
-│   ├── agent/            # chat face, memory, tools, middleware
-│   │   ├── keystore.py
-│   │   ├── tool_router.py / budget.py / delegate.py
-│   │   ├── events.py / memory.py / episodic.py / facts.py / contacts.py
-│   │   ├── prompts.py / title.py / simtask.py / shell.py
-│   │   ├── pairing.py / tg_poll.py
-│   │   ├── middleware/   # errors / inject / policy / summarization / trim / verify
-│   │   └── mcp/          # client / session / specs / config / mcp +
-│   │                       #   BrowserUse / ComputerUse / PlanningTools / ShellUse
-│   ├── models/           # every model lives here (one file, one class)
-│   │   ├── llm.py / bonsai.py / vad.py / stt.py / tts.py
-│   │   ├── provider.py / chat_model.py
-│   │   ├── qwen.py / whisper.py / kokoro.py
-│   │   ├── download.py
-│   │   ├── engines/      # qwen / whisper / tts (legacy engine path)
-│   │   ├── pytorch/      # qwen / whisper / tts (torch reference)
-│   │   ├── triton_kernels/  # qwen_fused / qwen / attention / rmsnorm /
-│   │                       #   rope / activation / utils
-│   │   └── runtime/      # guard / capacity / device / memory /
-│   │                       #   scheduler / profiler / tensor
-│   ├── server/           # state / console_cli + routes/
-│   │                       #   (talk / voice / chat / turns / sessions /
-│   │                       #    keys / console / system)
-│   ├── prompts/          # base / chat / terminal / voice / memory /
-│   │                       #   delegate / sim / middleware / title
-│   ├── sandbox/          # docker
-│   └── tauri/            # desktop app (src/ + src-tauri/)
-├── engine/               # audio / inference_engine / session / streaming
-├── benchmarks/           # leg_profile / leg_stages / voice_latency / tts_ab /
-│                         #   toolcall_eval / memory_eval + common / harness /
-│                         #   llm / stt / tts / profiling
-├── eval/                 # evaluate + gaia / bfcl
-├── configs/              # delegate.yaml / mcp_servers.yaml
-├── docs/                 # architecture/ (01-08) / benchmarks / capacity / plans
-├── sessions/             # persisted session json
-├── third_party/          # vendored deps
-├── test.py / MODEL.md / PLAN.md / COMPLETE.md / AGENTS.md
-└── .env / .env.example
+│   ├── main.py              # VoiceAgent entry points
+│   ├── long_running.py      # turn loop, sessions, box
+│   ├── cascade.py           # VAD/STT/LLM/TTS voice turns
+│   ├── agent/
+│   │   ├── keystore.py      # OS-keychain secrets
+│   │   ├── tool_router.py   # tool shortlist
+│   │   ├── budget.py        # token budgets
+│   │   ├── delegate.py      # orphaned routing contract
+│   │   ├── events.py        # stream envelope
+│   │   ├── memory.py        # session memory
+│   │   ├── episodic.py      # L2 store
+│   │   ├── facts.py         # L3 facts
+│   │   ├── contacts.py      # contacts
+│   │   ├── prompts.py       # prompt helpers
+│   │   ├── title.py         # session titles
+│   │   ├── simtask.py       # sim-agent subtasks
+│   │   ├── shell.py         # persistent shell
+│   │   ├── pairing.py       # device pairing
+│   │   ├── tg_poll.py       # telegram polling
+│   │   ├── middleware/
+│   │   │   ├── errors.py    # error hints
+│   │   │   ├── inject.py    # tool injection
+│   │   │   ├── policy.py    # deny/confirm gate
+│   │   │   ├── summarization.py  # in-turn summarizer
+│   │   │   ├── trim.py      # observation trimmer
+│   │   │   └── verify.py    # result verifier
+│   │   └── mcp/
+│   │       ├── mcp.py       # MCP entry
+│   │       ├── client.py    # stdio client
+│   │       ├── session.py   # stateful sessions
+│   │       ├── specs.py     # tool specs + tags
+│   │       ├── config.py    # server configs
+│   │       ├── BrowserUse.py     # browser tool
+│   │       ├── ComputerUse.py    # computer tool
+│   │       ├── PlanningTools.py  # planner tools
+│   │       └── ShellUse.py  # shell tool
+│   ├── models/
+│   │   ├── llm.py           # LlmModel: Qwen + bonsai
+│   │   ├── bonsai.py        # BonsaiLlamaCpp + ChatModel
+│   │   ├── vad.py           # VadModel: Silero
+│   │   ├── stt.py           # SttModel: Whisper
+│   │   ├── tts.py           # TtsModel: Kokoro + voices
+│   │   ├── provider.py      # ChatModel: providers
+│   │   ├── chat_model.py    # LocalChatModel: LC face
+│   │   ├── qwen.py          # QwenFused weights
+│   │   ├── whisper.py       # WhisperFused weights
+│   │   ├── kokoro.py        # KokoroFused weights
+│   │   ├── download.py      # weight fetcher
+│   │   ├── engines/
+│   │   │   ├── qwen.py      # legacy Qwen engine
+│   │   │   ├── whisper.py   # legacy Whisper engine
+│   │   │   └── tts.py       # legacy TTS engine
+│   │   ├── pytorch/
+│   │   │   ├── qwen.py      # torch reference
+│   │   │   ├── whisper.py   # torch reference
+│   │   │   └── tts.py       # torch reference
+│   │   ├── triton_kernels/
+│   │   │   ├── qwen_fused.py   # fused Qwen kernels
+│   │   │   ├── qwen.py      # kernel pieces
+│   │   │   ├── attention.py # attention kernels
+│   │   │   ├── rmsnorm.py   # norm kernels
+│   │   │   ├── rope.py      # rotary kernels
+│   │   │   ├── activation.py   # activation kernels
+│   │   │   └── utils.py     # kernel utils
+│   │   └── runtime/
+│   │       ├── guard.py     # preflight gates
+│   │       ├── capacity.py  # capacity planner
+│   │       ├── device.py    # device + VRAM stats
+│   │       ├── memory.py    # weight budgets
+│   │       ├── scheduler.py # FIFO queue
+│   │       ├── profiler.py  # timing profiler
+│   │       └── tensor.py    # tensor helpers
+│   ├── server/
+│   │   ├── state.py         # process-wide agent
+│   │   ├── console_cli.py   # REPL console
+│   │   ├── __main__.py      # server entry
+│   │   └── routes/
+│   │       ├── talk.py      # /talk websocket
+│   │       ├── voice.py     # voice endpoints
+│   │       ├── chat.py      # chat endpoints
+│   │       ├── turns.py     # turn endpoints
+│   │       ├── sessions.py  # session endpoints
+│   │       ├── keys.py      # /keys bridge
+│   │       ├── console.py   # console endpoints
+│   │       └── system.py    # system endpoints
+│   ├── prompts/
+│   │   ├── base.py          # system prompts
+│   │   ├── chat.py          # chat retries
+│   │   ├── terminal.py      # terminal preamble
+│   │   ├── voice.py         # voice prompts
+│   │   ├── memory.py        # memory headers
+│   │   ├── delegate.py      # orphaned routing text
+│   │   ├── sim.py           # sim templates
+│   │   ├── middleware.py    # middleware prompts
+│   │   └── title.py         # title prompts
+│   ├── sandbox/
+│   │   └── docker.py        # container sandbox
+│   └── tauri/
+│       ├── package.json     # desktop app manifest
+│       ├── vite.config.ts   # web build config
+│       ├── tsconfig.json    # typecheck config
+│       ├── index.html       # app shell
+│       ├── src-tauri/       # Rust shell
+│       ├── src/
+│       │   ├── app.tsx      # desktop UI root
+│       │   ├── index.tsx    # UI entry
+│       │   ├── styles.css   # theme + light remap
+│       │   ├── api/
+│       │   │   └── client.ts   # bridge + keys API
+│       │   ├── audio/
+│       │   │   ├── webaudio.ts # mic capture + playback
+│       │   │   ├── dsp.ts   # DSP helpers
+│       │   │   └── recorder-worklet.js  # recorder node
+│       │   ├── assets/
+│       │   │   ├── collapse.svg  # collapse icon
+│       │   │   └── expand.svg    # expand icon
+│       │   └── components/
+│       │       ├── Keys.tsx            # provider + key picker
+│       │       ├── Kbd.tsx             # keycap visuals
+│       │       ├── Hero.tsx            # hero panel
+│       │       ├── chain-of-thought.tsx # thinking view
+│       │       ├── code-block.tsx      # code view
+│       │       ├── DitherBg.tsx        # dither backdrop
+│       │       ├── EqBars.tsx          # mic level bars
+│       │       ├── WarpOrb.tsx         # voice orb
+│       │       ├── ReactVoiceMode.tsx  # voice mode screen
+│       │       └── samples.ts          # sample data
+├── engine/
+│   ├── audio.py             # resample + wav utils
+│   ├── inference_engine.py  # engine entry
+│   ├── session.py           # engine sessions
+│   └── streaming.py         # token streaming
+├── benchmarks/
+│   ├── worker_profile.py    # Bonsai TTFT/decode sweep
+│   ├── longctx_eval.py      # prefill + needle eval
+│   ├── plot_worker_longctx.py  # worker/longctx charts
+│   ├── leg_profile.py       # per-leg spot checks
+│   ├── leg_stages.py        # stage-split profile
+│   ├── voice_latency.py     # turn timing
+│   ├── toolcall_eval.py     # tool-call F1
+│   ├── tts_ab.py            # voice A/B
+│   ├── memory_eval.py       # retention + correction
+│   ├── eval_agent_tasks.py  # task pass rate
+│   ├── plot_triton_speedup.py  # kernel speedup chart
+│   ├── plot_voice_lazy.py   # lazy-turn charts
+│   ├── run_all_evals.sh     # full eval runner
+│   ├── terminal_bench.json  # terminal task set
+│   ├── toolcall_subset.json # tool-call subset
+│   ├── kaggle.md            # Kaggle notes
+│   ├── README.md            # bench docs
+│   ├── llm/
+│   │   ├── benchmark_concurrency.py # concurrency sweep
+│   │   ├── benchmark_kernels.py     # kernel bench
+│   │   ├── benchmark_pytorch.py     # torch baseline
+│   │   ├── benchmark_triton.py      # triton baseline
+│   │   └── _shared.py       # shared setup
+│   ├── stt/
+│   │   ├── benchmark_pytorch.py     # torch baseline
+│   │   ├── benchmark_triton.py     # triton baseline
+│   │   └── _shared.py       # shared setup
+│   ├── tts/
+│   │   ├── benchmark_pytorch.py     # torch baseline
+│   │   ├── benchmark_triton.py     # triton baseline
+│   │   └── _shared.py       # shared setup
+│   ├── common/
+│   │   ├── benchmark.py     # shared harness
+│   │   ├── environments.py  # environments
+│   │   ├── memory.py        # memory tracking
+│   │   ├── metrics.py       # metric helpers
+│   │   ├── plotting.py      # plot helpers
+│   │   ├── reporting.py     # result reports
+│   │   ├── roofline.py      # roofline analysis
+│   │   ├── summary.py       # run summaries
+│   │   └── timing.py        # timing helpers
+│   ├── harness/
+│   │   ├── eval.py          # GAIA/TB runner
+│   │   ├── gaia/            # GAIA task files
+│   │   └── tb21/            # TerminalBench-2.1 files
+│   └── profiling/
+│       ├── nsight_compute/  # Compute captures
+│       └── nsight_systems/  # Systems captures
+├── eval/
+│   ├── evaluate.py          # unified eval CLI
+│   ├── common.py            # result envelopes
+│   └── gaia/
+│       ├── runner.py        # GAIA leg probe
+│       ├── loader.py        # GAIA tasks
+│       └── grader.py        # GAIA scoring
+├── configs/
+│   ├── delegate.yaml        # unused routing config
+│   └── mcp_servers.yaml     # MCP servers
+├── docs/
+│   ├── benchmarks.md        # measured numbers
+│   ├── capacity.md          # VRAM notes
+│   ├── exp.md               # experiments log
+│   ├── README.md            # docs index
+│   ├── ARCHITECTURE.md      # architecture notes
+│   ├── architecture.md      # legacy single-file arch
+│   ├── plans/
+│   │   └── gpu-memory-guard.md  # VRAM guard plan
+│   └── architecture/
+│       ├── README.md        # architecture index
+│       ├── 01-agent.md      # agent doc
+│       ├── 02-tools.md      # tools doc
+│       ├── 03-memory.md     # memory doc
+│       ├── 04-sessions.md   # sessions doc
+│       ├── 05-models.md     # models doc
+│       ├── 06-processes.md  # processes doc
+│       ├── 07-inference.md  # inference doc
+│       └── 08-tui.md        # TUI doc
+├── sessions/                # persisted session json
+├── third_party/             # vendored deps
+├── test.py                  # smoke test
+├── MODEL.md                 # model notes
+├── PLAN.md                  # plan notes
+├── COMPLETE.md              # completion notes
+├── AGENTS.md                # agent instructions
+└── .env / .env.example      # keys (gitignored + template)
 ```
 
 Models in this project:
