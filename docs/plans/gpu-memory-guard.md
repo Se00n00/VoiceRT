@@ -17,7 +17,7 @@ up after. A guard that fires post-mortem is a log line, not a guard.
 |---|---|---|
 | `fits` / `check_budget` → `MemoryBudgetExceeded` (dual-inherits `RuntimeError`, so server error-mapping yields HTTP 503) | `src/models/runtime/memory.py` | single VRAM allocation vs budget |
 | `probe_vram` / `estimate_session_mb` / `plan_capacity` | `src/models/runtime/capacity.py` | session count from baseline+headroom |
-| `_check_ram` (precise tier: real GGUF bytes + KV ctx + offload; refuses swap-death) | `src/models/bonsai_llamacpp.py:422` | worker sidecar CPU-RAM fit |
+| `_check_ram` (precise tier: real GGUF bytes + KV ctx + offload; refuses swap-death) | `src/models/bonsai.py` | worker sidecar CPU-RAM fit |
 | `assert_cuda_leg` / `assert_ready_leg` (fail fast, no silent CPU fallback) | `src/models/llm.py:77` | sick driver aborts runners early |
 | `KVCacheBatched` + `check_budget(est, 4000, headroom 400)` | fused legs (`src/models/qwen.py`, `whisper.py`) | static KV fit at build |
 

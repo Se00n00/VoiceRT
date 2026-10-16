@@ -8,6 +8,7 @@ are labeled as such rather than smoothed over.
 
 | # | Part | What it covers |
 |---|---|---|
+| 00 | [ARCHITECTURE](../../ARCHITECTURE.md) | system design, contracts, dependency rules (single file) |
 | 01 | [Agent](01-agent.md) | `VoiceAgent`, warm order, the turn loop, events, two-brain routing, budgets |
 | 02 | [Tools](02-tools.md) | the twelve ops, the five parser formats, semantic router, deny/confirm policy, MCP |
 | 03 | [Memory](03-memory.md) | L1 window, L2 episodic, L3 facts, the one injection point, write-back |

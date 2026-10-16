@@ -1,8 +1,9 @@
 """Minimal console on the LLM harness (Groq brain by default, local tools).
 
 ``GPU-free``: no server, no voice agent, no GPU. Builds the deep agent
-directly — stock ChatGroq / ChatGoogleGenerativeAI for groq/gemini,
-``LlmModel`` + ``LocalChatModel`` for bonsai/qwen — + ``LocalShellBackend``
+directly — stock LangChain chat models for cloud backends (groq, gemini,
+anthropic, openai, openrouter, deepseek, openai_compat), ``LlmModel`` +
+``LocalChatModel`` for bonsai/qwen — + ``LocalShellBackend``
 + todo/trim middleware — and runs an interactive prompt.
 
 ``PYTHONPATH=. .venv/bin/python -m src.server.console_cli [--backend B] [--model M] [--workdir D]``
@@ -47,10 +48,10 @@ async def run_turn(agent, text: str, recursion_limit: int = 40):
                         (getattr(tc, "name", "?"), getattr(tc, "args", {}))
                     )
             if m.content:
-                from src.agent.cloud_models import chat_text
-                from src.models.llm import split_thinking
+                from src.models.provider import ChatModel
+                from src.models.llm import LlmModel
 
-                _, answer = split_thinking(chat_text(m.content))
+                _, answer = LlmModel.split_thinking(ChatModel.chat_text(m.content))
                 if str(answer or "").strip():
                     reply = str(answer)
     return reply, calls, n_obs
@@ -89,12 +90,7 @@ async def amain(backend: str, model: str, workdir: str,
     from deepagents.backends import LocalShellBackend
     from langchain.agents.middleware import TodoListMiddleware
 
-    from src.agent.cloud_models import (
-        DEFAULT_GEMINI_MODEL,
-        DEFAULT_GROQ_MODEL,
-        is_cloud_backend,
-        make_chat_model,
-    )
+    from src.models.provider import ChatModel
     from src.agent.mcp.session import open_sessions
     from src.agent.middleware.errors import ErrorHintMiddleware
     from src.agent.middleware.inject import InjectToolMiddleware
@@ -103,7 +99,7 @@ async def amain(backend: str, model: str, workdir: str,
     from src.agent.middleware.verify import VerifyMiddleware
     from src.agent.tool_router import build_execution_tools
     from src.models.llm import LlmConfig, LlmModel
-    from src.agent.chat_model import LocalChatModel
+    from src.models.chat_model import LocalChatModel
     from src.prompts.base import SYSTEM_PROMPT
     from src.prompts.middleware import TODO_SYSTEM_PROMPT, TODO_TOOL_DESCRIPTION
 
@@ -117,14 +113,12 @@ async def amain(backend: str, model: str, workdir: str,
 
     backend = str(backend or "groq").lower()
     # Simple switch: bonsai/qwen run through LlmModel + LocalChatModel,
-    # groq/gemini are stock LangChain chat models used directly.
+    # cloud backends are stock LangChain chat models used directly
+    # (ChatModel.get falls back to each backend's default model).
     chat_model = None
-    if backend == "gemini":
-        resolved = model or DEFAULT_GEMINI_MODEL
-        chat_model = make_chat_model("gemini", resolved)
-    elif backend == "groq":
-        resolved = model or DEFAULT_GROQ_MODEL
-        chat_model = make_chat_model("groq", resolved)
+    if ChatModel.is_cloud_backend(backend):
+        resolved = model or "(backend default)"
+        chat_model = ChatModel.get(backend, model)
     else:
         resolved = model or "(backend default)"
         llm = LlmModel(LlmConfig(backend=backend))
@@ -134,7 +128,7 @@ async def amain(backend: str, model: str, workdir: str,
             print(exc)
             return 2
         chat_model = LocalChatModel(llm=llm)
-    if is_cloud_backend(backend) and chat_model is None:
+    if ChatModel.is_cloud_backend(backend) and chat_model is None:
         print(f"ABORT: no model for backend {backend}")
         return 2
     try:
@@ -144,10 +138,6 @@ async def amain(backend: str, model: str, workdir: str,
         print(f"{dim}… mcp extras unavailable ({exc}); built-ins only{reset}",
               flush=True)
         mcp, extra_tools = None, []
-    from src.agent.chat_model import LocalChatModel as _Local
-
-    if isinstance(chat_model, _Local):
-        chat_model.use_mcp_fs = bool(extra_tools)
     agent = create_deep_agent(
         model=chat_model,
         backend=LocalShellBackend(root_dir=workdir, timeout=30),
@@ -176,12 +166,15 @@ async def amain(backend: str, model: str, workdir: str,
 
 
 def main() -> int:
-    from src.agent.cloud_models import DEFAULT_GROQ_MODEL as GROQ_DEFAULT
+    from src.models.provider import ChatModel
+
+    GROQ_DEFAULT = ChatModel.DEFAULTS["groq"]
 
     ap = argparse.ArgumentParser(description="minimal cloud-harness console"
                                  " (default backend: groq)")
     ap.add_argument("--backend", default="groq",
-                    help="groq (default), gemini, ...")
+                    help="groq (default), gemini, anthropic, openai, openrouter,"
+                         " deepseek, openai_compat, qwen, bonsai")
     ap.add_argument("--model", default="",
                     help=f"model id (default: {GROQ_DEFAULT} on groq)")
     ap.add_argument("--workdir", default="")

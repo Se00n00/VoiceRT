@@ -1,5 +1,13 @@
 # AGENTS.md — how to write any file here (local, NOT committed)
 
+## Imports
+
+Every import lives on the top of the file — never lazy imports
+hiding inside functions. Standard lib, then third party, then
+`src.*`, each group alphabetical. If a top import would create a
+cycle or drag weights at import time, split the module instead of
+hiding the import.
+
 ## File top
 
 Every file starts with one docstring: what the file is for, plus the
@@ -45,3 +53,21 @@ approval — never commit on the same turn as writing code unasked.
 Message shape: `Change_type [scope]: short description`, where type
 is one of add (appending), change, fix, remove, chore. Before
 staging, scan for secrets and stage only intended files.
+
+## Speaking
+
+Report like this, always: one short verdict line with the live
+evidence, then the split (what works / what does not, per part),
+then one concrete next-step question. Facts first, no preamble.
+
+## Plan mode
+
+Plan mode is read-only observe-and-plan, but keep it as minimal as
+build mode: short verdict + findings + one question. Never a long
+report — details wait for the build.
+
+## Build mode
+
+Build mode may edit, run, and verify — but stays as minimal as plan
+mode: smallest diff that satisfies the order, then live evidence it
+works. Never a long report.

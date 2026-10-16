@@ -17,7 +17,7 @@ CONFIRM_LOG = "auto-approve (deny verdicts still block)"
 async def warm_agent(model="Qwen/Qwen3-0.6B", backend="qwen",
                      sessions_dir=None, max_tokens=None):
     """Build VoiceAgent with warmed LLM leg, TTS disabled."""
-    from src.agent.cloud_models import is_cloud_backend, make_chat_model
+    from src.models.provider import ChatModel
     from src.long_running import LongRunningConfig
     from src.main import VoiceAgent, VoiceAgentConfig
 
@@ -26,28 +26,25 @@ async def warm_agent(model="Qwen/Qwen3-0.6B", backend="qwen",
         **({"sessions_dir": sessions_dir} if sessions_dir else {})))
     agent = VoiceAgent(cfg)
     backend = str(backend or "qwen").lower()
-    if is_cloud_backend(backend):
+    if ChatModel.is_cloud_backend(backend):
         # Simple switch: stock LangChain model used directly.
         cloud_model = model if model != "Qwen/Qwen3-0.6B" else ""
         agent.llm = None
-        agent.chat_model = make_chat_model(backend, cloud_model)
+        agent.chat_model = ChatModel.get(backend, cloud_model)
         agent._worker_warmed = True
         status = f"cloud {backend} {cloud_model or 'default'}"
     else:
-        from src.models.llm import LlmConfig, LlmModel, assert_ready_leg
+        from src.models.llm import LlmConfig, LlmModel
 
         leg_kw = {} if max_tokens is None else {"max_tokens": int(max_tokens)}
         agent.llm = LlmModel(LlmConfig(model=model, backend=backend,
                                        **leg_kw))
         print(f"warming LLM {model} [{backend}] ...", flush=True)
         await agent.llm.warm()
-        from src.agent.chat_model import LocalChatModel
+        from src.models.chat_model import LocalChatModel
 
-        agent.chat_model = LocalChatModel(
-            llm=agent.llm, use_mcp_fs=bool(agent._extra_tools))
-        status = assert_ready_leg(agent.llm)
-    if hasattr(agent.chat_model, "use_mcp_fs"):
-        agent.chat_model.use_mcp_fs = bool(agent._extra_tools)
+        agent.chat_model = LocalChatModel(llm=agent.llm)
+        status = LlmModel.assert_ready_leg(agent.llm)
     try:
         await agent.open_mcp_sessions()
         status += f" + mcp {len(agent._extra_tools)} tools"
@@ -85,8 +82,6 @@ async def areanchor_workdir(agent, workdir):
         await agent.reopen_mcp_sessions()
     except Exception:
         pass
-    if hasattr(agent.chat_model, "use_mcp_fs"):
-        agent.chat_model.use_mcp_fs = bool(agent._extra_tools)
 
 
 def anchor_workdir(agent, workdir):
@@ -115,8 +110,6 @@ def anchor_workdir(agent, workdir):
             agent._mcp_client, agent._extra_tools = load_extra_tools()
         except Exception:
             pass
-        if hasattr(agent.chat_model, "use_mcp_fs"):
-            agent.chat_model.use_mcp_fs = bool(agent._extra_tools)
         return
     raise RuntimeError("anchor_workdir called inside a running loop; "
                        "await areanchor_workdir instead")

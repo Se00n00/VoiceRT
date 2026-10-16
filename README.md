@@ -32,6 +32,7 @@ Architecture first — one part per file:
 | # | Part | |
 |---|---|---|
 | — | [Architecture](docs/architecture/README.md) | diagrams, legs, engine, kernels — start here |
+| 00 | [ARCHITECTURE](ARCHITECTURE.md) | system design, contracts, dependency rules (single file) |
 | 01 | [Agent](docs/architecture/01-agent.md) | `VoiceAgent`, warm order, turn loop, events, two-brain routing |
 | 02 | [Tools](docs/architecture/02-tools.md) | 12 ops, 5 parser formats, semantic router, deny/confirm policy |
 | 03 | [Memory](docs/architecture/03-memory.md) | L1 window, L2 episodic, L3 facts, the one injection point |

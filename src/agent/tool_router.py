@@ -5,7 +5,7 @@
 zero VRAM impact) and returns the top-k ops by cosine similarity.
 :class:`src.agent.middleware.InjectToolMiddleware` is the pluggable hook:
 add it to the deepagents middleware list and it hands that shortlist to
-:class:`src.agent.chat_model.LocalChatModel` for the current model call
+:class:`src.models.chat_model.LocalChatModel` for the current model call
 only (a ContextVar, always reset). Anything unresolved — model missing,
 offline, empty scores — returns None and the keyword router stays in
 charge, so a turn can never break here.

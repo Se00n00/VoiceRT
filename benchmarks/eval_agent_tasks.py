@@ -151,7 +151,7 @@ def main():
     ap = argparse.ArgumentParser(description="agent task eval (GAIA/TB)")
     ap.add_argument("--tasks", required=True)
     ap.add_argument("--model", default="Qwen/Qwen3-0.6B",
-                    help="HF id for local legs; model id for groq/gemini legs")
+                    help="HF id for local legs; model id for cloud legs")
     ap.add_argument("--backend", default="qwen")
     ap.add_argument("--tag", default="tasks")
     ap.add_argument("--timeout", type=int, default=600)

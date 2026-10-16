@@ -22,7 +22,7 @@ Layout:
 All strings moved here verbatim — behaviour is unchanged. The previous
 homes (``src.models.llm``, ``src.main``, ``src.agent.delegate``,
 ``src.agent.title``, ``src.agent.simtask``, ``src.agent.facts``,
-``src.agent.chat_model``, ``src.agent.middleware``) re-export their names
+``src.models.chat_model``, ``src.agent.middleware``) re-export their names
 from here for backward compatibility.
 """
 

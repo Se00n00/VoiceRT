@@ -187,9 +187,7 @@ async def main_async(args):
 
     _probe = _M(llm_cfg)
     await _probe.warm()
-    from src.models.llm import assert_ready_leg
-
-    assert_ready_leg(_probe)
+    _M.assert_ready_leg(_probe)
     res_on = await run_condition(llm_cfg, on, "on", workdir)
     llm_cfg2 = LlmConfig(model=args.model, backend=args.backend)
     res_off = await run_condition(llm_cfg2, off, "off", workdir)

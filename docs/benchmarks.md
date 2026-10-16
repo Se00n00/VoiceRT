@@ -167,8 +167,42 @@ slower across the board than those rows.
 | Leg | Latency / throughput |
 |---|---|
 | Qwen3-1.7B Q4_K_M CPU sidecar (`backend=qwen17`, :8084, greedy 48 ids) | warm 7 s · server TTFT ~80 ms steady (557 ms first call) · decode **12.5 tok/s** stable over 3 reps |
-| Bonsai 27B worker | not runnable here: RAM guard refused (5.6 GB GGUF vs 3.9 GB available) — no tok/s |
+| Bonsai 27B worker | runnable since 2026-10-15 (sidecar :8081) — see worker sweep below; earlier refused by RAM guard (5.6 GB GGUF vs 3.9 GB available) |
 | Gemma-4-E4B sidecar | not runnable here: needs ~6 GB RAM |
+
+### Worker sweep — Bonsai 27B TTFT/decode (2026-10-15)
+
+Measured via `benchmarks/worker_profile.py` (warm sidecar :8081,
+first rep per cell is warmup and excluded; VRAM lives server-side so
+the local peak reads 0):
+
+| Prompt | Gen | TTFT | Decode | Wall |
+|---|---|---|---|---|
+| ~40 toks (56 ids) | 32 | 2.80 s | **1.4 tok/s** | 25.8 s |
+
+Full sweep (`--max-tokens 32 128 512`, prompts ~40/500/2000) pending —
+run `benchmarks/worker_profile.py` and extend this table. Raw rows:
+`benchmarks/results/worker_profile_bonsai_20261015-143330.json`.
+
+![worker sweep](../benchmarks/results/plots/worker_sweep.png)
+
+### Long-context — prefill scale + needle recall (2026-10-15)
+
+Measured via `benchmarks/longctx_eval.py` (qwen backend, ctx 8192;
+prompt sizes counted with the Qwen tokenizer as a ruler; the fused
+leg reports TTFT 0.0 so wall carries the prefill signal):
+
+| Length | Prompt ids | Wall (gen 16) | Needle d=0.5 |
+|---|---|---|---|
+| ~256 | 224 | 1.84 s | HIT |
+
+Full sweep (`--lengths 1024 2048 4096 8192 --depths 0.0 0.5 1.0`,
+then `--backend bonsai` to 16K) pending — run
+`benchmarks/longctx_eval.py` and extend this table. Raw rows:
+`benchmarks/results/longctx_qwen_20261015-143120.json`.
+
+![prefill scaling](../benchmarks/results/plots/longctx_scale.png)
+![needle recall](../benchmarks/results/plots/longctx_needle.png)
 
 CUDA-graphs and kernel plots are blocked behind the
 2026-10-02 GPU wedge (`ERR!`, cold boot required); the custom paged

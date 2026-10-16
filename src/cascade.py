@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from src.agent.events import AgentEvent
 from src.long_running import _cap_words, _vram_mb
-from src.models.llm import split_thinking
+from src.models.llm import LlmModel
 from src.models.runtime import check_budget
 from src.models.runtime.device import gpu_rev, keepalive_start
 from src.models.stt import SttConfig, SttModel
@@ -93,11 +93,11 @@ class CascadePipeline:
 
     @property
     def llm(self):
-        """Small leg: front brain when delegating, else the worker leg.
+        """The worker leg for voice turns.
 
         ..
         """
-        return self.harness.front_llm or self.harness.llm
+        return self.harness.llm
 
     @property
     def chat_model(self):
@@ -296,7 +296,7 @@ class CascadePipeline:
                 )
                 if getattr(self, "llm", None) is not None:
                     gen = await self.llm.generate(msgs)
-                    thinking, reply = split_thinking(str(gen.text or ""))
+                    thinking, reply = LlmModel.split_thinking(str(gen.text or ""))
                     reply = str(reply or "").strip()
                 else:
                     from langchain_core.messages import HumanMessage, SystemMessage
@@ -310,10 +310,10 @@ class CascadePipeline:
                         _lc.append(HumanMessage(content=str(m.get("content", ""))))
                     _lc.append(HumanMessage(content=text))
                     _out = await self.chat_model.ainvoke(_lc)
-                    from src.agent.cloud_models import chat_text
+                    from src.models.provider import ChatModel
 
-                    thinking, reply = split_thinking(
-                        chat_text(getattr(_out, "content", ""))
+                    thinking, reply = LlmModel.split_thinking(
+                        ChatModel.chat_text(getattr(_out, "content", ""))
                     )
                     reply = str(reply or "").strip()
                     gen = None

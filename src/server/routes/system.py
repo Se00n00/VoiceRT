@@ -40,6 +40,7 @@ def model_info():
     avail = []
     for key, p in MODEL_PROFILES.items():
         avail.append({"name": key, "label": p["label"], "backend": p["backend"],
+                      "model": str(p.get("model", "") or ""),
                       "desc": p["desc"], "ready": bool(p.get("ready")),
                       "current": key == cur})
     return {"current": cur, "available": avail}

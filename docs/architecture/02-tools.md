@@ -38,7 +38,7 @@ registered in `src/agent/mcp/mcp.py`): `python_exec(code, timeout)`,
 ## 2.2 Parsing a call out of text
 
 Small models do not reliably emit one canonical format, so the parser accepts
-five and tries them in order. `_parse_action` (`src/agent/chat_model.py:151-178`):
+five and tries them in order. `_parse_action` (`src/models/chat_model.py`):
 
 ```
 gemma_action → functiongemma_action → toolcall_dict → terminal_action → xml_action
@@ -63,7 +63,7 @@ gemma270 `<end_function_call>` branch was retired with that backend).
 `<function`, `<start_function_call>`, `action`, or a paired `"name"`/`"arguments"`
 — used to decide whether a retry is warranted.
 
-`_norm_op` (`src/agent/chat_model.py`) fuzzy-maps the op name. It matches on
+`_norm_op` (`src/models/chat_model.py`) fuzzy-maps the op name. It matches on
 op-specific boundaries rather than prefix, which is what stops `python_exec`
 and `exec_bg` from collapsing into `exec` — a bug two eval runs found.
 

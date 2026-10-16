@@ -13,17 +13,17 @@ import shutil
 
 
 async def _probe_leg(model, backend, allow_cpu):
-    from src.models.llm import LlmConfig, LlmModel, assert_ready_leg, leg_device
+    from src.models.llm import LlmConfig, LlmModel
 
     device = "cpu" if allow_cpu else "cuda"
     llm = LlmModel(LlmConfig(model=model, backend=backend, device=device))
     print(f"warming LLM {model} [{backend}] device={device} ...", flush=True)
     await llm.warm()
     if allow_cpu:
-        print(f"CPU MODE: leg on {leg_device(llm)} (slow, smoke only).",
+        print(f"CPU MODE: leg on {LlmModel.leg_device(llm)} (slow, smoke only).",
               flush=True)
     else:
-        print(f"agent ready (llm-only) on {assert_ready_leg(llm)}.", flush=True)
+        print(f"agent ready (llm-only) on {LlmModel.assert_ready_leg(llm)}.", flush=True)
     del llm
     gc.collect()
 

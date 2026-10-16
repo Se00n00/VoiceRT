@@ -82,51 +82,12 @@ def _build_catalogue() -> dict:
 VOICES = _build_catalogue()
 
 
-def voice_info(name: str) -> TtsVoice:
-    """Catalogue entry for `name`, or raise with the closest real options.
-
-    Typo-tolerant: 'af_hear' resolves to af_heart, the same way the TUI
-    command palette suggests, so a bad name is never silently a silent synth.
-    """
-    key = str(name).strip().lower()
-    if key in VOICES:
-        return VOICES[key]
-    near = difflib.get_close_matches(key, VOICES, n=3, cutoff=0.6)
-    hint = f" did you mean {' or '.join(repr(n) for n in near)}?" if near else ""
-    raise ValueError(
-        f"unknown voice {name!r}:{hint} pick from list_voices()")
-
-
 def _resolve_lang(lang: str) -> str:
     """Accept 'a' or an alias like 'en-gb' -> 'b'."""
     text = str(lang).strip().lower()
     if text in _VOICE_LANG_CODES:
         return text
     return _LANG_ALIASES.get(text, text)
-
-
-def list_voices(lang: str | None = None, gender: str | None = None):
-    """Catalogue voices, optionally filtered. Returns (list, language map).
-
-    Returns the matching :class:`TtsVoice` entries plus the language codes
-    actually represented, so a caller can print "e: ['ef_dora', 'em_alex']"
-    without a second lookup. Alias langs ('en-gb') are accepted.
-    """
-    want = _resolve_lang(lang) if lang else None
-    sex = None
-    if gender:
-        sex = gender.strip().lower()
-        sex = _GENDER.get(sex, sex)
-    picked = [
-        v for v in VOICES.values()
-        if (want is None or v.lang == want)
-        and (sex is None or v.gender == sex)
-    ]
-    picked.sort(key=lambda v: v.name)
-    langs = {}
-    for v in picked:
-        langs.setdefault(v.lang, []).append(v.name)
-    return picked, langs
 
 
 class TtsConfig(BaseModel):
@@ -165,6 +126,44 @@ class TtsModel:
 
     # --- voices ------------------------------------------------------------
 
+    @staticmethod
+    def voice_info(name: str) -> TtsVoice:
+        """Catalogue entry for name, or raise with close options.
+
+        Typo-tolerant: near-misses suggest the real voice instead.
+        ..
+        """
+        key = str(name).strip().lower()
+        if key in VOICES:
+            return VOICES[key]
+        near = difflib.get_close_matches(key, VOICES, n=3, cutoff=0.6)
+        hint = f" did you mean {' or '.join(repr(n) for n in near)}?" if near else ""
+        raise ValueError(
+            f"unknown voice {name!r}:{hint} pick from list_voices()")
+
+    @staticmethod
+    def list_voices(lang: str | None = None, gender: str | None = None):
+        """Catalogue voices, optionally filtered. Pure, loads no weights.
+
+        Returns matching entries plus the language map represented.
+        ..
+        """
+        want = _resolve_lang(lang) if lang else None
+        sex = None
+        if gender:
+            sex = gender.strip().lower()
+            sex = _GENDER.get(sex, sex)
+        picked = [
+            v for v in VOICES.values()
+            if (want is None or v.lang == want)
+            and (sex is None or v.gender == sex)
+        ]
+        picked.sort(key=lambda v: v.name)
+        langs = {}
+        for v in picked:
+            langs.setdefault(v.lang, []).append(v.name)
+        return picked, langs
+
     def _apply_voice(self, name: str) -> None:
         """Force a voice id onto config and a live pipeline, unvalidated."""
         self.config = self.config.model_copy(update={"voice": name})
@@ -178,7 +177,7 @@ class TtsModel:
 
     def voices(self, lang: str | None = None, gender: str | None = None):
         """Catalogue entries this model can speak with (see list_voices)."""
-        picked, _ = list_voices(lang, gender)
+        picked, _ = TtsModel.list_voices(lang, gender)
         return picked
 
     def describe_voices(self, lang: str | None = None,
@@ -187,7 +186,7 @@ class TtsModel:
 
         Cheap enough for a REPL or an /voice help listing; loads no weights.
         """
-        picked, langs = list_voices(lang, gender)
+        picked, langs = TtsModel.list_voices(lang, gender)
         if not picked:
             return "no voices match that language/gender filter"
         codes = _VOICE_LANG_CODES
@@ -217,7 +216,7 @@ class TtsModel:
         gender never trips this guard — am_michael is American English and
         is a valid swap for af_heart.
         """
-        info = voice_info(voice)
+        info = TtsModel.voice_info(voice)
         if strict and info.lang != self.config.lang:
             raise ValueError(
                 f"voice {info.name!r} is {info.gender} {info.language} "
@@ -241,12 +240,12 @@ class TtsModel:
         cur = VOICES.get(self.config.voice)
         if not strict or (cur and cur.lang == code):
             return self
-        picked, _ = list_voices(lang=code)
+        picked, _ = TtsModel.list_voices(lang=code)
         return self.set_voice(picked[0].name, strict=False) if picked else self
 
     def next_voice(self) -> str:
         """Step to the next voice for the current language; returns its name."""
-        picked, _ = list_voices(lang=self.config.lang)
+        picked, _ = TtsModel.list_voices(lang=self.config.lang)
         if not picked:
             return self.config.voice
         names = [v.name for v in picked]

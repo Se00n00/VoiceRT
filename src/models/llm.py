@@ -1,141 +1,21 @@
 """LLM leg: Qwen chat generation behind a clean async class."""
 import asyncio
+import json
 import re
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.prompts.base import SYSTEM_PROMPT  # noqa: F401  (re-exported for back-compat)
 
-# Backends that own their inference instead of in-process weights.
-# They need no local tokenizer, hold no VRAM we manage, and are
-# incompatible with the paged GPU engine. Single source of truth:
-# only "bonsai" is a sidecar now (local llama-server); "groq"/"gemini"
-# are stock LangChain chat models via src/agent/cloud_models.py.
-SIDECAR_BACKENDS = ("bonsai",)
+# Sidecar truth lives on LlmModel.SIDECAR_BACKENDS below; cloud backends
+# are stock LangChain chat models via src/models/provider.py.
 
 _THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE)
 _THINK_OPEN_RE = re.compile(r"<think\s*>", re.IGNORECASE)
 _THINK_CLOSE_RE = re.compile(r"</think\s*>", re.IGNORECASE)
-
-
-def split_thinking(text: str) -> tuple:
-    """Split model output into (thinking, answer).
-
-    Robust: handles multiple blocks, mixed case, unclosed tags, and
-    reasoning leaked outside tags. No tags -> ("", text). Pure, tested.
-    """
-    raw = str(text or "")
-    # Collect all closed blocks
-    blocks = _THINK_RE.findall(raw)
-    if blocks:
-        # Use first block's content as thinking, but join all if multiple
-        thinking_parts = []
-        for b in _THINK_RE.finditer(raw):
-            g = b.group(0)
-            thinking_parts.append(_THINK_CLOSE_RE.sub("", _THINK_OPEN_RE.sub("", g)).strip())
-        thinking = "\n".join(p for p in thinking_parts if p).strip()
-        answer = _THINK_RE.sub("", raw).strip()
-        # If answer is empty but thinking exists, try to recover: maybe model
-        # put answer inside think due to truncation — keep as thinking
-        return thinking, answer
-    o = _THINK_OPEN_RE.search(raw)
-    c = _THINK_CLOSE_RE.search(raw)
-    if o and not c:
-        # Unclosed: everything after <think> is thinking
-        return _THINK_CLOSE_RE.sub("", raw[o.end():]).strip(), raw[:o.start()].strip()
-    if c and not o:
-        # Orphan close: treat before as thinking
-        return raw[:c.start()].strip(), raw[c.end():].strip()
-    return "", raw.strip()
-
-
-def leg_device(llm) -> str:
-    """Where the warmed leg actually lives: 'cuda:0', 'cpu', or 'unknown'.
-
-    Every backend sets ``.device`` (with CUDA fallback applied), so this
-    reports post-warm reality, not config intent. Pure inspection.
-    """
-    leg = getattr(llm, "_leg", None)
-    dev = getattr(leg, "device", None)
-    if dev is not None:
-        return str(dev)
-    try:
-        import torch
-
-        model = getattr(leg, "model", leg)
-        for param in model.parameters():
-            return str(param.device)
-    except Exception:
-        pass
-    return "unknown"
-
-
-def assert_cuda_leg(llm, what: str = "model") -> str:
-    """Abort loudly unless the warmed leg is on CUDA. Returns device.
-
-    A silent CPU fallback turns minutes into hours on this box — every
-    runner calls this right after warm so a sick driver fails fast with
-    a clear message instead of hanging.
-    """
-    dev = leg_device(llm)
-    if not dev.startswith("cuda"):
-        raise SystemExit(
-            f"ABORT: {what} is on '{dev}', not CUDA. "
-            f"Check nvidia-smi (driver/GPU state) and retry. "
-            f"Refusing CPU fallback on purpose.")
-    return dev
-
-
-def assert_ready_leg(llm, what: str = "model") -> str:
-    """Backend-aware readiness gate. Returns a status string.
-
-    GPU weight legs go through :func:`assert_cuda_leg` (a sick driver
-    fails fast); the bonsai sidecar (``backend="bonsai"``) must be
-    healthy instead — they own their inference (llama-server), so the
-    CUDA assert would wrongly abort them.
-    """
-    backend = str(getattr(getattr(llm, "config", None), "backend", ""))
-    if backend in SIDECAR_BACKENDS:
-        leg = llm._backend()
-        url = getattr(leg, "base_url", "?")
-        if not leg._health():
-            raise SystemExit(
-                f"ABORT: {backend} sidecar unhealthy at {url}. "
-                f"Start llama-server first (see S0) and retry.")
-        return f"sidecar {url}"
-    return assert_cuda_leg(llm, what)
-
-
-def to_openai_tools(tools) -> list:
-    """House tool specs -> OpenAI ``{type, function}`` shape, idempotently.
-
-    Every caller in this repo speaks the flat house shape
-    (``{"name", "description", "parameters"}`` — see
-    ``src.agent.tool_router.TERMINAL_TOOLS``) because the sidecar legs convert
-    it themselves on the way to ``/v1/chat/completions``. HF chat
-    templates want the OpenAI shape instead, so the fused legs need this
-    hop too. Already-converted specs pass through untouched, which lets
-    callers hand us either form.
-    """
-    out = []
-    for t in tools or []:
-        if not isinstance(t, dict):
-            continue
-        fn = t.get("function")
-        if isinstance(fn, dict) and "name" in fn:
-            out.append(t)  # already OpenAI-shaped: no top-level name
-            continue
-        if "name" not in t:
-            continue
-        out.append({
-            "type": "function",
-            "function": {
-                "name": t["name"],
-                "description": t.get("description", ""),
-                "parameters": t.get("parameters", {"type": "object"}),
-            },
-        })
-    return out
+_HERMES_RE = re.compile(
+    r"<tool_call>\s*(\{.*?\})\s*</tool_call>",
+    re.DOTALL | re.IGNORECASE)
 
 
 class LlmConfig(BaseModel):
@@ -146,16 +26,14 @@ class LlmConfig(BaseModel):
     model: str = "Qwen/Qwen3-0.6B"
     # Backend switch.
     #  - "qwen" = fused Qwen3 path — DEFAULT: 0.6B fused on CUDA, ~1.4GB
-    #    VRAM, no extra download on a box that already has the weights as
-    #    the front leg. This is the same instance delegation routes chat to,
-    #    so a bare library caller and the two-brain path agree on what the
-    #    small model is. NOTE: a 0.6B is a chat/routing brain, not a tool
+    #    VRAM, no extra download on a box that already has the weights.
+    #    NOTE: a 0.6B is a chat/routing brain, not a tool
     #    harness — the agentic leg wants "bonsai" below.
     #  - "bonsai" = Ternary Bonsai 2 27B via Prism-fork llama.cpp sidecar
     #    (-ngl auto from free VRAM, 16K ctx) — the WORKER brain for the
     #    full tool harness; STT/TTS keep the GPU, the rest offloads.
-    #  - "gemini"/"groq" = stock LangChain cloud chat models (no local
-    #    weights) — use src/agent/cloud_models.make_chat_model, not here.
+    #  - cloud backends = stock LangChain chat models (no local
+    #    weights) — use src/models/provider.ChatModel.get, not here.
     backend: str = "qwen"
     max_tokens: int = 48
     max_seq: int = 8192
@@ -180,14 +58,25 @@ class LlmConfig(BaseModel):
     # turn. Agentic scores were measured thinking-on; raise or set None
     # when quality matters more than latency.
     bonsai_bin: str = "auto"  # explicit Prism-fork llama-server or "auto"
-    # Cloud model names (used by src/agent/cloud_models, kept here so old
-    # configs with backend="groq"/"gemini" still parse; LlmModel itself
+    # Cloud model names (used by src/models/provider, kept here so old
+    # configs with cloud backends still parse; LlmModel itself
     # no longer serves cloud backends).
     gemini_model: str = "gemini-3.5-flash"
     gemini_api_key: str = "auto"
     groq_model: str = "openai/gpt-oss-120b"
     groq_api_key: str = "auto"
     groq_reasoning_effort: str = "low"
+    anthropic_model: str = "claude-sonnet-4-5"
+    anthropic_api_key: str = "auto"
+    openai_model: str = "gpt-4o-mini"
+    openai_api_key: str = "auto"
+    openrouter_model: str = "deepseek/deepseek-chat"
+    openrouter_api_key: str = "auto"
+    deepseek_model: str = "deepseek-chat"
+    deepseek_api_key: str = "auto"
+    compat_model: str = ""
+    compat_api_key: str = "auto"
+    compat_base_url: str = ""
 
 
 class LlmResult(BaseModel):
@@ -197,6 +86,11 @@ class LlmResult(BaseModel):
     ttft_s: float = 0.0
     tps: float = 0.0
     output_ids: tuple = Field(default_factory=tuple)
+    # Template-native tool calls ((name, args), ...) in emit order.
+    # The chat template renders tools in its own grammar, so only it
+    # knows how to read them back — extraction lives here, beside
+    # encode(), never in the LangChain face above this leg.
+    tool_calls: tuple = Field(default_factory=tuple)
 
 
 class LlmToken(BaseModel):
@@ -218,6 +112,208 @@ class LlmModel:
     fallback.
     """
 
+    SIDECAR_BACKENDS = ("bonsai",)
+    """Backends owning inference off-process (no local weights)."""
+
+    @staticmethod
+    def split_thinking(text: str) -> tuple:
+        """Split model output into (thinking, answer).
+
+        No tags -> ("", text); unclosed/orphan tags recovered.
+        ..
+        """
+        raw = str(text or "")
+        blocks = _THINK_RE.findall(raw)
+        if blocks:
+            thinking_parts = []
+            for b in _THINK_RE.finditer(raw):
+                g = b.group(0)
+                thinking_parts.append(_THINK_CLOSE_RE.sub("", _THINK_OPEN_RE.sub("", g)).strip())
+            thinking = "\n".join(p for p in thinking_parts if p).strip()
+            answer = _THINK_RE.sub("", raw).strip()
+            return thinking, answer
+        o = _THINK_OPEN_RE.search(raw)
+        c = _THINK_CLOSE_RE.search(raw)
+        if o and not c:
+            return _THINK_CLOSE_RE.sub("", raw[o.end():]).strip(), raw[:o.start()].strip()
+        if c and not o:
+            return raw[:c.start()].strip(), raw[c.end():].strip()
+        return "", raw.strip()
+
+    @staticmethod
+    def leg_device(llm) -> str:
+        """Where the warmed leg lives: cuda, cpu, unknown.
+
+        Reports post-warm reality from the leg, not config intent.
+        ..
+        """
+        leg = getattr(llm, "_leg", None)
+        dev = getattr(leg, "device", None)
+        if dev is not None:
+            return str(dev)
+        try:
+            import torch
+
+            model = getattr(leg, "model", leg)
+            for param in model.parameters():
+                return str(param.device)
+        except Exception:
+            pass
+        return "unknown"
+
+    @staticmethod
+    def assert_cuda_leg(llm, what: str = "model") -> str:
+        """Abort unless the warmed leg is on CUDA. Returns device.
+
+        Silent CPU fallback turns minutes into hours — fail fast.
+        ..
+        """
+        dev = LlmModel.leg_device(llm)
+        if not dev.startswith("cuda"):
+            raise SystemExit(
+                f"ABORT: {what} is on '{dev}', not CUDA. "
+                f"Check nvidia-smi (driver/GPU state) and retry. "
+                f"Refusing CPU fallback on purpose.")
+        return dev
+
+    @staticmethod
+    def assert_ready_leg(llm, what: str = "model") -> str:
+        """Backend-aware readiness gate. Returns a status string.
+
+        Sidecars check health; GPU weight legs assert CUDA.
+        ..
+        """
+        backend = str(getattr(getattr(llm, "config", None), "backend", ""))
+        if backend in LlmModel.SIDECAR_BACKENDS:
+            leg = llm._backend()
+            url = getattr(leg, "base_url", "?")
+            if not leg._health():
+                raise SystemExit(
+                    f"ABORT: {backend} sidecar unhealthy at {url}. "
+                    f"Start llama-server first (see S0) and retry.")
+            return f"sidecar {url}"
+        return LlmModel.assert_cuda_leg(llm, what)
+
+    @staticmethod
+    def to_openai_tools(tools) -> list:
+        """House specs -> OpenAI shape, idempotently. Pure.
+
+        Already-converted specs pass through untouched either way.
+        ..
+        """
+        out = []
+        for t in tools or []:
+            if not isinstance(t, dict):
+                continue
+            fn = t.get("function")
+            if isinstance(fn, dict) and "name" in fn:
+                out.append(t)
+                continue
+            if "name" not in t:
+                continue
+            out.append({
+                "type": "function",
+                "function": {
+                    "name": t["name"],
+                    "description": t.get("description", ""),
+                    "parameters": t.get("parameters", {"type": "object"}),
+                },
+            })
+        return out
+
+    @staticmethod
+    def _tool_args(raw) -> dict:
+        """Server arguments (dict or JSON str) -> args dict.
+
+        Unparseable strings survive under "text", never dropped.
+        ..
+        """
+        if isinstance(raw, dict):
+            return dict(raw)
+        try:
+            parsed = json.loads(raw or "{}")
+        except Exception:
+            return {"text": str(raw or "")}
+        return parsed if isinstance(parsed, dict) else {"text": str(raw or "")}
+
+    @staticmethod
+    def extract_tool_calls(text: str) -> tuple:
+        """Template-native tool calls in order ((name, args), ...).
+
+        Hermes <tool_call> blocks first (what the chat template emits
+        when passed tools), bare OpenAI {"name", "arguments"} dicts as
+        fallback. () means plain chat. Names pass through verbatim;
+        mapping to execution lives outside this leg. Never raises.
+        ..
+        """
+        if not text or not text.strip():
+            return ()
+        if "<tool_call>" in text.lower():
+            out = []
+            for m in _HERMES_RE.finditer(text):
+                try:
+                    obj = json.loads(m.group(1))
+                except Exception:
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+                name = str(obj.get("name", "") or "").strip()
+                args = obj.get("arguments", {})
+                if name and isinstance(args, dict):
+                    out.append((name, args))
+            if out:
+                return tuple(out)
+        hit = LlmModel._bare_dict(text)
+        return (hit,) if hit is not None else ()
+
+    @staticmethod
+    def _bare_dict(text: str):
+        """Bare OpenAI dict in text -> (name, args), else None.
+
+        Balanced-brace scan from the first {"name" occurrence.
+        ..
+        """
+        if not text or '"name"' not in text:
+            return None
+        try:
+            start = text.index('{"name"')
+        except ValueError:
+            return None
+        depth, instr, esc = 0, False, False
+        end = -1
+        for i in range(start, len(text)):
+            ch = text[i]
+            if instr:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    instr = False
+                continue
+            if ch == '"':
+                instr = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        if end <= start:
+            return None
+        try:
+            obj = json.loads(text[start:end])
+        except Exception:
+            return None
+        if not isinstance(obj, dict):
+            return None
+        name = str(obj.get("name", "") or "").strip()
+        args = obj.get("arguments", {})
+        if not name or not isinstance(args, dict):
+            return None
+        return name, args
+
     def __init__(self, config: LlmConfig | None = None):
         self.config = config or LlmConfig()
         self._leg = None
@@ -232,7 +328,7 @@ class LlmModel:
                 # 27B-ternary sidecar (Prism-fork llama-server, -ngl auto).
                 # NOTE: resolved BEFORE any torch/CUDA probe — ngl probing
                 # reads VRAM without initializing torch state.
-                from src.models.bonsai_llamacpp import BonsaiLlamaCpp
+                from src.models.bonsai import BonsaiLlamaCpp
 
                 self._leg = BonsaiLlamaCpp(
                     gguf_path=getattr(self.config, "bonsai_gguf", "auto"),
@@ -249,10 +345,12 @@ class LlmModel:
                     server_bin=getattr(self.config, "bonsai_bin", "auto"),
                 )
                 return self._leg
-            if backend in ("gemini", "groq"):
+            from src.models.provider import ChatModel
+
+            if ChatModel.is_cloud_backend(backend):
                 raise SystemExit(
                     f"ABORT: backend={backend!r} is a stock LangChain cloud "
-                    f"model now — use src/agent/cloud_models.make_chat_model, "
+                    f"model now — use src/models/provider.ChatModel.get, "
                     f"not LlmModel."
                 )
             import torch
@@ -288,7 +386,7 @@ class LlmModel:
         )
 
         _be = str(getattr(self.config, "backend", ""))
-        if _be in SIDECAR_BACKENDS:
+        if _be in LlmModel.SIDECAR_BACKENDS:
             # Bonsai parks -ngl layers in VRAM: price them so the worker
             # cannot silently claim a full card. Pure-CPU sidecars skip
             # the GPU checks entirely.
@@ -304,7 +402,7 @@ class LlmModel:
         # warm tokenizer first (lightweight) — except sidecar legs, which
         # need no local tokenizer (GGUF repos ship none; gated downloads
         # would fail here instead of at the leg with a clear message).
-        if str(getattr(self.config, "backend", "")) not in SIDECAR_BACKENDS:
+        if str(getattr(self.config, "backend", "")) not in LlmModel.SIDECAR_BACKENDS:
             await asyncio.to_thread(self._tokenizer)
         leg = await asyncio.to_thread(self._backend)
         if getattr(leg, "is_sidecar", False):
@@ -351,8 +449,8 @@ class LlmModel:
         """Same-model terminal prompt: system + preamble + cwd + user.
 
         No sidecar, no router model — the SAME Qwen weights decide between
-        plain chat text and one JSON ``TerminalAction`` (see
-        src/agent/chat_model.py). Keep bodies small so prompt+max_tokens
+        plain chat text and one template ``tool_call`` block (see
+        src/models/chat_model.py). Keep bodies small so prompt+max_tokens
         fits the paged KV block pool. ``catalogue`` appends the prose op
         catalogue (for legs whose template may ignore native tool specs);
         native-function legs pass False — pure English suffices there.
@@ -382,7 +480,7 @@ class LlmModel:
         def _run():
             kw: dict = {}
             if tools:
-                kw["tools"] = to_openai_tools(tools)
+                kw["tools"] = LlmModel.to_openai_tools(tools)
             try:
                 return tok.apply_chat_template(
                     messages, return_tensors="pt",
@@ -423,7 +521,7 @@ class LlmModel:
 
     async def decode_with_thinking(self, ids) -> tuple:
         """Decode + split (thinking, answer). Never strips silently."""
-        return split_thinking(await self.decode(ids))
+        return LlmModel.split_thinking(await self.decode(ids))
 
     async def generate(self, messages: list,
                        max_tokens: int | None = None,
@@ -444,10 +542,18 @@ class LlmModel:
             limit = int(max_tokens or self.config.max_tokens)
             out = await asyncio.to_thread(
                 leg.chat, messages, tools, limit, stop)
+            calls = []
+            for tc in out.get("tool_calls", []) or []:
+                fn = (tc.get("function") or {}) if isinstance(tc, dict) else {}
+                name = str(fn.get("name", "") or "").strip()
+                if not name:
+                    continue
+                calls.append((name, self._tool_args(fn.get("arguments", ""))))
             return LlmResult(text=out.get("text", ""),
                              ttft_s=float(out.get("ttft", 0.0)),
                              tps=float(out.get("decode_tps", 0.0)),
-                             output_ids=())
+                             output_ids=(),
+                             tool_calls=tuple(calls))
         ids = await self.encode(messages, tools=tools)
         limit = int(max_tokens or self.config.max_tokens)
         if stop:
@@ -474,7 +580,8 @@ class LlmModel:
         tps = (n / wall) if wall > 0 else 0.0
         ttft = float(out.get("ttft", 0.0)) if isinstance(out, dict) else 0.0
         return LlmResult(text=text, ttft_s=ttft,
-                         tps=float(tps), output_ids=tuple(raw_ids if isinstance(raw_ids, (list,tuple)) else []))
+                         tps=float(tps), output_ids=tuple(raw_ids if isinstance(raw_ids, (list,tuple)) else []),
+                         tool_calls=self.extract_tool_calls(text))
 
     async def stream(self, messages: list, max_tokens: int | None = None,
                      tools: list | None = None,

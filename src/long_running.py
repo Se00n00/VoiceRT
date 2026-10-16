@@ -1,13 +1,11 @@
 """Long-running agent: sessions, turns, tools, box.
 
 Owns construction, graph assembly and the text entry; voice legs live on
-``src/cascade.py``; two-brain routing composes on ``src/main.py``.
+``src/cascade.py``.
 """
 
 import asyncio
-import logging
 import os
-import re
 import time
 from contextlib import asynccontextmanager
 from typing import Any
@@ -19,20 +17,12 @@ from langchain.agents.middleware import TodoListMiddleware
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.agent.chat_model import LocalChatModel
-from src.agent.delegate import (
-    Route,
-    decide_escalate,
-    front_llm_config,
-    is_task_shaped,
-    load_config,
-    parse_delegate,
-    worker_llm_overrides,
-)
+from src.models.chat_model import LocalChatModel
 from src.agent.episodic import EpisodicStore, summarize_turns
 from src.agent.events import AgentEvent
 from src.agent.facts import format_block, load_facts
 from src.agent.mcp.client import load_extra_tools
+from src.agent.mcp.session import open_sessions
 from src.agent.memory import JsonSessionMemory
 from src.agent.middleware import (
     ErrorHintMiddleware,
@@ -42,36 +32,28 @@ from src.agent.middleware import (
     TrimObservationsMiddleware,
     VerifyMiddleware,
 )
+from src.agent.tool_router import build_execution_tools
 from src.models.llm import (
-    SIDECAR_BACKENDS,
     LlmConfig,
     LlmModel,
-    split_thinking,
 )
+from src.models.provider import ChatModel
 from src.models.runtime import FIFOScheduler, check_budget, max_allocated_mb
 from src.prompts.base import SYSTEM_PROMPT, WORKER_STANCE
 from src.prompts.memory import PAST_EPISODES_HEADER, USER_FACTS_HEADER
 from src.prompts.middleware import TODO_SYSTEM_PROMPT, TODO_TOOL_DESCRIPTION
 from src.prompts.voice import (
     DEGENERATE_REPLY,
-    FRONT_CHAT_MAX_TOKENS,
-    FRONT_SYSTEM,
     TEXT_SUFFIX,
     WORKER_DOWN_TEMPLATE,
     identity_sentence,
 )
+from src.sandbox.docker import DockerSandboxError, SandboxShellBackend
 
-from src.agent.chat_model import (
-    is_degenerate,
-    parse_bare_tail,
-    parse_terminal_action,
-    parse_xml_action,
-)
+from src.models.chat_model import is_degenerate
 
 __all__ = ["LongRunningConfig", "LongRunningAgent"]
 
-log = logging.getLogger(__name__)
-"""Telemetry logger (route skew, never breaks turns)."""
 
 class LongRunningConfig(BaseModel):
     """Agentic loop config. One class, one job.
@@ -101,21 +83,11 @@ class LongRunningConfig(BaseModel):
     memory_recall: bool = False
     memory_store: bool = False
     memory_dir: str = "memory"
-    delegate: bool = False
-    delegate_config: str | None = None
     worker_eager: bool = False
     sandbox: Any = None
 
 
 MAX_SPOKEN_WORDS = 500
-
-
-_DELEGATION_TALK = re.compile(
-    r"delegat|escalat|larger model|bigger model|hand(?:ing|ed|le)? "
-    r"(it|this|that|things|off)|pass(?:ing|ed)? (it|this|that) (on|off|up)|"
-    r"i(?:'| wi)ll (let|have|get) (someone|another|the) ",
-    re.IGNORECASE,
-)
 
 
 class _BoxError(RuntimeError):
@@ -229,8 +201,7 @@ class LongRunningAgent:
     """Agentic loop: sessions, turns, tools, box. Owns __init__/_build_agent/__call__.
 
     Construction, graph assembly and the text entry live here; voice legs
-    live on CascadePipeline (built at the end of __init__); two-brain
-    routing composes on VoiceAgent.
+    live on CascadePipeline (built at the end of __init__).
     ..
     """
 
@@ -239,48 +210,34 @@ class LongRunningAgent:
         self.config = config or LongRunningConfig()
         cfg = self.config
         llm_cfg = cfg.llm
-        self.delegate_cfg = None
-        self.front_llm = None
-        self._route_skew: dict = {}
         self.active_model_label: str = "qwen3-0.6B"
-        if bool(getattr(cfg, "delegate", False)):
-            try:
-                dcfg = load_config(getattr(cfg, "delegate_config", None))
-                if dcfg.enabled:
-                    self.delegate_cfg = dcfg
-                    over = worker_llm_overrides(dcfg)
-                    if over:
-                        llm_cfg = llm_cfg.model_copy(update=over)
-            except Exception:
-                self.delegate_cfg = None
-        # Simple switch: bonsai/qwen run local legs, groq/gemini are
+        # Simple switch: bonsai/qwen run local legs, cloud backends are
         # stock LangChain chat models used directly (no LlmModel).
-        from src.agent.cloud_models import is_cloud_backend, make_chat_model
-
         _backend = str(getattr(llm_cfg, "backend", "qwen") or "qwen").lower()
-        if is_cloud_backend(_backend):
-            _named = (
-                str(getattr(llm_cfg, "groq_model", "") or "")
-                if _backend == "groq"
-                else str(getattr(llm_cfg, "gemini_model", "") or "")
-            )
+        if ChatModel.is_cloud_backend(_backend):
+            _field = {
+                "groq": "groq_model",
+                "gemini": "gemini_model",
+                "anthropic": "anthropic_model",
+                "openai": "openai_model",
+                "openrouter": "openrouter_model",
+                "deepseek": "deepseek_model",
+                "openai_compat": "compat_model",
+            }.get(_backend, "")
+            _named = str(getattr(llm_cfg, _field, "") or "") if _field else ""
             _fallback = str(getattr(llm_cfg, "model", "") or "")
             if not _named and _fallback not in ("", "Qwen/Qwen3-0.6B"):
                 _named = _fallback
             self.llm = None
-            self.chat_model = make_chat_model(_backend, _named)
+            self.chat_model = ChatModel.get(
+                _backend, _named,
+                base_url=str(getattr(llm_cfg, "compat_base_url", "") or ""),
+            )
         else:
             self.llm = LlmModel(llm_cfg)
-            from src.agent.chat_model import LocalChatModel
-
             self.chat_model = LocalChatModel(llm=self.llm)
         # Voice legs live in the cascade (built here so warm-order stays);
         # the harness keeps the shared tts alias for text-turn audio.
-        if self.delegate_cfg is not None:
-            try:
-                self.front_llm = LlmModel(front_llm_config(self.delegate_cfg))
-            except Exception:
-                self.front_llm = None
         try:
             self.backend = LocalShellBackend(
                 root_dir=cfg.work_dir,
@@ -298,8 +255,6 @@ class LongRunningAgent:
         except Exception:
             self._mcp_client, self._extra_tools = None, []
         self._mcp_sessions = None
-        if hasattr(self.chat_model, "use_mcp_fs"):
-            self.chat_model.use_mcp_fs = bool(self._extra_tools)
         self.sessions = JsonSessionMemory(
             sessions_dir=os.path.expanduser(str(cfg.sessions_dir or "~/.voicert")),
             max_turns=cfg.max_session_turns,
@@ -317,10 +272,6 @@ class LongRunningAgent:
         self._worker_unavailable: str | None = None
         self._worker_warmed = False
         self._worker_eager = bool(getattr(cfg, "worker_eager", False))
-        if self.delegate_cfg is not None and bool(
-            getattr(self.delegate_cfg, "worker_eager", False)
-        ):
-            self._worker_eager = True
         self._locks: dict[str, asyncio.Lock] = {}
         self._pending: dict[str, list[str]] = {}
         self._box_lock: asyncio.Lock = asyncio.Lock()
@@ -344,8 +295,6 @@ class LongRunningAgent:
         (collect + tag-filter); the semantic top-K stays prompt-side
         and off unless ``use_tool_router`` is set.
         """
-        from src.agent.tool_router import build_execution_tools
-
         turn_backend = backend if backend is not None else self.backend
         middleware = [
             TodoListMiddleware(
@@ -382,16 +331,12 @@ class LongRunningAgent:
 
     async def open_mcp_sessions(self) -> "VoiceAgent":
         """Open stateful MCP sessions and rebind tools. Returns self."""
-        from src.agent.mcp.session import open_sessions
-
         if getattr(self, "_mcp_sessions", None) is not None:
             return self
         pool = await open_sessions(getattr(self.config, "mcp_config", None))
         self._mcp_sessions = pool
         self._mcp_client = pool
         self._extra_tools = list(pool.tools)
-        if hasattr(self.chat_model, "use_mcp_fs"):
-            self.chat_model.use_mcp_fs = bool(self._extra_tools)
         try:
             self.agent = self._build_agent()
         except Exception:
@@ -517,18 +462,8 @@ class LongRunningAgent:
 
     @staticmethod
     def _resolve_reply(content: str) -> str:
-        """Text-only AI content -> reply; legacy done envelopes resolve."""
-        txt = str(content or "").strip()
-        if not txt:
-            return ""
-        for cand in (
-            parse_terminal_action(txt),
-            parse_xml_action(txt),
-            parse_bare_tail(txt),
-        ):
-            if cand is not None and cand.op == "done":
-                return cand.reply or ""
-        return txt
+        """Text-only AI content -> reply, stripped."""
+        return str(content or "").strip()
 
     def _confirm_wrapper(self, confirm_fn, sid: str | None):
         """Adapt a raw confirm callback to allow/deny/allowlist semantics."""
@@ -559,93 +494,12 @@ class LongRunningAgent:
         """
         return identity_sentence(str(getattr(self, "active_model_label", "") or ""))
 
-    def _front_messages(self, text: str, history: list) -> list:
-        """Front-model CHAT prompt: one short spoken sentence, no tools.
-
-        Deliberately NOT ``messages_for_terminal``: the front model has no
-        terminal, and handing it the op catalogue is how small models start
-        emitting ops they cannot run. No tool specs at all, for the same
-        reason.
-        """
-        msgs = [
-            {
-                "role": "system",
-                "content": FRONT_SYSTEM + " " + self._identity_sentence(),
-            }
-        ]
-        msgs.extend(history or [])
-        msgs.append({"role": "user", "content": str(text)[:1500]})
-        return msgs
-
-    async def _front_decide(self, text: str, history: list):
-        """Route one turn: does this need the worker, or just a reply?
-
-        Returns a :class:`~src.agent.delegate.Route`. The front leg gets no
-        tool schema and writes no task string — it answers one yes/no
-        question, and the worker re-reads the raw user text itself. Every
-        failure path escalates: a dead front leg, an unparseable answer, or a
-        narration-shaped reply all route to the worker, because that is the
-        leg that can actually do anything.
-
-        Order matters: the boolean is asked FIRST so a delegated turn costs
-        one 6-token call and never generates a chat reply nobody will hear.
-        Asking for the flag and the reply together was measured and loses
-        real tasks (31/37 vs 34/37, six tasks silently dropped).
-        """
-        cap = int(getattr(self.delegate_cfg, "max_task_chars", 1200) or 1200)
-        escalate, reason = await decide_escalate(self.front_llm, text)
-        if escalate:
-            return Route(
-                kind="delegate",
-                text=str(text),
-                reason=reason,
-                forced=reason != "boolean",
-            )
-
-        reply, reason2 = await self._front_chat(text, history)
-        route = parse_delegate(reply, max_task_chars=cap)
-        if route is not None:
-            return route
-        if getattr(self.delegate_cfg, "backstop", False) and is_task_shaped(
-            text, int(getattr(self.delegate_cfg, "backstop_min_score", 2) or 2)
-        ):
-            return Route(
-                kind="delegate", text=str(text), reason="backstop", forced=True
-            )
-        return Route(kind="chat", text=reply, reason=reason2 or reason)
-
-    async def _front_chat(self, text: str, history: list) -> tuple[str, str]:
-        """One short spoken reply from the front leg.
-
-        Returns ``(reply, reason)``. Never raises: a dead front leg on the
-        chat path is an empty reply, and an empty chat reply falls through
-        to the worker in _run_turn rather than answering with silence.
-        Delegation-talk ("I'll hand this to a larger model...") is also
-        emptied: the front model narrating a handoff instead of answering
-        is a miss, and the worker gives the real reply.
-        """
-        try:
-            res = await self.front_llm.generate(
-                self._front_messages(text, history), FRONT_CHAT_MAX_TOKENS
-            )
-            reply = str(getattr(res, "text", "") or "").strip()
-            if reply and _DELEGATION_TALK.search(reply):
-                return "", "chat-delegating"
-            return reply, "chat"
-        except Exception as exc:  # noqa: BLE001 - fall through to the worker
-            return "", f"chat-error:{type(exc).__name__}"
-
     async def _ensure_worker(self) -> str:
-        """Warm the lazy worker leg on first delegate route.
+        """Warm the worker leg on first use; "" when usable.
 
-        Returns "" when the worker is usable, else the refusal reason.
-        A refusal latches in _worker_unavailable so later YES turns fail
-        fast with the same message instead of re-trying a doomed warm.
-        An explicit /model switch to a warmed leg resets the latch (see
-        bridge.py model switch).
+        A refusal latches so later turns fail fast with the same reason.
+        ..
         """
-        if self.delegate_cfg is None:
-            return ""
         if getattr(self, "_worker_unavailable", None):
             return str(self._worker_unavailable)
         if getattr(self, "_worker_warmed", False):
@@ -673,7 +527,7 @@ class LongRunningAgent:
 
     @staticmethod
     def _worker_down_notice(task: str, reason: str) -> tuple:
-        """Transcript entry for a delegated turn the worker could not run."""
+        """Transcript entry for a turn the worker could not run."""
         return (
             str(task),
             WORKER_DOWN_TEMPLATE.format(reason=reason),
@@ -714,8 +568,6 @@ class LongRunningAgent:
         instead of silently running on the host.
         ..
         """
-        from src.sandbox.docker import DockerSandboxError, SandboxShellBackend
-
         turn_cwd = self._resolve_turn_cwd(cwd)
         box_cfg = getattr(self.config, "sandbox", None)
         if (
@@ -770,9 +622,7 @@ class LongRunningAgent:
     ):
         """One deep-agent invocation, yielding term/* mid-turn events.
 
-        With delegation on, this is the WORKER leg: it only runs for turns
-        the front brain handed over (or forced over via the backstop), and
-        it runs the full existing graph.
+        Runs the full graph; the caller owns the box lifecycle.
         """
         raw_confirm = self._confirm_wrapper(confirm_fn, sid)
 
@@ -938,7 +788,7 @@ class LongRunningAgent:
             yield AgentEvent(
                 node="term", kind="error", data={"message": str(exc)[:300]}
             )
-        thinking2, reply = split_thinking(final_reply)
+        thinking2, reply = LlmModel.split_thinking(final_reply)
         if thinking2 and thinking2 != last_think:
             thinking = thinking2
             if not live_think_shown:
@@ -979,12 +829,9 @@ class LongRunningAgent:
     ):
         """Serialize turns per session; queue + inject contenders.
 
-        The lock is taken BEFORE the front brain is consulted, not just
-        around the worker: two concurrent turns on one session would
-        otherwise both ask the front model about a conversation it has not
-        seen the first half of, and the second could answer from stale
-        context. The front call is also the slow part on a CPU placement,
-        so serializing it keeps the session coherent.
+        The lock is taken around the whole turn: two concurrent turns on
+        one session would otherwise interleave on state neither has seen
+        fully. Serializing keeps the session coherent.
         """
         lock = None
         if sid is not None:
@@ -1036,74 +883,18 @@ class LongRunningAgent:
         system_suffix: str,
         out_turns: list,
     ):
-        """Route one turn: front brain decides chat vs delegate.
+        """Run one turn on the worker graph.
 
-        A chat route is answered here and never touches the worker graph,
-        which is what keeps small talk off the 27B. A delegate route (or the
-        backstop forcing one) runs the worker agent and its result is what
-        the user hears — the front model does not get to reword it, so a
-        correct result can't be garbled on its way out.
+        Every turn runs the full agent; the reply is what the user hears.
+        ..
         """
-        if self.front_llm is None or self.delegate_cfg is None:
-            reason = await self._ensure_worker()
-            if reason:
-                out_turns.append(self._worker_down_notice(str(text), reason))
-                return
-            async for ev in self._agent_invoke(
-                text,
-                sid=sid,
-                cwd=cwd,
-                confirm_fn=confirm_fn,
-                system_suffix=system_suffix,
-                out_turns=out_turns,
-            ):
-                yield ev
-            return
-
-        history = self.sessions.history(sid) if sid else []
-        route = await self._front_decide(text, history)
-        self._note_route_disagreement(text, route)
-
-        if getattr(self.delegate_cfg, "emit_route", True):
-            yield AgentEvent(
-                node="term",
-                kind="route",
-                data={
-                    "brain": "front" if route.kind == "chat" else "worker",
-                    "kind": route.kind,
-                    "reason": str(route.reason or "")[:80],
-                    "forced": bool(route.forced),
-                },
-            )
-
-        if route.kind == "chat":
-            reply = str(route.text or "").strip()
-            if not reply:
-                reason = await self._ensure_worker()
-                if reason:
-                    out_turns.append(self._worker_down_notice(str(text), reason))
-                    return
-                async for ev in self._agent_invoke(
-                    text,
-                    sid=sid,
-                    cwd=cwd,
-                    confirm_fn=confirm_fn,
-                    system_suffix=system_suffix,
-                    out_turns=out_turns,
-                ):
-                    yield ev
-                return
-            out_turns.append((str(text), reply, ""))
-            return
-
-        task = str(route.text or "").strip() or str(text)
         reason = await self._ensure_worker()
         if reason:
-            out_turns.append(self._worker_down_notice(task, reason))
+            out_turns.append(self._worker_down_notice(str(text), reason))
             return
         before = len(out_turns)
         async for ev in self._agent_invoke(
-            task,
+            str(text),
             sid=sid,
             cwd=cwd,
             confirm_fn=confirm_fn,
@@ -1125,40 +916,11 @@ class LongRunningAgent:
                 else:
                     out_turns.append(notice)
 
-    def _note_route_disagreement(self, text: str, route: Route) -> None:
-        """Log where the 0.6B and the regex scorer disagree.
-
-        The boolean is the router; :func:`is_task_shaped` no longer decides
-        anything except the backstop override. But the two were measured on
-        opposite failure axes — the boolean is reliable on real tasks and
-        over-eager on chit-chat, the regex is the reverse — so the cases
-        where they disagree are the interesting ones and the only honest way
-        to tune the 0.6B on live traffic rather than on 37 prompts.
-        """
-        try:
-            scored = is_task_shaped(
-                text, int(getattr(self.delegate_cfg, "backstop_min_score", 2) or 2)
-            )
-            said = route.kind == "delegate"
-            if scored == said:
-                return
-            self._route_skew.setdefault(
-                "regex_no_model_yes" if said else "model_no_regex_yes", 0
-            )
-            self._route_skew[
-                "regex_no_model_yes" if said else "model_no_regex_yes"
-            ] += 1
-            log.info(
-                "route skew: model=%s regex=%s %.90s", route.kind, scored, str(text)
-            )
-        except Exception:  # noqa: BLE001 - telemetry must never break a turn
-            pass
-
     def _worker_missing_reason(self) -> str:
         """Why the worker leg is unusable this process, or "" if it is fine.
 
         ``warm()`` collects leg failures instead of raising, so a dead
-        worker is otherwise invisible until a delegated turn answers with
+        worker is otherwise invisible until a turn answers with
         nothing at all. Also covers the lazy-worker latch: a refused
         on-demand warm reports the same way as a failed boot warm.
         """
@@ -1297,14 +1059,126 @@ class LongRunningAgent:
     async def __call__(self, text: str, session_id: str | None = None) -> str:
         """Text turn on the long-running loop. Returns the final reply.
 
-        Collects run_text events; the last chat event wins. Voice entry
-        lives on the cascade; two-brain routing composes on VoiceAgent.
+        Complete invocation lives here: worker ensure, session lock,
+        box, agent build, stream, session write-back. Shared pieces
+        (leg lifecycle, box, graph assembly, memory) stay single-sourced
+        in their own methods. Voice entry lives on the cascade.
         ..
         """
-        reply = ""
-        async for ev in self.run_text(str(text), session_id=session_id):
-            if ev.kind == "chat":
-                reply = str(ev.data.get("reply", "") or reply)
-        return reply
+        if not str(text or "").strip():
+            raise ValueError("empty text")
+        sid = session_id
+        text = str(text)
+        reason = await self._ensure_worker()
+        if reason:
+            return WORKER_DOWN_TEMPLATE.format(reason=reason)
+        lock = None
+        if sid is not None:
+            lock = self._locks.setdefault(sid, asyncio.Lock())
+            if lock.locked():
+                self._pending.setdefault(sid, []).append(text)
+                return ""
+            await lock.acquire()
+        try:
+            texts = ([str(t) for t in self._pending.pop(sid, [])]
+                     + [text] if sid is not None else [text])
+            last_reply = ""
+            while texts:
+                current = texts.pop(0)
+                history = self.sessions.history(sid) if sid else []
+                mem_ctx = self._memory_context(sid, current) if sid else ""
+
+                async def _deny_all(name, args):
+                    return False
+
+                try:
+                    async with self._turn_box(".") as (turn_cwd, turn_backend):
+                        agent = self._build_agent(confirmer=_deny_all,
+                                                  backend=turn_backend)
+                        self.agent = agent
+                        lc_msgs = _lc_messages(history) + [
+                            HumanMessage(content=current + mem_ctx
+                                         + f"\nCWD: {turn_cwd} SHELL: bash")
+                        ]
+                        final_reply = ""
+                        did_work = False
+                        rl = 10 + int(getattr(self.config, "max_agent_steps", 6)
+                                      or 6) * 5
+                        stream = agent.astream(
+                            {"messages": lc_msgs},
+                            config={"recursion_limit": rl},
+                            stream_mode=["messages", "updates"],
+                        )
+                        async for chunk in stream:
+                            if isinstance(chunk, tuple) and len(chunk) == 2:
+                                mode, payload = chunk
+                            else:
+                                mode, payload = "updates", chunk
+                            if mode == "messages":
+                                continue
+                            if not isinstance(payload, dict):
+                                continue
+                            for _node, data in payload.items():
+                                msgs = (data.get("messages", [])
+                                        if isinstance(data, dict) else [])
+                                for m in msgs if isinstance(msgs, list) else []:
+                                    role, content, tool_calls, _ak = \
+                                        self._norm_msg(m)
+                                    if isinstance(content, list):
+                                        content = " ".join(
+                                            str(c.get("text", c))
+                                            for c in content
+                                            if isinstance(c, dict)
+                                        )
+                                    if role in ("ai", "assistant"):
+                                        if tool_calls:
+                                            did_work = True
+                                        elif str(content or "").strip():
+                                            final_reply = self._resolve_reply(
+                                                content)
+                                    elif role == "tool":
+                                        did_work = True
+                        thinking, reply = LlmModel.split_thinking(final_reply)
+                        reply = reply or final_reply
+                        if not reply and did_work:
+                            reply = "Done."
+                        if not str(reply).strip():
+                            why = self._worker_missing_reason()
+                            if why:
+                                reply = WORKER_DOWN_TEMPLATE.format(reason=why)
+                        if sid and (current or reply):
+                            try:
+                                before = (
+                                    [m.get("content", "")
+                                     for m in self.sessions.history(sid)]
+                                    if getattr(self.config, "memory_store",
+                                               False)
+                                    else []
+                                )
+                                self.sessions.remember_turn(sid, current,
+                                                             reply)
+                                if before:
+                                    self._memory_consolidate(sid, before)
+                            except Exception:
+                                pass
+                        last_reply = reply
+                        if reply:
+                            if is_degenerate(reply):
+                                last_reply = DEGENERATE_REPLY
+                                reply = DEGENERATE_REPLY
+                            if (getattr(self.config, "speak_text_turns", True)
+                                    and getattr(self, "tts", None) is not None):
+                                try:
+                                    await self.tts.speak(_speak_head(reply))
+                                except Exception:
+                                    pass
+                except _BoxError:
+                    pass
+                texts.extend(self._pending.pop(sid, [])
+                             if sid is not None else [])
+            return last_reply
+        finally:
+            if lock is not None:
+                lock.release()
 
 

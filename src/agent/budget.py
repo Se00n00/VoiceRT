@@ -43,6 +43,11 @@ CONTEXT_TOKENS = {
     "qwen": 8192,
     "groq": 131072,
     "gemini": 65536,
+    "anthropic": 200000,
+    "openai": 128000,
+    "openrouter": 128000,
+    "deepseek": 64000,
+    "openai_compat": 32768,
 }
 # Think + tool call must fit in ONE step (matches chat_model floors).
 # Heuristic for mixed chat/tool text when no tokenizer is reachable.

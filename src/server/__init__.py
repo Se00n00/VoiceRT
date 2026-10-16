@@ -20,6 +20,9 @@ Endpoints (see ``src/server/routes/`` for the handlers):
 - ``WS /deep`` — autonomous turns over the same agent (confirms auto-pass)
 - ``POST /talk/offer`` — WebRTC offer/answer handshake for a duplex call
 - ``WS /chat`` — pure Qwen chat (no tools, no confirms)
+- ``GET /keys`` — per-provider stored flags (never values)
+- ``POST /keys`` {provider, key} — store one key in the OS keychain
+- ``DELETE /keys/{provider}`` — remove one key from the OS keychain
 - ``GET /metrics`` — uptime, turns, VRAM/RAM/CPU/GPU, legs
 - ``GET /metrics/context?sid=`` — session context usage
 - ``GET /legs`` — leg labels, model profile, tool policy
@@ -35,6 +38,7 @@ from . import state
 from .routes import (
     chat_router,
     console_router,
+    keys_router,
     sessions_router,
     system_router,
     talk_router,
@@ -62,6 +66,7 @@ def create_app(agent=None):
     app.include_router(chat_router)
     app.include_router(talk_router)
     app.include_router(console_router)
+    app.include_router(keys_router)
 
     @app.on_event("startup")
     async def _warm():

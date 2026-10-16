@@ -20,7 +20,7 @@ import tempfile
 import time
 
 from src.agent.events import AgentEvent
-from src.models.llm import split_thinking
+from src.models.llm import LlmModel
 from src.prompts.sim import (  # noqa: F401  (single home, re-exported)
     FINAL_COMPOSE_TEMPLATE,
     MAX_SUBTASKS,
@@ -129,7 +129,7 @@ class SimAgent:
                                    [:200]})
             return
         try:
-            _, plan_text = split_thinking(plan_raw)
+            _, plan_text = LlmModel.split_thinking(plan_raw)
         except Exception:
             plan_text = plan_raw
         subtasks = parse_plan(plan_text, self.max_subtasks)

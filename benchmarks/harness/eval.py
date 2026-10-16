@@ -304,7 +304,7 @@ def main() -> None:
                     help="regenerate manifest(s) instead of evaluating")
     ap.add_argument("--suite", default="all", choices=("all", "gaia", "tb21"))
     ap.add_argument("--model", default="Qwen/Qwen3-0.6B",
-                    help="HF id for local legs; model id for groq/gemini legs")
+                    help="HF id for local legs; model id for cloud legs")
     ap.add_argument("--backend", default="qwen")
     ap.add_argument("--tag", default="harness")
     ap.add_argument("--timeout", type=int, default=600)

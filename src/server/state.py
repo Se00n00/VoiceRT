@@ -62,7 +62,7 @@ MODEL_PROFILES = {
         "label": "qwen3-0.6B",
         "model": "Qwen/Qwen3-0.6B",
         "backend": "qwen",
-        "desc": "0.6B fused on CUDA — DEFAULT: same weights as the two-brain front leg, chat/routing only",
+        "desc": "0.6B fused on CUDA — DEFAULT local leg, chat/routing only",
         "ready": True,
     },
     "bonsai": {
@@ -81,15 +81,58 @@ MODEL_PROFILES = {
         "desc": "Groq cloud via LangChain (no GPU; needs GROQ_API_KEY)",
         "ready": True,
     },
+    "anthropic": {
+        "name": "anthropic",
+        "label": "claude-sonnet",
+        "model": "claude-sonnet-4-5",
+        "backend": "anthropic",
+        "desc": "Claude via LangChain (no GPU; needs ANTHROPIC_API_KEY)",
+        "ready": True,
+    },
+    "openai": {
+        "name": "openai",
+        "label": "gpt-4o-mini",
+        "model": "gpt-4o-mini",
+        "backend": "openai",
+        "desc": "OpenAI via LangChain (no GPU; needs OPENAI_API_KEY)",
+        "ready": True,
+    },
+    "openrouter": {
+        "name": "openrouter",
+        "label": "openrouter",
+        "model": "deepseek/deepseek-chat",
+        "backend": "openrouter",
+        "desc": "Any OpenRouter model via LangChain (needs OPENROUTER_API_KEY)",
+        "ready": True,
+    },
+    "deepseek": {
+        "name": "deepseek",
+        "label": "deepseek-chat",
+        "model": "deepseek-chat",
+        "backend": "deepseek",
+        "desc": "DeepSeek via LangChain (no GPU; needs DEEPSEEK_API_KEY)",
+        "ready": True,
+    },
+    "compat": {
+        "name": "compat",
+        "label": "openai-compat",
+        "model": "",
+        "backend": "openai_compat",
+        "desc": "Any OpenAI-compatible endpoint (needs OPENAI_COMPAT_BASE_URL + OPENAI_COMPAT_MODEL)",
+        "ready": True,
+    },
 }
 
 
-_current_model = {"name": "qwen"}
+DEFAULT_MODEL = "groq"
+"""Boot profile (groq/oss-120b); falls back to qwen without a key."""
+
+_current_model = {"name": DEFAULT_MODEL}
 
 
 # Brain mode: "voice" runs the full voice agent (voice pipeline on top of
 # the main LLM harness); "harness" runs just the LLM harness (text turns
-# only, no duplex voice). The LLM harness itself (groq/bonsai via
+# only, no duplex voice). The LLM harness itself (cloud/local via
 # MODEL_PROFILES) is shared by both brains. The harness brain defaults to
 # groq: entering it stashes the voice brain's model in "prev_model" and
 # auto-switches, leaving it restores the stash.
@@ -264,7 +307,7 @@ async def _maybe_title(agent, sid, text, ws) -> None:
         from src.agent.title import generate_title
 
         title, _reason = await generate_title(
-            getattr(agent, "front_llm", None), text)
+            getattr(agent, "llm", None), text)
         if not title:
             return
         if sessions is not None:
@@ -323,11 +366,11 @@ async def _compact_sessions(agent, target: str,
             else:
                 from langchain_core.messages import HumanMessage
 
-                from src.agent.cloud_models import chat_text
+                from src.models.provider import ChatModel
 
                 out = await chat_model.ainvoke(
                     [HumanMessage(content=SUMMARIZE_PROMPT + chunk)])
-                summary = chat_text(getattr(out, "content", "")).strip()
+                summary = ChatModel.chat_text(getattr(out, "content", "")).strip()
         except Exception:
             continue
         if not summary:
@@ -353,11 +396,11 @@ async def _switch_to_cloud(name: str, profile: dict, agent) -> dict:
 
     ..
     """
-    from src.agent.cloud_models import make_chat_model
+    from src.models.provider import ChatModel
 
     backend = str(profile.get("backend", "") or "").lower()
     try:
-        chat_model = make_chat_model(backend, str(profile.get("model", "") or ""))
+        chat_model = ChatModel.get(backend, str(profile.get("model", "") or ""))
     except Exception as exc:
         return {"kind": "error",
                 "message": f"new leg failed to warm: {exc}"[:300]}
@@ -427,9 +470,9 @@ async def switch_model(name: str) -> dict:
             return {"kind": "ok", "current": name, "note": "already active"}
         agent = get_agent()
         try:
-            from src.agent.cloud_models import is_cloud_backend
+            from src.models.provider import ChatModel
 
-            if is_cloud_backend(str(profile.get("backend", "") or "")):
+            if ChatModel.is_cloud_backend(str(profile.get("backend", "") or "")):
                 return await _switch_to_cloud(name, profile, agent)
         except Exception:
             pass
@@ -470,11 +513,10 @@ async def switch_model(name: str) -> dict:
                     "message": f"re-warm after switch failed: {exc}"[:300]}
         agent.llm = new_llm
         try:
-            from src.agent.chat_model import LocalChatModel
+            from src.models.chat_model import LocalChatModel
 
             agent.active_model_label = str(profile.get("label", "") or name)
-            agent.chat_model = LocalChatModel(
-                llm=new_llm, use_mcp_fs=bool(getattr(agent, "_extra_tools", [])))
+            agent.chat_model = LocalChatModel(llm=new_llm)
             agent.agent = agent._build_agent()
         except Exception:
             pass
@@ -502,14 +544,50 @@ async def switch_model(name: str) -> dict:
         return out
 
 
+def _apply_default_profile(agent) -> None:
+    """Swap a fresh agent to DEFAULT_MODEL without a smoke call.
+
+    Cloud defaults pre-wire when a key resolves (first turn surfaces
+    errors); without one the qwen build stands and the label follows.
+    A failed graph rebuild restores the previous legs. Never raises.
+    ..
+    """
+    try:
+        name = str(_current_model.get("name", "") or "").lower()
+        profile = MODEL_PROFILES.get(name) or {}
+        if name == "qwen" or not profile.get("ready"):
+            return
+        from src.models.provider import ChatModel
+
+        backend = str(profile.get("backend", "") or "")
+        if not ChatModel.is_cloud_backend(backend):
+            return
+        old_llm, old_chat = (getattr(agent, "llm", None),
+                             getattr(agent, "chat_model", None))
+        try:
+            agent.chat_model = ChatModel.get(
+                backend, str(profile.get("model", "") or ""))
+        except SystemExit:
+            _current_model["name"] = "qwen"
+            return
+        except Exception:
+            return
+        agent.llm = None
+        try:
+            agent.agent = agent._build_agent()
+        except Exception:
+            agent.llm, agent.chat_model = old_llm, old_chat
+            _current_model["name"] = "qwen"
+            return
+        agent._worker_warmed = True
+    except Exception:
+        pass
+
+
 def get_agent():
     """Process-wide VoiceAgent, built on first use.
 
-    Two-brain delegation is ON here (and in server.py): a small front model
-    talks to the user and is given no tools — it answers one yes/no question
-    per turn, and a YES hands the raw user text to the worker leg with the
-    full harness. Off with ``VOICE_DELEGATE=0`` for the old single-brain
-    behaviour.
+    Every turn runs the full worker graph with tools and memory.
 
     VOICE_TEXT_ONLY=1 skips the TTS leg (warm + per-turn speak): text
     turns stay VRAM-clean on 4GB cards next to a 27B LLM. Voice turns
@@ -524,19 +602,15 @@ def get_agent():
         from src.main import VoiceAgent, VoiceAgentConfig
 
         text_only = os.environ.get("VOICE_TEXT_ONLY", "").strip() == "1"
-        delegate = os.environ.get("VOICE_DELEGATE", "").strip()
-        harness = LongRunningConfig(speak_text_turns=not text_only,
-                                    delegate=delegate not in ("0", "false", "no"))
-        dpath = os.environ.get("VOICE_DELEGATE_CONFIG", "").strip()
-        if dpath:
-            harness = harness.model_copy(update={"delegate_config": dpath})
+        harness = LongRunningConfig(speak_text_turns=not text_only)
         cfg = VoiceAgentConfig(harness=harness)
         _agent = VoiceAgent(cfg)
+        _apply_default_profile(_agent)
         try:
             _agent.active_model_label = str(
                 MODEL_PROFILES.get(
                     str(_current_model.get("name", "") or ""),
-                    {}).get("label", "") or "qwen3-0.6B")
+                    {}).get("label", "") or "gpt-oss-120b")
         except Exception:
             pass
     return _agent
@@ -548,9 +622,10 @@ def _wav_b64(wav: np.ndarray) -> str:
 
 
 def qwen_leg(agent):
-    """Pure-Qwen chat leg: front brain first, else the main leg when it is
-    itself qwen-backed. Returns None when only a sidecar leg exists."""
-    for cand in (getattr(agent, "front_llm", None), getattr(agent, "llm", None)):
+    """Pure-Qwen chat leg: the main leg when it is qwen-backed.
+
+    Returns None when only a sidecar leg exists."""
+    for cand in (getattr(agent, "llm", None),):
         if cand is None:
             continue
         try:

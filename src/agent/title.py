@@ -1,4 +1,4 @@
-"""Two-word session titles from the front brain.
+"""Two-word session titles from the small leg.
 
 Ported in spirit from opencode's title generator
 (``packages/opencode/src/agent/prompt/title.txt`` + the forked
@@ -9,11 +9,9 @@ Two deliberate differences from opencode:
 
 - **The small model is already loaded.** opencode calls
   ``provider.getSmallModel()`` because it has one big model per provider and
-  has to go find a cheap one. Here the front leg (``agent.front_llm``,
-  Qwen3-0.6B) is a separate instance that is already warm and in VRAM, so
-  the title rides it and adds no weights to a 4GB card.
-- **The front brain only ever decides, never constructs** — the same
-  contract as :data:`~src.agent.delegate.BOOLEAN_SYSTEM`. It is asked for a
+  has to go find a cheap one. Here the caller passes its own leg, so
+  the title adds no weights to a 4GB card.
+- **The call only ever labels, never constructs** — it is asked for a
   two-word label and nothing else; no tools, no chat history, no task
   string. The failure mode of a 0.6B asked to *write* something is
   narration ("Sure! Here's a title: ..."), which is exactly what
@@ -99,21 +97,21 @@ def parse_title(raw: str, max_words: int = 2, max_chars: int = 40) -> str | None
     return out or None
 
 
-async def generate_title(front_llm, text: str, *,
+async def generate_title(llm, text: str, *,
                          max_words: int = 2) -> tuple[str | None, str]:
-    """Ask the front brain for a two-word title.
+    """Ask the model for a two-word title.
 
-    Returns ``(title, reason)``. Never raises: a dead front leg, an
-    unparseable answer and an empty utterance all return ``None`` with a
+    Returns ``(title, reason)``. Never raises: a dead leg, an
+    unparsable answer and an empty utterance all return ``None`` with a
     reason, because the caller falls back to an offline name and a title is
     never worth failing a turn over.
     """
-    if front_llm is None:
-        return None, "no-front-leg"
+    if llm is None:
+        return None, "no-leg"
     if not str(text or "").strip():
         return None, "empty"
     try:
-        res = await front_llm.generate(
+        res = await llm.generate(
             title_messages(text), TITLE_MAX_TOKENS)
     except Exception as exc:  # noqa: BLE001 - a title is never worth an error
         return None, f"error:{type(exc).__name__}"

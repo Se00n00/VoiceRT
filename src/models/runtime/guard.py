@@ -191,25 +191,15 @@ def sidecar_gpu_estimate(backend: str, config=None) -> tuple[bool, float]:
     """(needs_gpu, vram_mb) for the sidecar backend.
 
     Only bonsai parks anything in VRAM (``-ngl`` layers); everything
-    else returns ``(False, 0.0)``. Cloud backends (groq/gemini) never
+    else returns ``(False, 0.0)``. Cloud backends never
     touch this path — they are stock LangChain models, not sidecars.
     """
     if str(backend) != "bonsai":
         return False, 0.0
     try:
-        from src.models.bonsai_llamacpp import (
-            CUDA_CTX_RESERVE_MB,
-            GGUF_FILES,
-            N_LANG_LAYERS,
-            resolve_ngl,
-        )
+        from src.models.bonsai import BonsaiLlamaCpp
 
-        ngl = resolve_ngl(getattr(config, "bonsai_ngl", "auto"))
-        if ngl <= 0:
-            return False, 0.0
-        total_mb = float(GGUF_FILES["ptq1_0"][1]) / 1024.0 / 1024.0
-        per_layer = total_mb / max(1, int(N_LANG_LAYERS))
-        return True, ngl * per_layer + float(CUDA_CTX_RESERVE_MB)
+        return BonsaiLlamaCpp.gpu_estimate(config)
     except Exception:
         # Unknown layout: assume it may touch the card (tenant lock +
         # driver check) but price no VRAM beyond that.
@@ -218,9 +208,9 @@ def sidecar_gpu_estimate(backend: str, config=None) -> tuple[bool, float]:
 
 def _ram_avail_gb() -> float:
     try:
-        from src.models.bonsai_llamacpp import mem_available_gb
+        from src.models.bonsai import BonsaiLlamaCpp
 
-        return float(mem_available_gb())
+        return float(BonsaiLlamaCpp.mem_available_gb())
     except Exception:
         return 0.0
 

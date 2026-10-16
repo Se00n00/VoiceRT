@@ -1,6 +1,6 @@
 """Chat-model repair nudges. Single source of truth.
 
-Moved here verbatim from ``src.agent.chat_model.LocalChatModel``: the
+Moved here verbatim from ``src.models.chat_model.LocalChatModel``: the
 one-retry nudges for garbled / echoed / unparsable tool calls, and the
 repeat-guard note that steers the model off a third identical read-only
 call. ``LocalChatModel`` imports these; behaviour is unchanged.

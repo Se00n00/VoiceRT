@@ -4,7 +4,8 @@
 Methodology (mirrors Berkeley BFCL's offline AST check, adapted to our
 single-model setup): each case is ONE greedy model call through the exact
 production path (chat template + routed tools + stop strings). The raw
-output is parsed with the production parsers; the predicted call is
+output is extracted with the model's template extractor
+(LlmModel.extract_tool_calls); the predicted call is
 compared AST-style against the expected tool + required args.
 
 Metrics per run:
@@ -36,10 +37,10 @@ def _required_args():
             for t in TERMINAL_TOOLS}
 
 
-def _args_dict(action):
-    if action is None:
+def _args_dict(call):
+    if call is None:
         return {}
-    return {k: v for k, v in action.as_dict().items() if k != "action"}
+    return dict(call[1] or {})
 
 
 async def _attempt(cm, llm, msgs, max_tokens, tools, counter):
@@ -62,18 +63,22 @@ async def _attempt(cm, llm, msgs, max_tokens, tools, counter):
 
 
 async def run_case(cm, llm, case, max_tokens):
-    """Returns (predicted_action_or_None, retries, seconds, raws)."""
+    """Returns (predicted (tool, args) or None, retries, seconds, raws)."""
     from src.agent.tool_router import tools_for_request
 
     text = case["prompt"]
-    msgs = llm.messages_for_terminal(text, [], cwd=".", observation="")
+    # Mirror production: template-native legs get real tool specs and no
+    # prose catalogue (see LocalChatModel._needs_catalogue).
+    msgs = llm.messages_for_terminal(text, [], cwd=".", observation="",
+                                      catalogue=False)
     tools = tools_for_request(text, "")
     counter = {"streams": 0}
     raws = []
     t0 = time.perf_counter()
     raw = await _attempt(cm, llm, msgs, max_tokens, tools, counter)
     raws.append(raw)
-    thinking, answer, action = cm._parse_action(raw)
+    thinking, answer, calls = cm._parse_action(raw)
+    call = calls[0] if calls else None
     retries = 0
     if cm._needs_retry(raw, thinking, answer) is not None:
         retries = 1
@@ -81,28 +86,29 @@ async def run_case(cm, llm, case, max_tokens):
         msgs2 = msgs + [{"role": "user", "content": nudge}]
         raw2 = await _attempt(cm, llm, msgs2, max_tokens, tools, counter)
         raws.append(raw2)
-        thinking, answer, action = cm._parse_action(raw2)
+        thinking, answer, calls = cm._parse_action(raw2)
+        call = calls[0] if calls else None
     dt = time.perf_counter() - t0
-    return action, retries, dt, raws, counter["streams"]
+    return call, retries, dt, raws, counter["streams"]
 
 
-def score_case(case, action, required):
+def score_case(case, call, required):
     """(tp, fp, fn, valid_or_none). Exact (tool, required-args) match."""
     exp = case.get("expected")
     if exp is None:
         # chat case: any real tool call is a false positive
-        if action is None or getattr(action, "op", "") == "done":
+        if call is None:
             return 0, 0, 0, None
-        return 0, 1, 0, _valid(action, required)
-    if action is None or getattr(action, "op", "") == "done":
+        return 0, 1, 0, _valid(call, required)
+    if call is None:
         return 0, 0, 1, None
-    if action.op != exp["tool"]:
-        return 0, 1, 1, _valid(action, required)
+    if call[0] != exp["tool"]:
+        return 0, 1, 1, _valid(call, required)
     want = exp.get("args", {}) or {}
-    got = _args_dict(action)
+    got = _args_dict(call)
     if all(str(got.get(k, "")).strip() == str(v).strip() for k, v in want.items()):
-        return 1, 0, 0, _valid(action, required)
-    return 0, 1, 1, _valid(action, required)
+        return 1, 0, 0, _valid(call, required)
+    return 0, 1, 1, _valid(call, required)
 
 
 def result_flag(tp, fp, fn) -> str:
@@ -115,24 +121,22 @@ def result_flag(tp, fp, fn) -> str:
     return "TN " if not fn else "FN "
 
 
-def _valid(action, required):
-    if action is None or getattr(action, "op", "") == "done":
+def _valid(call, required):
+    if call is None:
         return None
-    need = required.get(action.op, set())
-    got = _args_dict(action)
+    need = required.get(call[0], set())
+    got = _args_dict(call)
     return all(str(got.get(k, "") or "").strip() for k in need)
 
 
 async def main_async(args, cases):
-    from src.agent.chat_model import LocalChatModel
+    from src.models.chat_model import LocalChatModel
     from src.models.llm import LlmConfig, LlmModel
 
     llm = LlmModel(LlmConfig(model=args.model, backend=args.backend))
     print(f"warming {args.model} [{args.backend}] ...", flush=True)
     await llm.warm()
-    from src.models.llm import assert_ready_leg
-
-    print(f"ready on {assert_ready_leg(llm)}.", flush=True)
+    print(f"ready on {LlmModel.assert_ready_leg(llm)}.", flush=True)
     cm = LocalChatModel(llm=llm)
     base = int(getattr(getattr(llm, "config", None), "max_tokens", 48) or 48)
     _be = str(getattr(getattr(llm, "config", None), "backend", ""))
@@ -144,9 +148,9 @@ async def main_async(args, cases):
 
     rows = []
     for case in cases:
-        action, retries, dt, raws, streams = await run_case(cm, llm, case, max_tokens)
-        tp, fp, fn, valid = score_case(case, action, required)
-        pred = None if action is None else {"tool": action.op, **_args_dict(action)}
+        call, retries, dt, raws, streams = await run_case(cm, llm, case, max_tokens)
+        tp, fp, fn, valid = score_case(case, call, required)
+        pred = None if call is None else {"tool": call[0], **_args_dict(call)}
         rows.append({
             "id": case["id"], "category": case.get("category", "?"),
             "prompt": case["prompt"],

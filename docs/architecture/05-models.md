@@ -69,7 +69,7 @@ plausible-looking numbers at 30× the latency.
 `LlmModel.stream` is an async generator yielding `LlmToken` (`llm.py:250`).
 `LlmResult` (`llm.py:242`) carries the assembled text.
 
-`LocalChatModel._stream_raw` (`src/agent/chat_model.py:250-343`) consumes it
+`LocalChatModel._stream_raw` (`src/models/chat_model.py`) consumes it
 and does two things worth noting:
 
 1. **Groups consecutive think pieces into one `<think>…</think>` block**

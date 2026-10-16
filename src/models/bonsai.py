@@ -23,7 +23,7 @@ upstream. Stock builds refuse PTQ1_0/PQ2_0, and a Q2_0 file loads silent
 + outputs gibberish. :func:`resolve_server_bin` enforces the fork tag.
 
 Tool-call grammar: composed raw text (contract for
-``parse_gemma_action`` in :mod:`src.agent.chat_model`) — optional chat
+``LlmModel.extract_tool_calls`` in :mod:`src.models.llm`) — optional chat
 ``content``, then zero or more ``<|tool_call>call:NAME ARGS <tool_call|>``
 blocks. One parser serves both sidecars.
 
@@ -42,21 +42,22 @@ import os
 import subprocess
 import time
 import urllib.request
+import uuid
+from typing import Any, List, Optional
+
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
+from langchain_core.outputs import ChatGeneration, ChatResult
 
 __all__ = [
+    "BonsaiChatModel",
     "BonsaiLlamaCpp",
-    "compose_raw",
-    "to_openai_tools",
-    "resolve_gguf",
-    "resolve_mmproj",
-    "resolve_server_bin",
-    "resolve_ngl",
-    "ngl_attempts",
-    "kv_mb_est",
-    "ram_required_gb",
-    "cached_gguf_bytes",
-    "mem_available_gb",
-    "vram_free_mb",
 ]
 
 REPO_ID = "prism-ml/Ternary-Bonsai-2-27B-gguf"
@@ -361,7 +362,7 @@ def compose_raw(content, tool_calls, reasoning=""):
 
     ``tool_calls`` are OpenAI-style ``{"name":..., "arguments": str|dict}``.
     The server returns reasoning in a separate ``reasoning_content`` field —
-    wrapping it in ``<think>`` here is what lets :func:`split_thinking`
+    wrapping it in ``<think>`` here is what lets ``LlmModel.split_thinking``
     downstream turn it into ``thinking`` events (otherwise Bonsai's
     thoughts are silently dropped and the TUI shows no think trace).
     Same raw-text grammar the sidecar parser consumes.
@@ -648,8 +649,188 @@ class BonsaiLlamaCpp:
                 acc["ttft"] = float(t.get("prompt_ms", 0.0) or 0.0) / 1000.0
                 acc["decode_tps"] = (1000.0 * n / ms) if ms > 0 and n else 0.0
         ordered = [{"function": {"name": v["name"], "arguments": v["arguments"]}}
-                   for _, v in sorted(tcs.items()) if v["name"]]
+                    for _, v in sorted(tcs.items()) if v["name"]]
         acc["tool_calls"] = ordered
         tail = compose_raw("", ordered)
         if tail:
             yield ("text", tail)
+
+    @staticmethod
+    def mem_available_gb() -> float:
+        """Free RAM in GB via the module probe. Pure.
+
+        Presentation entry so callers never import helpers.
+        ..
+        """
+        return mem_available_gb()
+
+    @staticmethod
+    def resolve_ngl(explicit="auto", vram_free="auto", gguf_bytes=None,
+                    n_ctx=N_CTX_DEFAULT, kv_type=KV_TYPE_DEFAULT,
+                    reserve_mb=CUDA_CTX_RESERVE_MB,
+                    overhead_mb=COMPUTE_OVERHEAD_MB,
+                    n_layers=N_LANG_LAYERS) -> int:
+        """GPU layer count via the module equation. Pure.
+
+        Presentation entry so callers never import helpers.
+        ..
+        """
+        return resolve_ngl(explicit=explicit, vram_free=vram_free,
+                           gguf_bytes=gguf_bytes, n_ctx=n_ctx,
+                           kv_type=kv_type, reserve_mb=reserve_mb,
+                           overhead_mb=overhead_mb, n_layers=n_layers)
+
+    @classmethod
+    def gpu_estimate(cls, config=None) -> tuple:
+        """(needs_gpu, vram_mb) parked by -ngl layers. Pure.
+
+        Zero ngl means CPU-only: no GPU needed at all.
+        ..
+        """
+        ngl = cls.resolve_ngl(getattr(config, "bonsai_ngl", "auto"))
+        if ngl <= 0:
+            return False, 0.0
+        total_mb = float(GGUF_FILES["ptq1_0"][1]) / 1024.0 / 1024.0
+        per_layer = total_mb / max(1, int(N_LANG_LAYERS))
+        return True, ngl * per_layer + float(CUDA_CTX_RESERVE_MB)
+
+
+class BonsaiChatModel(BaseChatModel):
+    """LangChain chat face over a BonsaiLlamaCpp sidecar leg."""
+
+    leg: Any
+    bound_tools: Optional[List[dict]] = None
+    max_tokens: int = 320
+
+    def __init__(self, leg: Any, **kwargs):
+        super().__init__(leg=leg, **kwargs)
+
+    @property
+    def _llm_type(self) -> str:
+        """Short backend id reported to LangChain.
+
+        ..
+        """
+        return "bonsai"
+
+    def bind_tools(self, tools, **kwargs):
+        """Attach house-shape tool specs for the next call.
+
+        Dict specs pass through; foreign tool objects are skipped.
+        ..
+        """
+        defs = [t for t in tools or []
+                if isinstance(t, dict) and "name" in t]
+        return BonsaiChatModel(leg=self.leg, bound_tools=defs or None,
+                               max_tokens=self.max_tokens)
+
+    @staticmethod
+    def _content_text(content) -> str:
+        """LangChain content (str or list blocks) -> plain text.
+
+        ..
+        """
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for b in content:
+                if isinstance(b, dict) and isinstance(b.get("text"), str):
+                    parts.append(b["text"])
+                elif isinstance(b, str):
+                    parts.append(b)
+            return "".join(parts)
+        return str(content or "")
+
+    @classmethod
+    def _to_openai(cls, messages: List[BaseMessage]) -> list:
+        """LangChain messages -> OpenAI dicts for the sidecar.
+
+        Assistant tool calls ride along in OpenAI shape.
+        ..
+        """
+        out = []
+        for m in messages or []:
+            if isinstance(m, SystemMessage):
+                out.append({"role": "system",
+                            "content": cls._content_text(m.content)})
+            elif isinstance(m, HumanMessage):
+                out.append({"role": "user",
+                            "content": cls._content_text(m.content)})
+            elif isinstance(m, AIMessage):
+                entry: dict = {"role": "assistant",
+                               "content": cls._content_text(m.content)}
+                tcs = []
+                for tc in getattr(m, "tool_calls", None) or []:
+                    if isinstance(tc, dict):
+                        name, args = tc.get("name", ""), tc.get("args", {})
+                    else:
+                        name = getattr(tc, "name", "")
+                        args = getattr(tc, "args", {})
+                    if not name:
+                        continue
+                    tcs.append({
+                        "id": (tc.get("id") if isinstance(tc, dict)
+                               else getattr(tc, "id", ""))
+                        or f"call_{uuid.uuid4().hex[:8]}",
+                        "type": "tool_call",
+                        "function": {
+                            "name": str(name),
+                            "arguments": (args if isinstance(args, str)
+                                          else json.dumps(args or {})),
+                        },
+                    })
+                if tcs:
+                    entry["tool_calls"] = tcs
+                out.append(entry)
+            elif isinstance(m, ToolMessage):
+                out.append({"role": "tool",
+                            "content": cls._content_text(m.content),
+                            "tool_call_id": str(getattr(m, "tool_call_id",
+                                                        "") or "")})
+        return out
+
+    @staticmethod
+    def _tool_args(raw) -> dict:
+        """Server arguments (dict or JSON str) -> args dict.
+
+        Unparseable strings survive under "text", never dropped.
+        ..
+        """
+        if isinstance(raw, dict):
+            return raw
+        try:
+            parsed = json.loads(raw or "{}")
+            return parsed if isinstance(parsed, dict) else {"text": str(raw)}
+        except Exception:
+            return {"text": str(raw or "")}
+
+    def _generate(self, messages: List[BaseMessage], stop=None,
+                  run_manager=None, **kwargs) -> ChatResult:
+        """One sidecar turn -> AIMessage with parsed tool calls.
+
+        Server-native tool calls win; the composed text stays content.
+        ..
+        """
+        oai = self._to_openai(messages)
+        limit = int(kwargs.get("max_tokens") or self.max_tokens)
+        out = self.leg.chat(oai, self.bound_tools, limit, stop)
+        tcs = []
+        for tc in out.get("tool_calls", []) or []:
+            fn = (tc.get("function") or {}) if isinstance(tc, dict) else {}
+            name = str(fn.get("name", "") or "")
+            if not name:
+                continue
+            tcs.append({
+                "name": name,
+                "args": self._tool_args(fn.get("arguments", "")),
+                "id": str(tc.get("id", "") or "")
+                if isinstance(tc, dict) else "",
+                "type": "tool_call",
+            })
+        for tc in tcs:
+            if not tc["id"]:
+                tc["id"] = f"call_{uuid.uuid4().hex[:8]}"
+        msg = AIMessage(content=str(out.get("text", "") or ""),
+                        tool_calls=tcs or [])
+        return ChatResult(generations=[ChatGeneration(message=msg)])

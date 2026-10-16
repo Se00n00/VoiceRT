@@ -1,7 +1,7 @@
 """Inject the router's tool shortlist into one model call.
 
 Pluggable hook for the deepagents middleware list: hands the narrowed
-op set to :class:`src.agent.chat_model.LocalChatModel` for the current
+op set to :class:`src.models.chat_model.LocalChatModel` for the current
 model call only (a ContextVar owned by :mod:`src.agent.tool_router`,
 always reset). Anything unresolved hands through untouched, so a turn
 can never break here.

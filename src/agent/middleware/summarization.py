@@ -14,7 +14,7 @@ from deepagents.middleware.summarization import (
 )
 
 from src.agent.budget import CONTEXT_TOKENS, count_messages
-from src.agent.chat_model import LocalChatModel
+from src.models.chat_model import LocalChatModel
 
 __all__ = ["SummarizationMiddleware"]
 
@@ -23,7 +23,7 @@ def SummarizationMiddleware(*, llm=None, backend=None, model=None):
     """Build the summarization middleware, or None when unavailable."""
     try:
         if model is None and llm is not None and hasattr(llm, "config"):
-            from src.agent.chat_model import LocalChatModel
+            from src.models.chat_model import LocalChatModel
 
             backend_id = str(getattr(llm.config, "backend", ""))
             ctx = int(CONTEXT_TOKENS.get(backend_id, 8192))

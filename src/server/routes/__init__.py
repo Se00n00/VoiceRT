@@ -2,6 +2,7 @@
 
 from .chat import router as chat_router
 from .console import router as console_router
+from .keys import router as keys_router
 from .sessions import router as sessions_router
 from .system import router as system_router
 from .talk import router as talk_router
@@ -11,6 +12,7 @@ from .voice import router as voice_router
 __all__ = [
     "chat_router",
     "console_router",
+    "keys_router",
     "sessions_router",
     "system_router",
     "talk_router",

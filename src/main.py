@@ -1,7 +1,6 @@
 """VoiceAgent: ONE autonomous agent for voice, terminal, and everything else.
 
-Device placement (two brains: Qwen3-0.6B fused front on GPU/CPU +
-Bonsai-27B sidecar worker):
+Device placement:
 
 - LLM  Qwen3-0.6B fused Triton (``backend="qwen"``) or Bonsai 27B
   llama.cpp sidecar (``backend="bonsai"``) for agentic work.
@@ -26,15 +25,14 @@ from src.long_running import (
     LongRunningConfig,
     _lc_messages,
 )
-from src.models.llm import split_thinking
+from src.models.llm import LlmModel
 
 __all__ = ["VoiceAgentConfig", "VoiceAgent"]
 
 class VoiceAgentConfig(BaseModel):
-    """Two-brain shell config: cascade + harness sub-configs.
+    """Shell config: cascade + harness sub-configs.
 
-    Flat kwargs are gone: pass cascade=/harness= configs (step 3 adds
-    front/worker routing fields here).
+    Flat kwargs are gone: pass cascade=/harness= configs.
     ..
     """
 
@@ -46,7 +44,7 @@ class VoiceAgentConfig(BaseModel):
 
 
 class VoiceAgent(LongRunningAgent):
-    """Text + voice entry points. Two-brain composition lands here.
+    """Text + voice entry points.
 
     Behavioral shell over the harness + cascade: every attribute and
     method external callers use keeps working unchanged.
@@ -74,41 +72,14 @@ class VoiceAgent(LongRunningAgent):
         """
         if isinstance(audio_or_text, str):
             return self._text_reply(str(audio_or_text), session_id=session_id)
-        if (
-            bool(self.fast_voice)
-            and self.delegate_cfg is None
-        ):
+        if bool(self.fast_voice):
             return self._voice_fast(audio_or_text, sr=sr, session_id=session_id)
         return self._voice_turns(audio_or_text, sr=sr, session_id=session_id)
 
     async def _text_reply(self, text: str, session_id: str | None = None) -> str:
-        """One text turn, reply string only (no audio synthesis).
-
-        With delegation on, the front brain routes first: a chat route
-        answers here and never builds the worker graph at all, which is the
-        whole point of the split on a text path that otherwise pays for
-        agent setup on "hi".
-        """
+        """One text turn, reply string only (no audio synthesis)."""
         hist = self.sessions.history(session_id) if session_id else []
-        if self.front_llm is not None and self.delegate_cfg is not None:
-            route = await self._front_decide(str(text), hist)
-            if getattr(self.delegate_cfg, "emit_route", True):
-                print(
-                    f"[route] {'front' if route.kind == 'chat' else 'worker'}"
-                    f" ({route.reason})",
-                    flush=True,
-                )
-            if route.kind == "chat" and str(route.text or "").strip():
-                reply = str(route.text).strip()
-                if session_id:
-                    try:
-                        self.sessions.remember_turn(session_id, str(text), reply)
-                    except Exception:
-                        pass
-                return reply
-            task = str(route.text or "").strip() or str(text)
-        else:
-            task = str(text)
+        task = str(text)
 
         reason = await self._ensure_worker()
         if reason:
@@ -137,7 +108,7 @@ class VoiceAgent(LongRunningAgent):
             reply = str(content or "")
             break
         try:
-            _thinking, answer = split_thinking(reply)
+            _thinking, answer = LlmModel.split_thinking(reply)
         except Exception:
             answer = reply
         reply = str(answer or reply or "").strip()
@@ -158,15 +129,11 @@ class VoiceAgent(LongRunningAgent):
     async def warm(self) -> "VoiceAgent":
         """Build every leg; collect failures instead of raising."""
         self.missing = []
-        for name in ("vad", "stt", "tts", "front_llm", "llm"):
+        for name in ("vad", "stt", "tts", "llm"):
             if name == "tts" and not self.config.speak_text_turns:
                 self.missing.append("tts leg: skipped (text-only)")
                 continue
-            if (
-                name == "llm"
-                and self.delegate_cfg is not None
-                and not self._worker_eager
-            ):
+            if name == "llm" and not self._worker_eager:
                 continue
             leg = getattr(self.cascade, name, None) or getattr(self, name, None)
             if leg is None:
