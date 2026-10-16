@@ -55,6 +55,26 @@ Enter after you move the highlight, because a palette that silently executes
 startup before it binds, so a model download that hangs inside `_warm()` leaves
 no listener at all ([06](06-processes.md#64-the-startup-warm-trap)).
 
+## On-disk layout (XDG)
+
+Seeded on first backend start (`src/app_config.py:AppConfig`,
+paths in `src/paths.py:VoicertPaths`, store in `src/store.py:VoicertStore`).
+No legacy fallbacks: `configs/` and `.voicert/` are gone.
+
+```
+~/.config/voicert/          # global
+├── skills/                 # all skills
+├── mcp.yaml                # MCP servers
+├── models.yaml             # providers + default model per backend
+└── voicert.json            # permissions + voicert configs (edit: ask, …)
+
+~/.local/share/voicert/     # local session
+├── voicert.db              # mainstore — sessions + tool_outputs (sqlite)
+├── voicert.log             # timestamped log
+├── sessions/               # JSON session files (mirrored into voicert.db)
+└── tool_outputs/           # spilled tool outputs over spill_chars (8000)
+```
+
 ## Current state
 
 | Suite | Result |
