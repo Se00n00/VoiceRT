@@ -2,18 +2,18 @@
 
 ---
 
-![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
-![two-brain](https://img.shields.io/badge/two--brain-local-green)
+![Python 3.13](https://img.shields.io/badge/python-3.13-blue)
+![local agent](https://img.shields.io/badge/local--agent-green)
 ![VRAM 4GB](https://img.shields.io/badge/VRAM-4GB-orange)
 ![E2E 551ms](https://img.shields.io/badge/E2E-551ms-brightgreen)
-![Qwen3-0.6B](https://img.shields.io/badge/front-Qwen3--0.6B-blue)
-![Bonsai-2-27B](https://img.shields.io/badge/worker-Bonsai--2--27B-blue)
+![Qwen3-0.6B](https://img.shields.io/badge/Qwen3--0.6B-blue)
+![Bonsai-2-27B](https://img.shields.io/badge/Bonsai--2--27B-blue)
 
 VoiceRT — real-time voice agent for one small GPU: mic in, VAD →
-STT → LLM → TTS out in ≈0.5–1.0 s, no cloud. A 0.6B front model
-routes chat vs work with one yes/no; real tasks escalate to a 27B
-ternary worker with the full tool harness. Sessions persist,
-memory compounds, everything runs local on 4GB VRAM.
+STT → LLM → TTS out in ≈0.5–1.0 s, local or cloud. One planner runs
+the agentic loop, handing steps to tag-narrowed specialists on the
+same model when useful. Sessions persist, memory compounds, and the
+local path fits a 4GB card.
 
 ## Why?
 
@@ -33,14 +33,14 @@ Architecture first — one part per file:
 |---|---|---|
 | — | [Architecture](docs/architecture/README.md) | diagrams, legs, engine, kernels — start here |
 | 00 | [ARCHITECTURE](ARCHITECTURE.md) | system design, contracts, dependency rules (single file) |
-| 01 | [Agent](docs/architecture/01-agent.md) | `VoiceAgent`, warm order, turn loop, events, two-brain routing |
+| 01 | [Agent](docs/architecture/01-agent.md) | `VoiceAgent`, warm order, turn loop, events, planner/specialists, budgets |
 | 02 | [Tools](docs/architecture/02-tools.md) | 12 ops, 5 parser formats, semantic router, deny/confirm policy |
 | 03 | [Memory](docs/architecture/03-memory.md) | L1 window, L2 episodic, L3 facts, the one injection point |
 | 04 | [Sessions](docs/architecture/04-sessions.md) | identity, window ownership, persistence, resume |
 | 05 | [Models](docs/architecture/05-models.md) | the four legs, `LlmConfig`, 7 backends, streaming, VRAM |
-| 06 | [Processes](docs/architecture/06-processes.md) | bridge/server endpoints, and the startup-warm trap |
+| 06 | [Processes](docs/architecture/06-processes.md) | the `:8004` backend, endpoints, and the startup-warm trap |
 | 07 | [Inference](docs/architecture/07-inference.md) | retired (custom paged runtime deleted) |
-| 08 | [TUI](docs/architecture/08-tui.md) | command palette, shades, exit card |
+| 08 | [TUI](docs/architecture/08-tui.md) | Tauri client, commands, voice mode, persistence |
 
 
 ```
@@ -75,8 +75,10 @@ Architecture first — one part per file:
 
 ─── 02 / TOOLS ───────────────────────────────────────────────────────────────────────────────
 
-  12 ops (src/tools/terminal.py:ALLOWED_OPS)
-  exec  exec_bg  poll  read  write  edit  grep  list  python_exec  fetch  searxng  done
+  30 ops (src/agent/tool_router.py:ALLOWED_OPS)
+  shell/files: bash python_exec read write edit list glob grep move delete
+  web/gui: webfetch websearch open_url browser_* screenshot click type_text …
+  meta: task question skill done write_todos
 
   model text ──▶ 5 parsers, tried in order ──▶ action ──▶ 2 gates ──▶ run
                 gemma → functiongemma         ┌──────────────┐
@@ -117,7 +119,7 @@ Architecture first — one part per file:
   COMPACTION - cross-turn
   ┌───────────────┐                     ┌────────────────┐
   │ model-switch  │ ──────────────────▶ │ compacted sess │
-  │ (bridge)      │  <=150w + last 2    │ summary + 2    │
+  │ model-switch  │  <=150w + last 2    │ summary + 2    │
   └───────────────┘  per-target skip    └────────────────┘
 
   SIM-AGENT - depth 1, never nested, max 6
@@ -133,7 +135,7 @@ Architecture first — one part per file:
   │
   ├── per-session LOCK ──▶ contenders queue, never interleave  (term/queued)
   ├── window  20 turns / 30 min / 1000 sessions / optional token cap
-  └── title   2 words, 12 tokens, front brain, printed on the exit card
+  └── title   2 words, 12 tokens, small leg, printed on the exit card
 
   VoiceAgent holds windows in RAM only. Persisting is the APP's job:
       import_session(sid, data)   on start      never raises
@@ -166,13 +168,13 @@ Architecture first — one part per file:
 
 ─── 06 / PROCESSES ───────────────────────────────────────────────────────────────────────────
 
-  voicert (OpenTUI) ──:8004──▶ bridge.py    /health /model /term/{stt,say} /term /deep
-  server.py         ──:8003──▶ voice API    /talk WS · /contact/* · /tg/* · /wa/*
-  llm_chat.py       ──────────▶ text REPL
+  voicert (Tauri)   ──:8004──▶ src.server    /health /model /term/{stt,say} /term /deep
+  src.server        ──:8004──▶ voice API     /chat WS · /console/stream WS · /talk/offer
+  src.server.console_cli ────▶ text REPL
                     └──────────▶ runs ONE at a time, never two
 
   ⚠ uvicorn awaits lifespan BEFORE it binds. A warm that hangs leaves NO listener,
-    which the TUI cannot tell from a dead bridge.  (fix pending)
+    which the TUI cannot tell from a dead backend.  (fix pending)
 
 ─── 07 / INFERENCE ───────────────────────────────────────────────────────────────────────────
 
@@ -205,12 +207,12 @@ Architecture first — one part per file:
 
 ```bash
 cd VoiceAgent/voice-pipeline
-pip install -r requirements.txt          # get CUDA torch first: https://pytorch.org/get-started/locally/
-PYTHONPATH=. python -m src.models.download   # first time: ~5GB weights
-PYTHONPATH=. python -m src.server          # warms 4 legs (~2 min first boot) → voice-agent ready
-curl http://localhost:8003/health            # {ok, agent_loaded, missing:[], vram_mb, engine:{active}}
-curl http://localhost:8003/metrics
-# talk: ws://localhost:8003/talk  (see docs/architecture.md for protocol)
+uv sync                                  # pinned CUDA torch + all deps
+PYTHONPATH=. uv run python -m src.models.download   # first time: ~5GB weights
+PYTHONPATH=. uv run python -m src.server          # warms 4 legs (~2 min first boot) → voice-agent ready
+curl http://localhost:8004/health            # {ok, agent_loaded, missing:[], vram_mb, engine:{active}}
+curl http://localhost:8004/metrics
+# talk: POST http://localhost:8004/talk/offer  (see docs/APIReferences/Talk.md)
 ```
 
 `PYTHONPATH=.` is required — kernels live at `src.models.triton_kernels`.
@@ -261,7 +263,7 @@ Verbose specs → docs: capacity model, queue, Triton details, API and config.
 voice-pipeline/
 ├── src/
 │   ├── main.py              # VoiceAgent entry points
-│   ├── long_running.py      # turn loop, sessions, box
+│   ├── long_running/        # agent.py + prompts/ + AGENTS.md
 │   ├── cascade.py           # VAD/STT/LLM/TTS voice turns
 │   ├── agent/
 │   │   ├── keystore.py      # OS-keychain secrets
@@ -477,7 +479,7 @@ voice-pipeline/
 ├── PLAN.md                  # plan notes
 ├── COMPLETE.md              # completion notes
 ├── AGENTS.md                # agent instructions
-└── .env / .env.example      # keys (gitignored + template)
+└── .env.example             # keys template for .env
 ```
 
 Models in this project:
@@ -494,9 +496,13 @@ Models in this project:
 
 ## Agent — text in, tools out, reply back
 
-### Two brains: the front routes, the worker works
+### Historical: the removed two-brain front
 
-`server.py /talk` and `bridge.py` run **delegation on by default**. A small
+> The front/worker split below is retired. The current harness lives in
+> `src/agent/long_running/agent.py`: one planner acts directly or hands steps to
+> tag-narrowed specialists. See the root `ARCHITECTURE.md`.
+
+`src.server` ran **delegation on by default**. A small
 front model (Qwen3-0.6B) owns the conversation and is given **no tools at
 all**: it is asked one yes/no question — *does this need the worker?* — and
 answers with a single word. On `YES` the turn runs on the worker leg (Bonsai
@@ -546,7 +552,7 @@ A single yes/no question is the one form of that discrimination a 0.6B
 does reliably, and the asymmetry lets it be biased hard toward `YES`: a
 false positive costs one slow worker turn, a false negative silently drops
 a task the user asked for. With a 5-pair few-shot prompt, on real weights — re-measured 2026-10-02
-on the committed prompt set (`tests/src/test_delegate.py`: 13 TASK +
+on the committed prompt set (`src/agent/prompts/delegate.py`: 13 TASK +
 15 CHAT), live Qwen3-0.6B fused front, greedy boolean. (The original
 37-prompt list — 19/19 escalated, 15/18 kept, 0.25 s chat latency — is
 not in the repo, so the table below replaces it with the rerunnable set.)
@@ -590,7 +596,7 @@ not pay for it. The app entry points are where that decision belongs.
 ### Lazy worker: measured 2026-10-02
 
 The worker sidecar boots on the first delegate route, not at app start
-(`worker_eager: false`). Same box, live bridge, worker CPU-only
+(`worker_eager: false`). Same box, live backend, worker CPU-only
 (`--n-gpu-layers 0`):
 
 | | measured |
@@ -796,9 +802,9 @@ Earlier rows, kept for history: synthetic round-trip 308/827 ms,
 live turn 438/640 ms, LibriSpeech samples 531–858 / 1321–2590 ms
 (VRAM ~1940 MB — lighter legs than today's full stack).
 
-Two-brain chat turn re-measured the same day over the live bridge
+Two-brain chat turn re-measured the same day over the live backend
 (`/deep`, fused front, worker never loaded): **1.6–1.9 s**
-utterance-to-reply. See `tests/src/test_delegate.py` for the routing
+utterance-to-reply. See `src/agent/delegate.py` for the routing
 contract (92 unit tests green).
 
 ### Per-leg spot checks
@@ -888,15 +894,16 @@ More: [`docs/architecture.md`](docs/architecture.md) startup + WS flow, [`docs/c
 
 ## 🚧 TUI version — work in progress
 
-I'm building an opencode-style **terminal voice agent** on top of this pipeline: full-screen split UI — conversation + input on the left, live USER/AGENT audio visualizer on the right — with the same single Qwen model chatting or running shell commands (`v` voice turn, `y`/`n` confirm gate, `/` commands, per-session LangChain memory). Two frontends exist: `tui.py` (Textual) and the current **OpenTUI (Solid) app in `src/tui/`** backed by `bridge.py` (`:8004`, `server.py` untouched). Not done yet: visual polish and edge cases are still being worked on.
+I'm building an opencode-style **terminal voice agent** on top of this pipeline: full-screen split UI — conversation + input on the left, live USER/AGENT audio visualizer on the right — with the same single Qwen model chatting or running shell commands (`v` voice turn, `y`/`n` confirm gate, `/` commands, per-session LangChain memory). The current frontend is the **Tauri + SolidJS app in `src/tauri/`**, backed by `src.server` (`:8004`). Not done yet: visual polish and edge cases are still being worked on.
 
-See it live (one command — the TUI spawns its own local agent backend; `server.py` stays out of it):
+See it live (backend in one shell, Tauri client in another):
 
 ```bash
-cd src/tui && npm install && npm run dev
+PYTHONPATH=. uv run python -m src.server      # :8004
+cd src/tauri && npm install && npm run dev    # in another shell
 ```
 
-First boot warms legs (~1-2 min). Headphones (or speakers down) avoid the mic re-ingesting replies; without them the app still works — it pauses listening while speaking and discards its own echo. Advanced: run the backend separately (`PYTHONPATH=. python -m src.server`) and point the TUI at it with `VOICE_BRIDGE=http://127.0.0.1:8004`.
+First boot warms legs (~1-2 min). Headphones (or speakers down) avoid the mic re-ingesting replies; without them the app still works — it pauses listening while speaking and discards its own echo. Point the client at a different backend with `VITE_VOICE_BRIDGE=http://127.0.0.1:8004`.
 
 On quit (`ctrl+c` or `/quit`) a farewell card prints a two-word name for the session and the command to resume it:
 
@@ -904,7 +911,7 @@ On quit (`ctrl+c` or `/quit`) a farewell card prints a two-word name for the ses
 voicert -s ses_f09c7b175ffews1QW321k2D9An
 ```
 
-Session ids are `ses_` + 26 base62 chars, written to `sessions/<id>.json`, so a resume survives a restart of both the TUI and `bridge.py`. `voicert -s <id>` also accepts a bare id (no prefix); anything that isn't 6–64 alphanumerics is rejected.
+Session ids are `ses_` + 26 base62 chars, written to `sessions/<id>.json`, so a resume survives a restart of both the TUI and the backend. `voicert -s <id>` also accepts a bare id (no prefix); anything that isn't 6–64 alphanumerics is rejected.
 
 ### Monotonic shades
 
@@ -916,13 +923,13 @@ The trade is deliberate: errors and confirm prompts stop being red and yellow, s
 
 Terminal tools run on the host by default. Pass a `SandboxConfig` to run
 each worker turn inside a fresh per-turn container instead
-(`src/sandbox/docker.py:SandboxShellBackend`, host file ops + container
+(`src/agent/sandbox/docker.py:SandboxShellBackend`, host file ops + container
 `execute`, over the docker CLI — no new dependencies):
 
 ```python
-from src.long_running import LongRunningConfig
-from src.main import VoiceAgent, VoiceAgentConfig
-from src.sandbox.docker import SandboxConfig
+from src.agent.long_running import LongRunningConfig
+from src.agent.voice_agent.agent import VoiceAgent, VoiceAgentConfig
+from src.agent.sandbox.docker import SandboxConfig
 agent = VoiceAgent(VoiceAgentConfig(
     harness=LongRunningConfig(sandbox=SandboxConfig())))
 ```

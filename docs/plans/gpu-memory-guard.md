@@ -25,7 +25,7 @@ up after. A guard that fires post-mortem is a log line, not a guard.
 
 1. **No cross-process guard.** Two processes each fit their own budget and
    die together. The ONE-GPU-process rule lives in prose (`AGENTS.md`),
-   not in code. The stale 18h `bridge.py` + a fresh warm is exactly this.
+   not in code. The stale 18h `src.server` + a fresh warm is exactly this.
 2. **No pre-execution check on the hot path.** `generate`/`transcribe`/
    `speak` assume the warm-time budget still holds. KV growth, batch > 1,
    and first-call Triton compile spikes are unbudgeted — compile storms
@@ -81,7 +81,7 @@ Call sites (all cheap, cached per process where hot):
 
 Shutdown path (kills the `kill -9` habit):
 
-- `SIGTERM` handler in `server.py` / `bridge.py` entry: stop accepting,
+- `SIGTERM` handler in `src/server/__main__.py`: stop accepting,
   cancel turns, `torch.cuda.empty_cache()` + `synchronize()` with a
   timeout, then exit. Document next to it: **never `kill -9` a process
   with live CUDA work** — that is what wedged 2026-10-02.

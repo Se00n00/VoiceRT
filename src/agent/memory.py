@@ -298,7 +298,7 @@ class JsonSessionMemory(LangChainSessionMemory):
         except Exception:
             pass
         try:
-            from src.store import VoicertStore
+            from src.agent.store import VoicertStore
 
             VoicertStore().save_session(
                 str(sid),
@@ -327,7 +327,7 @@ class JsonSessionMemory(LangChainSessionMemory):
 
     def _load_locked(self, sid: str, now: float) -> "LCSessionHistory | None":
         try:
-            from src.store import VoicertStore
+            from src.agent.store import VoicertStore
 
             hit = VoicertStore().load_session(str(sid))
             if hit and isinstance(hit.get("messages"), list) and hit["messages"]:

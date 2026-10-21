@@ -4,7 +4,7 @@
 :mod:`src.agent.mcp.config`), spawns each enabled server, and returns
 ``(client, tools)`` — LangChain tools backed by those servers. Keep the
 client alive as long as the tools are used (each tool call opens a
-session through it); :class:`src.main.VoiceAgent` holds it on
+session through it); :class:`src.agent.voice_agent.agent.VoiceAgent` holds it on
 ``self._mcp_client``.
 
 Prefer :mod:`src.agent.mcp.session` for new code: it holds one persistent

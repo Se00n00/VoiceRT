@@ -20,8 +20,8 @@ import tempfile
 import time
 
 from src.agent.events import AgentEvent
-from src.models.llm import LlmModel
-from src.prompts.sim import (  # noqa: F401  (single home, re-exported)
+from src.agent.tool_router import TERMINAL_TOOLS, tools_for_request
+from src.agent.long_running.prompts.sim import (  # noqa: F401  (single home, re-exported)
     FINAL_COMPOSE_TEMPLATE,
     MAX_SUBTASKS,
     PLAN_PROMPT,
@@ -29,8 +29,8 @@ from src.prompts.sim import (  # noqa: F401  (single home, re-exported)
     SUBTASK_HEAD_TEMPLATE,
     SYSTEM_SLIVER,
 )
-from src.prompts.terminal import TERMINAL_PREAMBLE
-from src.agent.tool_router import TERMINAL_TOOLS, tools_for_request
+from src.models.llm import LlmModel
+from src.agent.prompts.terminal import TERMINAL_PREAMBLE
 
 __all__ = ["SimAgent", "parse_plan", "SYSTEM_SLIVER",
            "build_subtask_preamble", "MAX_SUBTASKS", "PLAN_PROMPT",

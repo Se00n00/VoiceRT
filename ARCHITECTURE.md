@@ -28,9 +28,9 @@ flowchart TB
         API[src/server: FastAPI + WS]
     end
     subgraph AGT["Agent"]
-        VA[src/main.py: VoiceAgent]
-        HRN[src/long_running.py: LongRunningAgent]
-        CAS[src/cascade.py: voice pipeline]
+        VA[src/agent/voice_agent/agent.py: VoiceAgent]
+        HRN[src/agent/long_running/agent.py: LongRunningAgent]
+        CAS[src/agent/voice_agent/cascade.py: voice pipeline]
     end
     subgraph LEGS["Model legs"]
         VAD[vad.py: Silero]
@@ -73,11 +73,12 @@ flowchart LR
     TXT([text turn]) --> TURN
 ```
 
-- Voice: `CascadePipeline` (`src/cascade.py`) runs VAD → STT →
+- Voice: `CascadePipeline` (`src/agent/voice_agent/cascade.py`) runs VAD → STT →
   harness text turn → TTS; per-leg node timings ride `AgentEvent`s.
 - Text: `LongRunningAgent.__call__(text, sid) -> str`
-  (`src/long_running.py`) runs worker ensure → session lock → box →
-  graph build → `agent.astream` → session write-back.
+  (`src/agent/long_running/agent.py`) delegates to `TurnRunner` → scheduler →
+  worker ensure → `TurnBox` → `builder` → graph stream. Session load/write-back
+  lives in `SessionMiddleware`; memory and turn context are middleware too.
 - Cloud backends skip `LlmModel`: the harness holds a stock
   LangChain chat model from `provider.ChatModel.get` instead.
 - Sessions persist as `sessions/*.json` (default dir `~/.voicert`);
@@ -87,7 +88,7 @@ flowchart LR
 
 | Area | Verified fact |
 |---|---|
-| Runtime | Python 3.12.12, torch 2.5.1+cu124, pydantic 2.13.5 |
+| Runtime | Python 3.13.12, torch 2.6.0+cu124, pydantic 2.13.5 |
 | Agent framework | deepagents 0.7.16 over langgraph 1.2.11, langchain-core 1.6.10 |
 | Server | FastAPI 0.141.1 + uvicorn, one backend on `:8004` (`src/server/__main__.py`, 8 routers) |
 | Desktop | Tauri + SolidJS 1.9.12, HTTP/WS to `127.0.0.1:8004`, no Tauri commands (pure fetch client) |
@@ -102,9 +103,9 @@ flowchart LR
 | Component | Responsibility | Inputs → Outputs | Errors |
 |---|---|---|---|
 | `src/server` (`__main__`, `__init__`, `state`, `routes/*`, `console_cli`) | process-wide agent, HTTP+WS API, model switching | HTTP/WS → JSON/events; `switch_model(name)` | error dicts, never raises (`switch_model`); refusal latches |
-| `VoiceAgent` (`src/main.py`) | text + voice entries over harness + cascade | audio/text → reply/events | worker-down text, never raises turns |
-| `LongRunningAgent` (`src/long_running.py`) | turn loop, sessions, box, graph | text → reply str / events | `ValueError` empty; down-notice; `_BoxError` inside box only |
-| `CascadePipeline` (`src/cascade.py`) | VAD/STT/LLM/TTS voice turns | wav → wav + node timings | leg failures as events |
+| `VoiceAgent` (`src/agent/voice_agent/agent.py`) | text + voice entries over harness + cascade | audio/text → reply/events | worker-down text, never raises turns |
+| `LongRunningAgent` (`src/agent/long_running/agent.py`) | model legs, stores, public entries; turn work in `TurnRunner` + services | text → reply str / events | `ValueError` empty; down-notice; `TurnBoxError` inside box only |
+| `CascadePipeline` (`src/agent/voice_agent/cascade.py`) | VAD/STT/LLM/TTS voice turns | wav → wav + node timings | leg failures as events |
 | `LlmModel` (`src/models/llm.py`) | local LLM facade, template extraction | msgs → `LlmResult(text, tool_calls, ttft, tps)` | `SystemExit` on cloud backend / sick driver |
 | `BonsaiLlamaCpp/BonsaiChatModel` (`src/models/bonsai.py`) | 27B sidecar + LC face | msgs → text / `AIMessage`+calls | transport errors raise; unhealthy → abort |
 | `Vad/Stt/TtsModel` | speech legs | audio ↔ text/spans | `ValueError` empty audio; never-hang warm |
@@ -115,9 +116,10 @@ flowchart LR
 | Tauri app (`src/tauri/src`) | UI, keys via `/keys`, `/model` switching | user → HTTP/WS | bridge-down notes, never crashes turns |
 
 State ownership: sessions own transcripts (`JsonSessionMemory`);
-legs own weights/VRAM; the box owns cwd/containers per turn;
-`_current_model` (server) owns the active-profile label; locks own
-per-session serialization. Concurrency: one turn per session at a
+legs own weights/VRAM; `TurnBox` owns cwd/containers per turn;
+`_current_model` (server) owns the active-profile label; `TurnScheduler`
+owns per-session serialization; `SessionMiddleware` owns transcript
+load/write-back. Concurrency: one turn per session at a
 time (`asyncio.Lock` + contender queue); one GPU process at a time.
 
 ## 6. Verified facts vs assumptions and unknowns
@@ -138,19 +140,13 @@ concurrent voice sessions on 4GB VRAM.
 
 ## 7. Flagged architectural problems (not fixed)
 
-1. **No dependency manifest**: no `requirements.txt`, `pyproject.toml`,
-   or lock file at root, yet `README.md` instructs
-   `pip install -r requirements.txt`. Repro from scratch is unverifiable.
-2. **Stale entry docs**: `README.md`/docs still cite `bridge.py`,
-   `server.py`, `llm_chat.py`, and `:8003` — none exist; the only
-   backend is `python -m src.server` on `:8004`.
-3. **Stale agent doc**: `docs/architecture/01-agent.md` still
-   describes the removed front brain (`front_llm`, old `main.py`
-   line numbers).
-4. **Orphaned modules**: `src/agent/delegate.py`,
-   `src/prompts/delegate.py`, `configs/delegate.yaml` have no
+Legacy docs (`docs/architecture.md`, `docs/ARCHITECTURE.md`) are labeled
+historical; the root `ARCHITECTURE.md` is current.
+
+1. **Orphaned modules**: `src/agent/delegate.py`,
+   `src/agent/prompts/delegate.py`, `configs/delegate.yaml` have no
    importers since the front removal.
-5. **Two provider homes**: `src/agent/cloud_models.py` was deleted in
+2. **Two provider homes**: `src/agent/cloud_models.py` was deleted in
    favor of `src/models/provider.py` (uncommitted at write time) —
    until that lands, both exist.
 
@@ -159,7 +155,7 @@ concurrent voice sessions on 4GB VRAM.
 ```mermaid
 flowchart LR
     UI[src/tauri] -->|HTTP/WS only| SRV[src/server]
-    SRV --> AGT[src/main + long_running + cascade]
+    SRV --> AGT[src/agent/voice_agent/agent + long_running + cascade]
     AGT --> LEGS[src/models]
     AGT --> MISC[src/agent + prompts + sandbox + engine]
     LEGS -.->|never| AGT
@@ -176,7 +172,7 @@ flowchart LR
 4. Legs never import the harness, the server, or each other
    (except documented leg→weights files, e.g. `stt.py` →
    `whisper.py`).
-5. `src/agent/*` never imports `src/server/*` or `src/main.py`.
+5. `src/agent/*` never imports `src/server/*`.
 6. Prompts are data: code may import prompts, prompts import nothing.
 7. Eval/benchmarks may import anything but nothing imports them.
 8. Secrets flow one way: callers → `keystore`/`.env`; keys never
@@ -194,11 +190,10 @@ Existing tooling suffices, no new dependencies: a `bash`+`rg`
 boundary script (stdlib only) run beside the evals. Required checks,
 each failing the run on violation:
 
-- `rg 'from src\.(server|main|cascade) import' src/models/` → must
-  be empty (rule 4).
-- `rg 'from src\.agent import|import src\.agent\.' src/models/` →
-  empty except the documented `keystore` import in `provider.py`.
-- `rg '^ +(from|import) ' src/long_running.py src/main.py` →
+- `rg 'from src\.server import' src/models/` → must be empty (rule 4).
+- `rg 'from src\.agent\.(voice_agent|long_running|sandbox) import' src/models/`
+  → empty; models import only data/prompt helpers from `src.agent`.
+- `rg '^ +(from|import) ' src/agent/long_running/agent.py src/agent/voice_agent/agent.py` →
   empty (all imports top-level, `AGENTS.md: Imports`).
 - `rg 'import src\.agent\.chat_model|src/agent/chat_model' src/`
   → empty (moved to `src/models/chat_model.py`).
@@ -213,8 +208,8 @@ enter `docs/benchmarks.md`.
 ## Files inspected
 
 `src/server/__main__.py`, `src/server/__init__.py`,
-`src/server/state.py`, `src/long_running.py`, `src/main.py`,
-`src/cascade.py`, `src/models/llm.py`, `src/models/bonsai.py`,
+`src/server/state.py`, `src/agent/long_running/agent.py`, `src/agent/voice_agent/agent.py`,
+`src/agent/voice_agent/cascade.py`, `src/models/llm.py`, `src/models/bonsai.py`,
 `src/models/provider.py`, `src/models/chat_model.py`,
 `src/models/vad.py`, `src/models/stt.py`, `src/models/tts.py`,
 `src/models/runtime/guard.py`, `src/agent/keystore.py`,

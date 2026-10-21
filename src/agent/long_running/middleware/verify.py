@@ -16,7 +16,7 @@ import os as _os
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import ToolMessage
 
-from src.prompts.chat import VERIFY_RETRY
+from src.agent.prompts.chat import VERIFY_RETRY
 
 __all__ = ["VerifyMiddleware", "verify_strikes"]
 

@@ -14,7 +14,7 @@ op catalogue for legs whose template may ignore tool specs (Qwen);
 
 __all__ = ["TERMINAL_PREAMBLE", "TERMINAL_TOOL_CATALOGUE", "BROWSER_PREAMBLE"]
 
-from src.prompts.base import WORKER_STANCE
+from src.agent.prompts.base import WORKER_STANCE
 
 TERMINAL_PREAMBLE = (
     "You control this machine's terminal and files through your tools — "

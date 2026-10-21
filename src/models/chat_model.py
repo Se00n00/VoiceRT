@@ -29,6 +29,7 @@ from langchain_core.messages import (
 )
 from langchain_core.messages.ai import create_tool_call_chunk
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+from langchain_core.utils.function_calling import convert_to_openai_function
 
 from src.agent.budget import for_backend
 from src.agent.tool_router import (
@@ -37,7 +38,7 @@ from src.agent.tool_router import (
     tools_for_request,
 )
 from src.models.llm import LlmModel
-from src.prompts.chat import (
+from src.agent.prompts.chat import (
     ECHO_RETRY,
     GARBLED_RETRY,
     REPEAT_NOTE_TEMPLATE,
@@ -83,12 +84,29 @@ REPEAT_GUARD_OPS = frozenset({
     "get_active_window", "list_windows", "skill",
 })
 
+EXTRA_PROMPT_TOOLS = ("task", "write_todos")
+"""Graph-bound tools with NO house def in ``ALL_TOOL_DEFS``.
+
+The router's ``task`` def describes the MCP background-job tool, but the
+bound graph tool is the subagent transport (and ``write_todos`` comes
+from TodoListMiddleware). For these, the real schema is rendered into
+the prompt instead of the router def — always, when the graph has them.
+"""
+
 
 class LocalChatModel(BaseChatModel):
     """Thin LangChain wrapper around :class:`LlmModel`."""
 
     llm: Any
     bound_tools: Optional[List[dict]] = None
+    # tool_names: execution tools bound by the current graph. The prompt
+    # half (router/ops) is intersected with these so the template can
+    # never advertise an op the graph cannot execute (subagent tag sets,
+    # planner's Main subset).
+    tool_names: Optional[frozenset] = None
+    # extra_defs: house-shaped defs converted from graph-bound tools that
+    # have no router def of their own (see EXTRA_PROMPT_TOOLS).
+    extra_defs: Optional[List[dict]] = None
     # no_tools: prompt WITHOUT tool specs (summarizer calls). A model
     # handed tools alongside a "respond ONLY with ..." instruction may
     # emit a tool call instead of the requested text.
@@ -108,7 +126,23 @@ class LocalChatModel(BaseChatModel):
         # the chat template would silently change model behavior.
         defs = [t for t in tools or []
                 if isinstance(t, dict) and "name" in t]
-        return LocalChatModel(llm=self.llm, bound_tools=defs or None)
+        names, extras = set(), []
+        for t in tools or []:
+            if isinstance(t, dict):
+                n = str(t.get("name", "") or "")
+            else:
+                n = str(getattr(t, "name", "") or "")
+            if not n:
+                continue
+            names.add(n)
+            if n in EXTRA_PROMPT_TOOLS and not isinstance(t, dict):
+                try:
+                    extras.append(convert_to_openai_function(t))
+                except Exception:
+                    continue
+        return LocalChatModel(llm=self.llm, bound_tools=defs or None,
+                              tool_names=frozenset(names) or None,
+                              extra_defs=extras or None)
 
     def _messages_to_llm_input(self, messages: List[BaseMessage]):
         # Convert LangChain messages to the (text, history, observation)
@@ -160,14 +194,33 @@ class LocalChatModel(BaseChatModel):
                 by_name = {t["name"]: t for t in ALL_TOOL_DEFS}
                 picked = [by_name[o] for o in ops if o in by_name]
                 if picked:
-                    return picked
-            # Route: narrow the 9 native tool definitions to what this
-            # step plausibly needs (small models drown in 9). The harness
-            # appends a "CWD: ... SHELL: ..." trailer to every turn — strip
-            # it for routing (else "shell" forces exec into every set).
-            # None (or another backend) keeps the full set / preamble path.
-            routable = re.sub(r"\nCWD: .*?(\s+SHELL: \w+)?\s*$", "", text)
-            tools = tools_for_request(routable, observation)
+                    tools = picked
+            if tools is None:
+                # Route: narrow the 9 native tool definitions to what this
+                # step plausibly needs (small models drown in 9). The harness
+                # appends a "CWD: ... SHELL: ..." trailer to every turn — strip
+                # it for routing (else "shell" forces exec into every set).
+                # None (or another backend) keeps the full set / preamble path.
+                routable = re.sub(r"\nCWD: .*?(\s+SHELL: \w+)?\s*$", "", text)
+                tools = tools_for_request(routable, observation)
+        if tools and self.tool_names:
+            # Never advertise an op the graph has no execution tool for
+            # (planner Main subset, specialist tag sets).
+            tools = [t for t in tools
+                     if str((t or {}).get("name", "")) in self.tool_names]
+        if tools is not None and self.extra_defs:
+            # Replace/append the real schema for graph tools the router
+            # cannot describe correctly (subagent task, write_todos).
+            have = {str((t or {}).get("name", "")) for t in tools}
+            for d in self.extra_defs:
+                name = str(d.get("name", "") or "")
+                if not name or name not in self.tool_names:
+                    continue
+                if name in have:
+                    tools = [d if str((t or {}).get("name", "")) == name
+                             else t for t in tools]
+                else:
+                    tools = [*tools, d]
         return tools
 
     def _needs_catalogue(self) -> bool:

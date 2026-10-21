@@ -7,7 +7,7 @@ All tool functions are sync and total (never raise — errors become
 strings); state lives in module singletons (one class, one job).
 
 Todo tracking is NOT here: plan state belongs to the agent loop via
-``TodoListMiddleware`` (see :mod:`src.prompts.middleware` for its
+``TodoListMiddleware`` (see :mod:`src.agent.long_running.prompts.todo` for its
 custom prompts), not to a stateless tool call.
 
 contract, dependencies, who calls it: background task launch/poll,

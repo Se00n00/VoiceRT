@@ -12,7 +12,7 @@ import re
 import tempfile
 import time
 
-from src.prompts.memory import ANCHOR_LINE, FACTS_ANCHOR_LINE, FACTS_HEADER  # noqa: F401  (single home, re-exported)
+from src.agent.prompts.memory import ANCHOR_LINE, FACTS_ANCHOR_LINE, FACTS_HEADER  # noqa: F401  (single home, re-exported)
 
 __all__ = ["load_facts", "upsert_fact", "format_block", "parse_line",
            "ANCHOR_LINE", "FACTS_HEADER", "FACTS_ANCHOR_LINE"]

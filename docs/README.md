@@ -13,17 +13,17 @@ Technical documentation for `voice-pipeline`. Start here, then go deep.
 ```
                     ┌─────────────────────────────────────────────┐
                     │                  clients                     │
-                    │   curl / frontend / WebSocket /talk          │
+                    │   curl / frontend / WS /chat · /term          │
                     └──────────────┬──────────────────────────────┘
-                                   │ HTTP + WS :8003
+                                   │ HTTP + WS :8004
                     ┌──────────────▼──────────────────────────────┐
-                    │              server.py (FastAPI)               │
-                    │  /health  │  /metrics  │  /talk (two-way WS)   │
+                    │          src.server (FastAPI, :8004)           │
+                    │  /health · /metrics · /chat WS · /talk/offer  │
                     │  FIFO ticket queue (src/models/runtime/scheduler.py)    │
                     └──────────────┬──────────────────────────────┘
                                    │ one VoiceAgent turn graph
                     ┌──────────────▼──────────────────────────────┐
-                    │      src/main.py: VoiceAgent                │
+                    │      src/agent/voice_agent/agent.py: VoiceAgent                │
                     │  VAD→STT→LLM→TTS turns (LangGraph nodes)    │
                     │  budget guard │ FIFO tickets │ session memory │
                     └──┬────────┬────────┬────────┬───────────────┘

@@ -1,5 +1,8 @@
 # ARCHITECTURE — entities and how they work
 
+> **Historical:** this entity map predates the single `:8004` backend and the
+> deep-agent harness. See the root `ARCHITECTURE.md` for the current design.
+
 Start here. The part files below it (`architecture/01–08`) hold the
 file-and-line detail; this page is the map: every entity, what it owns,
 and how a voice turn flows through them.
@@ -20,8 +23,7 @@ flowchart TD
     ToolRouter["ToolRouter: shortlist, policy"]
     Memory["Memory: recall, consolidate"]
     Sessions["Sessions: history, titles"]
-    Bridge["Bridge 8004: runText, confirm"]
-    Server["Server 8003: talk, barge"]
+    Bridge["Backend 8004: runText, confirm, talk/offer"]
     TUI["TUI: render, playback"]
     User -->|text audio cancel| VoiceAgent
     VoiceAgent -->|speech spans| VadModel
@@ -35,7 +37,6 @@ flowchart TD
     VoiceAgent -->|speak replies| TtsModel
     TtsModel -->|audio| User
     Bridge -->|run_text confirm| VoiceAgent
-    Server -->|audio turns barge| VoiceAgent
     TUI -->|turns over WS| Bridge
 ```
 
@@ -66,8 +67,8 @@ VoiceAgent ◀── remember_turn ───┤
    │                            │ audio (interruptible: barge restarts VAD)
    └────────────────────────────┘
 
-Transports:  TUI ──WS──▶ Bridge (:8004, run_text + confirm)
-             mic ──WS──▶ Server (:8003, loop + partials + barge)
+Transports:  TUI ──WS──▶ Backend (:8004, run_text + confirm + talk/offer)
+             mic ──WS──▶ same backend (:8004, loop + partials + barge)
 Shared:      ToolRouter (allow/deny policy) · Memory (L1/L2/L3) · Sessions
 ```
 
@@ -105,7 +106,7 @@ TTFT 52ms steady with 6.1ms per token after, front decide 0.96s,
 front chat 0.27s, worker LLM 76s via the gemma-4B CPU sidecar,
 TTS 0.7s per chunk, end-to-end 78.3s. Streaming prefill (word deltas
 prime the decode leg, abort on revision) and barge-in are live in
-server.py — except the sidecar HTTP prime, which stays OFF: a prime
+`src/server` — except the sidecar HTTP prime, which stays OFF: a prime
 costs 2.4s of prompt processing on the single-slot CPU sidecar, longer
 than the pause window, and would hold the only slot while the real
 turn waits. Revisit when the worker has slots to spare or runs fused.
@@ -144,7 +145,7 @@ this design minimizes.
 | Entity | What it does | Detail |
 |---|---|---|
 | `User` | speaks, types, hits Ctrl+C | [TUI](architecture/08-tui.md) |
-| `VoiceAgent` (`src/main.py`) | owns legs, locks, queue, confirm gate, turn loop | [01](architecture/01-agent.md) |
+| `VoiceAgent` (`src/agent/voice_agent/agent.py`) | owns legs, locks, queue, confirm gate, turn loop | [01](architecture/01-agent.md) |
 | `VadModel` (Silero ONNX) | speech spans, live per-chunk test, endpointing | [05](architecture/05-models.md) |
 | `SttModel` (Whisper) | full + rolling-partial transcription | [05](architecture/05-models.md) |
 | `FrontBrain` (Qwen3-0.6B) | one YES/NO + short chat replies, zero tools | [01](architecture/01-agent.md) |
@@ -154,8 +155,7 @@ this design minimizes.
 | `ToolRouter` | semantic op shortlist + deny/confirm/allowlist policy | [02](architecture/02-tools.md) |
 | `Memory` | L1 window injection, L2 episodes, L3 facts | [03](architecture/03-memory.md) |
 | `Sessions` | per-session history, titles, locks, resume | [04](architecture/04-sessions.md) |
-| `Bridge` (:8004) | terminal + autonomous sockets, confirm mailbox | [06](architecture/06-processes.md) |
-| `Server` (:8003) | mic loop, partials, prefill, barge-in, latency | [06](architecture/06-processes.md) |
+| `Backend` (:8004) | terminal + voice + console sockets, confirm mailbox | [06](architecture/06-processes.md) |
 | `TUI` (`voicert`) | panels, palette, mic viz, playback, interrupt | [08](architecture/08-tui.md) |
 
 Rules that cross entities: one GPU process at a time · `PYTHONPATH=.`

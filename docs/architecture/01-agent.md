@@ -1,8 +1,9 @@
 # 01 — Agent
 
-The agent is the thing that turns a sentence of audio (or text) into work, and
-work into a spoken answer. It lives in `src/main.py` and is fronted by two thin
-processes (`bridge.py`, `server.py`).
+The agent turns speech or text into work, and work into a spoken answer.
+`src/agent/voice_agent/agent.py:VoiceAgent` is the shell: it inherits `LongRunningAgent`
+(`src/agent/long_running/agent.py`) and owns the voice cascade
+(`src/agent/voice_agent/cascade.py:CascadePipeline`). `src/server` exposes both over `:8004`.
 
 Nothing here is aspirational. Every claim names the file that implements it.
 
@@ -10,215 +11,210 @@ Nothing here is aspirational. Every claim names the file that implements it.
 
 ```
 voice-pipeline/
-├── src/main.py                 # VoiceAgent — the turn loop (1429 lines)
 ├── src/agent/
-│   ├── events.py               # AgentEvent: the one currency (38 lines)
-│   ├── prompts.py              # TERMINAL_PREAMBLE: the tool contract (12)
-│   ├── chat_model.py           # LocalChatModel: LC BaseChatModel over LlmModel (550)
-│   ├── delegate.py             # two-brain routing (642)
-│   ├── title.py                # two-word session titles (144)
-│   ├── budget.py               # context/step budgets per backend (273)
-│   ├── trim.py                 # TrimObservationsMiddleware (53)
-│   ├── episodic.py             # L2 episodic store, sqlite + embeddings (186)
-│   ├── facts.py                # L3 flat facts, markdown (103)
-│   ├── simtask.py              # depth-1 Sim-Agent subagents (259)
-│   ├── tool_router.py          # bge-small semantic tool selection (206)
-│   ├── memory.py               # LangChainSessionMemory / JsonSessionMemory (399)
-│   ├── contacts.py             # telegram / baileys / callmebot legs (666)
-│   ├── pairing.py              # Telegram creator-token pairing (395)
-│   ├── tg_poll.py              # long-poll loop (79)
-│   ├── mcp/                    # MCP config + client + server
-│   ├── chat_model.py           # action parsing + local chat wrapper
-│   ├── tool_router.py          # op schemas, routing, tool listing
-│   └── middleware/             # policy/error/verify layers (one file each)
-├── bridge.py                   # TUI backend, :8004
-└── server.py                   # voice API, :8003
+│   ├── voice_agent/
+│   │   ├── agent.py             # VoiceAgent: text + voice entries
+│   │   └── cascade.py           # CascadePipeline: VAD -> STT -> harness -> TTS
+│   ├── long_running/
+│   │   ├── agent.py             # LongRunningAgent facade: legs, stores, entries
+│   │   ├── builder.py           # create_deep_agent + middleware order
+│   │   ├── turn.py              # TurnRunner: box -> graph -> events
+│   │   ├── box.py               # cwd jail + optional container
+│   │   ├── worker.py            # warm-once LLM state
+│   │   ├── scheduler.py         # admission + per-session serialization
+│   │   ├── recall.py            # L2/L3 AgentMemory service
+│   │   ├── messages.py          # LC message/reply helpers
+│   │   ├── speech.py            # spoken caps + VRAM readout
+│   │   ├── specialists.py       # planner -> 3 simulated specialists
+│   │   ├── simtask.py           # depth-1 subtask cap (MAX_SUBTASKS = 6)
+│   │   ├── episodic.py          # L2 episodic store
+│   │   ├── middleware/          # session, memory, context, policy, trim, ...
+│   │   ├── prompts/             # core, handoff, memory, sim, todo
+│   │   └── AGENTS.md            # user-editable standing instructions
+│   ├── prompts/                 # shared prompts: base, voice, terminal, chat, ...
+│   ├── sandbox/                 # docker turn box
+│   ├── events.py                # AgentEvent
+│   ├── memory.py                # JsonSessionMemory
+│   ├── store.py                 # SQLite sessions + tool spill
+│   ├── facts.py                 # L3 facts
+│   ├── budget.py                # context/step budgets
+│   ├── title.py                 # two-word session titles
+│   ├── tool_router.py           # op schemas + optional semantic shortlist
+│   ├── shell.py                 # persistent shell + background jobs
+│   └── mcp/                     # MCP config, client, servers
+├── src/models/                  # VAD/STT/LLM/TTS + cloud providers + runtime
+├── src/server/                  # FastAPI backend, :8004
+└── src/tauri/                   # Tauri + SolidJS desktop client
 ```
 
 ## 1.2 `VoiceAgent`
 
-`VoiceAgent` holds the four pipeline legs plus the agent harness. Config is
-`VoiceAgentConfig` (`src/main.py:69-145`); defaults worth knowing:
+`VoiceAgentConfig` (`src/agent/voice_agent/agent.py`) is split, not flat: `cascade`
+(`CascadeConfig`), `harness` (`LongRunningConfig`) and `fast_voice`.
+`VoiceAgent.__init__` builds the harness first, then wraps it with
+`CascadePipeline`; `self.tts` is the shared TTS alias.
 
-| Setting | Default | Where |
+Harness defaults worth knowing (`LongRunningConfig`, `src/agent/long_running/agent.py`):
+
+| Setting | Default | Effect |
 |---|---|---|
-| `max_agent_steps` | 6 | `main.py:90` |
-| `recursion_limit` | 10 (+5×steps) | `main.py:91`, `main.py:661` |
-| `tool_timeout_s` | 30 | `main.py:92` |
-| `tool_out_cap` | 6000 chars | `main.py:93` |
-| `exec_timeout_s` | 30 | `main.py:95` |
-| `worker_eager` | False (lazy worker) | `main.py:144` |
+| `work_dir` | `.` | shell/box root |
+| `max_agent_steps` | 6 | recursion limit is `10 + 5 × steps` |
+| `exec_timeout_s` / `tool_timeout_s` | 30 | shell + tool caps |
+| `max_inflight` | 4 | FIFO admission across sessions |
+| `max_session_turns` | 8 | L1 window size |
+| `session_ttl_s` / `max_sessions` | 1800 / 1000 | session store limits |
+| `worker_eager` | False | warm the LLM at boot |
+| `use_tool_router` / `tool_top_k` | False / 5 | optional semantic tool shortlist |
+| `memory_store` / `memory_recall` | False / False | L2 episodic + L3 facts |
 
-Legs held after construction: `vad`, `stt`, `llm`, `tts`, plus `front_llm` when
-delegation is on (`main.py:244-250`), `chat_model` (`main.py:253`), a
-deepagents `LocalShellBackend` (`main.py:257-261`), `sessions`
-(`main.py:269-278`), a lazy `SemanticRouter` (`main.py:279+`), a lazy
-episodic store (`main.py:1000+`) and a `FIFOScheduler` (`main.py:281-286`).
-Lazy-worker flags live with them (`main.py:291-299`): `_worker_eager`,
-`_worker_warmed`, `_worker_unavailable`.
+Construction (`LongRunningAgent.__init__`) builds either a local `LlmModel` +
+`LocalChatModel` or a stock LangChain model for a cloud backend, the
+`LocalShellBackend`, MCP tools, `JsonSessionMemory`, `AgentMemory`,
+`AdmissionQueue`, `TurnScheduler`, `TurnBox`, `WorkerLeg` and then a standby
+graph. The per-turn graph is rebuilt by `TurnRunner` with `SessionMiddleware`.
 
 ### Warm order
 
-`warm()` (`main.py:398-437`) iterates legs in a fixed order — `vad`, `stt`,
-`tts`, `front_llm`, `llm` (`main.py:407-425`). `tts` is skipped when
-`speak_text_turns` is false, and the worker `llm` leg is skipped when
-delegation is on without `worker_eager` — it boots on the first delegate
-route instead (`_ensure_worker`, `main.py:642-671`), so boot carries zero
-worker footprint. A refused on-demand warm latches in
-`_worker_unavailable` and later YES turns fail fast with the same reason;
-an explicit `/model` switch to a warmed leg resets the latch.
+`VoiceAgent.warm` (`src/agent/voice_agent/agent.py`) warms `vad`, `stt`, `tts`, `llm` in
+that order. `tts` is skipped when `speak_text_turns` is false; `llm` is
+skipped unless `worker_eager`. A failed leg is appended to `missing` and
+warm continues, so `/health` can report `agent_loaded: false` with reasons
+instead of refusing to boot. MCP sessions open last.
 
-**One leg failing is never fatal.** Each exception is appended to `missing[]`
-and warm continues, so `/health` can answer `agent_loaded: false` with a
-reason list instead of the process refusing to boot.
+## 1.3 Turn paths
 
-## 1.3 The turn
+`VoiceAgent.__call__` (`src/agent/voice_agent/agent.py`) dispatches:
 
-`__call__` (`main.py:1105-1127`) dispatches on input type:
+| Input | Path |
+|---|---|
+| `str` | `_text_reply` -> `TurnRunner.collect_text` -> reply string |
+| audio, `fast_voice` | `CascadePipeline.run_fast` |
+| audio | `CascadePipeline.run_turns` |
 
-| Input | Path | Method |
+Text turns that need events use `LongRunningAgent.run_text`
+(`src/agent/long_running/agent.py`) -> `TurnRunner.run_text`, which yields
+`term/*` events and optional TTS audio. The plain `LongRunningAgent.__call__`
+returns only the final reply.
+
+Every turn serializes per session in `TurnScheduler.run`
+(`src/agent/long_running/scheduler.py`): a second turn queues and is
+injected as a follow-up instead of interleaving. `TurnRunner._run_turn`
+ensures the worker first, then `TurnRunner._agent_invoke` opens the
+`TurnBox`, rebuilds the graph, and streams the run. Session persistence
+happens once in `SessionMiddleware.after_agent`, not in the runner.
+
+### Lazy worker
+
+`WorkerLeg.ensure` (`src/agent/long_running/worker.py`) warms the LLM on
+first use. A refusal latches in `worker.unavailable`; later turns fail fast
+with the same reason. `WorkerLeg.missing_reason` turns that latch or a
+`missing[]` entry into the transcript notice instead of a silent empty
+reply.
+
+## 1.4 Harness build
+
+`build_longrunning_agent` (`src/agent/long_running/agent.py`) delegates to
+`builder.build_agent` (`src/agent/long_running/builder.py`), which returns a
+compiled `CompiledStateGraph`. It rebuilds every turn, so state does not leak.
+Layers, outermost first:
+
+1. `TodoListMiddleware` — `write_todos` planning.
+2. `SessionMiddleware` — inject stored history, persist the turn once.
+3. `MemoryMiddleware` — L2 episodes + L3 facts in the system prompt.
+4. `TurnContextMiddleware` — working directory + shell in the system prompt.
+5. `TrimObservationsMiddleware` — observations capped at 1500 chars.
+6. `PolicyMiddleware` — deny/confirm gates.
+7. `ErrorHintMiddleware` — tool-failure hints.
+8. `VerifyMiddleware` — result checks.
+9. `InjectToolMiddleware` — optional top-K tool shortlist.
+10. `SummarizationMiddleware` — always-on in-turn compaction.
+
+The planner binds only the `Main` tool group
+(`build_execution_tools(..., tags={"Main"})`) and either acts directly or
+hands steps to subagents. The system prompt is the fixed core
+(`src/agent/long_running/prompts/core.py`) plus the active-model identity line
+plus the user-editable `src/agent/long_running/AGENTS.md`.
+
+Before the graph runs, `TurnBox.open` (`src/agent/long_running/box.py`)
+resolves the cwd and builds the per-turn backend (sandbox or local).
+`TurnRunner._invoke_boxed` sends only the current user message; middleware
+adds history, memory and `Working directory`/`Shell` to the model request.
+It streams `messages` + `updates`. If the model did work but produced no
+text, the reply is forced to `"Done."`; a degenerate reply is replaced
+with `DEGENERATE_REPLY`.
+
+## 1.5 Events
+
+`AgentEvent` (`src/agent/events.py`) is the only currency the agent
+speaks: `node`, `kind`, `data`, `t_s`. `as_dict` makes ndarrays JSON-safe.
+
+| kind | Meaning |
+|---|---|
+| `queued` | another turn holds this session |
+| `segments` / `text` | VAD spans, STT transcript |
+| `token` / `thinking` | decoded piece, reasoning delta/block |
+| `action` / `observation` | tool call, tool result |
+| `deny` | policy block or user cancel |
+| `chat` / `audio` | final reply, TTS chunk |
+| `done` / `summary` | stream end, turn totals |
+| `error` | leg or turn failure |
+
+## 1.6 Planner -> specialists
+
+`build_specialists` (`src/agent/long_running/specialists.py`) declares three
+deepagents subagents over the **same** warmed model:
+
+| Role | Tag | Tools |
 |---|---|---|
-| `str` | text reply | `_text_reply` (`main.py:1129+`) |
-| audio, fast voice | single-shot | `_voice_fast` (`main.py:1201+`) |
-| audio, full | multi-leg | `_voice_turns` (`main.py:1363+`) |
+| `shell-use` | `ShellUse` | terminal, files, Python, jobs |
+| `browser-use` | `BrowserUse` | web search/read/operate |
+| `computer-use` | `ComputerUse` | desktop GUI |
 
-Every turn goes through `_run_locked` (`main.py:836-875`), which serializes per
-`session_id` via a lock. Contenders are queued into `_pending` rather than
-dropped (`main.py:852-855`), and the queue drains when the lock frees
-(`main.py:868-875`).
+Specialization is prompt + tag-filtered tools + middleware, never extra
+weights. Non-shell specialists also get a read-only filesystem allowlist
+(`ls`, `read_file`, `glob`, `grep`). Each specialist carries its own
+`PolicyMiddleware` + `TrimObservationsMiddleware` because deepagents does
+not inherit parent middleware.
 
-`_run_turn` (`main.py:877-959`) is where the front brain is consulted. If the
-front model says *chat*, the answer is emitted directly and no worker runs. If
-it says *delegate*, `_ensure_worker` (`main.py:642-671`) warms the lazy worker
-first — a refusal ends the turn with the reason instead of running anything —
-then `_agent_invoke` (`main.py:682-835`) drives the full harness.
+`create_deep_agent(subagents=...)` supplies the `task` transport: the
+description is the specialist's only context, and its final text returns
+as a `ToolMessage`. A specialist stack has no `task` tool, so recursion is
+impossible by construction; `MAX_SUBTASKS = 6` caps breadth
+(`src/agent/long_running/simtask.py`).
 
-## 1.4 Events
+## 1.7 Memory, titles, budgets
 
-`AgentEvent` (`src/agent/events.py:17-38`) is the only currency the agent
-speaks. Fields: `node` (`vad|stt|llm|tts|turn`), `kind`, `data`, `t_s`
-(`perf_counter`).
+`JsonSessionMemory` (`src/agent/memory.py`) owns L1: per-session history,
+titles, locks and JSON persistence. When `memory_store` or `memory_recall`
+is on, `EpisodicStore` (`src/agent/long_running/episodic.py`) stores evicted
+turns as L2 and `load_facts` (`src/agent/facts.py`) supplies L3 facts.
+`MemoryMiddleware` (`src/agent/long_running/middleware/memory.py`) appends
+L2 + L3 to the system prompt; `AgentMemory.consolidate` promotes evicted
+turn content after `SessionMiddleware` writes back.
 
-`as_dict()` (`events.py:24-38`) copies `data` and converts any numpy array to
-`{"dtype","shape","n"}` so an event is always JSON-serializable.
+Titles are two-word labels from the small leg (`src/agent/title.py`),
+fired after the first turn by `_maybe_title` (`src/server/state.py:284`).
+A dead leg or unparseable answer falls back to the client's offline name.
 
-Kinds emitted by the agent loop:
+Budgets (`src/agent/budget.py`):
 
-| kind | Emitted at | Meaning |
-|---|---|---|
-| `queued` | `main.py:853` | another turn holds this session |
-| `route` | `main.py:904` | which brain answered |
-| `token` | `main.py:738` | one decoded token |
-| `thinking` | `main.py:747,771,815` | `<think>` delta or block |
-| `action` | `main.py:785` | a tool call was made |
-| `observation` | `main.py:806` | tool result |
-| `deny` | `main.py:798,802` | policy block or user cancel |
-| `chat` | `main.py:1089` | final text reply |
-| `audio` | `main.py:1094` | TTS chunk |
-| `error` | `main.py:705,809,821,885,1085` | turn failed |
-| `summary` | `main.py:1100` | turn totals |
-
-## 1.5 Worker invocation
-
-`_agent_invoke` (`main.py:682-835`) is the interesting method:
-
-1. **Rebuilds the agent every turn** via `_build_agent` (`main.py:700-708`).
-    State does not leak between turns.
-2. Builds the human message as
-   `text + mem_ctx + "\nCWD: <cwd> SHELL: bash"` (`main.py:709-713`).
-3. Streams with `agent.astream(..., ["messages","updates"])` and a
-   `recursion_limit` of `10 + 5 × max_agent_steps` (`main.py:725-727`).
-4. `messages` mode → token and thinking events. `updates` mode → inspects the
-   payload node's messages to decide whether it is thinking, a tool call
-   (`main.py:775-789`), or the final reply (`main.py:790-792`).
-5. Finally, `split_thinking` (`main.py:811-819`) separates reasoning from
-   answer. **If the worker did work but produced no text, the reply is forced
-   to `"Done."`** (`main.py:818-819`).
-
-That last rule is a deliberate scar tissue. Small models routinely narrate
-("I renamed the file") and emit nothing; rather than hand an empty string to
-TTS, the loop substitutes a real word.
-
-## 1.6 Two-brain delegation
-
-Config: `configs/delegate.yaml`, loaded by `src/agent/delegate.py:112-172`.
-Selection order is explicit path → `$VOICE_DELEGATE_CONFIG` → the repo file →
-built-in defaults.
-
-| Brain | Model | Tools | Job |
-|---|---|---|---|
-| front | `Qwen/Qwen3-0.6B` | **none** | one yes/no routing question per turn |
-| worker | `prism-ml/Ternary-Bonsai-2-27B` | all | the entire agentic harness |
-
-The front brain gets no tools *by design*. It is asked one binary question, so
-it cannot fabricate a tool call or invent a task string. `BOOLEAN_MAX_TOKENS`
-is 6 (`delegate.py:346`) and `thinking: false`, because a trace only burns
-tokens on a choice that has two answers.
-
-`decide_escalate` (`delegate.py:383-402`) **fails toward escalation**: an
-unparseable answer or an exception returns `True`. Silence means "go do the
-work", which is the safe direction for a 0.6B model.
-
-`backstop: true` adds a deterministic regex pass (`configs/delegate.yaml`,
-`backstop_min_score: 2`) consulted *only* when the flag said no and the text
-still reads like work. It costs a regex match and guards the worst bug this
-design can produce: the assistant claiming to have done something it did not
-do. Re-measured 2026-10-03 on the committed 28-prompt set
-(`tests/src/test_delegate.py` CHAT+TASK): 13/13 tasks escalate, 11/15
-chit-chat kept, and the model never said `NO` to anything the regex scored
-as work — so the backstop still never fires.
-
-Depth is capped at 1 — a subtask that emits its own plan runs flat, never
-nested (`src/agent/simtask.py:13-15`, `MAX_SUBTASKS = 6`).
-
-The worker boots lazily: `worker_eager: false` (default, `main.py:144`,
-mirrored in `configs/delegate.yaml`) skips the `llm` leg at boot, and the
-first delegate route warms it via `_ensure_worker` (`main.py:642-671`). A
-refused warm latches in `_worker_unavailable`, so later YES turns fail fast
-with the same reason; an explicit `/model` switch to a warmed leg resets
-the latch (`bridge.py:345-349`).
-
-When the worker leg is missing, `_worker_missing_reason`
-(`main.py:986-997`) inspects `missing[]` for an `llm leg:` entry — and the
-lazy latch first — and the turn carries that reason instead of a silent
-empty answer (`main.py:936-959`).
-
-## 1.7 Titles
-
-`src/agent/title.py` generates a two-word session name with the front brain:
-`TITLE_MAX_TOKENS = 12` (`title.py:59`), no tools, no history, user text
-capped at 600 chars (`title.py:77-89`).
-
-`parse_title` (`title.py:92-121`) strips `<think>`, drops a leading
-narration preamble when a colon-narration pattern is detected (`_is_preamble`),
-extracts at most two words, and caps length at 40. `generate_title`
-(`title.py:124-145`) never raises — it returns `(title, reason)`.
-
-## 1.8 Budgets
-
-`src/agent/budget.py` prices every turn:
-
-| Backend | Context tokens | Step floor |
+| Backend | Context | Step floor |
 |---|---|---|
 | `bonsai` | 16384 | 512 |
 | `qwen` | 8192 | 256 |
 
-`HEADROOM` 0.8 and `CHARS_PER_TOKEN` 3.5 (`budget.py:57-59`). Token counting
-prefers the server's real `/tokenize` when a URL is available
-(`budget.py:158-173`) and falls back to the character estimate.
-`window_slice` (`budget.py:193-273`) fills newest-first within budget and
-always keeps at least one message.
+`HEADROOM` is 0.8 and `CHARS_PER_TOKEN` 3.5; token counting prefers the
+server's `/tokenize` when available. `TrimObservationsMiddleware`
+(`src/agent/long_running/middleware/trim.py`) truncates oversized tool results
+without mutating the original.
 
-`TrimObservationsMiddleware` (`src/agent/trim.py:14-53`) truncates any
-`ToolMessage` over 1500 chars to head + `…[N chars omitted]`, and it does so
-via `override`, never mutating the original.
+## 1.8 See also
 
-## 1.9 See also
-
-- [02-tools.md](02-tools.md) — the op schemas, parser, router, policy
-- [03-memory.md](03-memory.md) — the three tiers and injection
+- [02-tools.md](02-tools.md) — schemas, parser, router, policy
+- [03-memory.md](03-memory.md) — L1/L2/L3 and injection
 - [04-sessions.md](04-sessions.md) — ids, windows, persistence
-- [05-models.md](05-models.md) — the legs and `LlmModel`
-- [06-processes.md](06-processes.md) — bridge, server, and their endpoints
-- [07-inference.md](07-inference.md) — the custom runtime (parser fixed 2026-10-03)
-- [08-tui.md](08-tui.md) — the OpenTUI client
+- [05-models.md](05-models.md) — legs and `LlmModel`
+- [06-processes.md](06-processes.md) — the `:8004` backend
+- [07-inference.md](07-inference.md) — retired custom runtime
+- [08-tui.md](08-tui.md) — the Tauri desktop client

@@ -96,16 +96,14 @@ they import only raw-kernel siblings plus torch, never `models/`.
 On a 4 GB card, one GPU process at a time is a hard rule, not a preference — a
 second model instance is an OOM, which is what killed a GAIA run.
 
-The two-brain split competes for the same card; `placement` in
-`configs/delegate.yaml` is the knob:
-
-| Placement | Front brain | VRAM |
-|---|---|---|
-| `fused` | in-process on CUDA | ~1.4 GB, fastest chit-chat |
-| `cpu` | in-process on CPU | 0 |
-| `sidecar` | llama.cpp CPU on 8085 | 0, but downloads ~0.4 GB GGUF |
+`LlmConfig.backend` picks the local leg: `qwen` is Qwen3-0.6B fused
+Triton; `bonsai` is Ternary Bonsai 2 27B via a Prism-fork llama.cpp
+sidecar on `bonsai_port` (8081, `bonsai_ngl="auto"` probes free VRAM).
+Cloud backends (`groq`, `gemini`, `anthropic`, `openai`, `openrouter`,
+`deepseek`, `openai_compat`) use stock LangChain chat models and hold no
+local weights.
 
 ## 5.8 See also
 
-- [01-agent.md](01-agent.md#16-two-brain-delegation) — who uses which
+- [01-agent.md](01-agent.md) — how the planner uses the model
 - [07-inference.md](07-inference.md) — retired runtime note

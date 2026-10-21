@@ -1,4 +1,8 @@
-# Architecture
+# Architecture (legacy single-file)
+
+> **Legacy:** the narrative predates the one-backend/deep-agent refactor. See
+> the root `ARCHITECTURE.md` for the current map; paths and ports below are
+> updated, but the flow is historical.
 
 Complete technical architecture of `voice-pipeline`: every component, every
 request path, every cross-module edge. Nothing here is aspirational — each
@@ -8,13 +12,13 @@ claim cites the file that implements it.
 
 ```
 voice-pipeline/
-├── server.py                # THE server: health, metrics, two-way /talk WS (:8003)
+├── src/server/              # THE backend: health, metrics, turns, chat, talk (:8004)
 ├── engine/
 │   ├── session.py           # SessionStore: RAM-only multi-turn memory
 │   ├── streaming.py         # SentenceSplitter + SSE framing (format_sse…)
 │   ├── audio.py             # wav io / resample / normalize helpers
 │   └── __init__.py          # public re-exports only (no logic)
-├── requirements.txt         # pinned pip deps (torch cu124, triton, kokoro…)
+├── pyproject.toml           # deps + uv.lock (torch cu124, triton, kokoro…)
 ├── src/
 │   ├── models/              # clean async legs (dataclass configs, no YAML)
 │   │   ├── vad.py / stt.py / llm.py / tts.py
@@ -43,13 +47,13 @@ voice-pipeline/
 - `src/models/triton_kernels/*.py` (per-leg surfaces) import only raw-kernel
   siblings + torch — never `models/`.
 - `models/*.py` import `src.models.triton_kernels.<leg>` + `src.models.runtime.tensor`
-  (host-boundary helper) — never `engine/` or `server.py`.
+  (host-boundary helper) — never `engine/` or `src/server/`.
 - `engine/` (audio/session/streaming helpers) imports
   `src.models.runtime.*` for tensor moves — never `models/` legs.
 - `src/models/*.py` (clean facades) import their `models.*` leg lazily
   inside `_backend()` only, so `import src.models.vad` never loads
   weights.
-- `src/server` (package, not a module) imports `src.main`, `engine.*`,
+- `src/server` (package, not a module) imports `src.agent.voice_agent.agent`, `engine.*`,
   `src.models.runtime.*` — never `models.*` at top level, keeping
   `/health` liveness-safe.
 

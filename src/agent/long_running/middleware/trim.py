@@ -26,8 +26,8 @@ class TrimObservationsMiddleware(AgentMiddleware):
                         and isinstance(m.content, str)
                         and len(m.content) > self.limit):
                     try:
+                        from src.agent.store import VoicertStore
                         from src.app_config import AppConfig
-                        from src.store import VoicertStore
 
                         VoicertStore().spill(
                             "", str(getattr(m, "name", "") or "tool"),

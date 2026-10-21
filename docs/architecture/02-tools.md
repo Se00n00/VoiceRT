@@ -100,11 +100,11 @@ backends (`bonsai`, `qwen`) it skips the embedding router entirely
 
 ## 2.4 Policy
 
-Two gates, both in `src/agent/middleware/policy.py`, checked before anything runs.
+Two gates, both in `src/agent/long_running/middleware/policy.py`, checked before anything runs.
 
 ### Deny — never runs, no confirmation can unlock it
 
-`_DENY_RES` (`src/agent/middleware/policy.py`):
+`_DENY_RES` (`src/agent/long_running/middleware/policy.py`):
 
 ```
 fork bomb              rm -rf /   rm -rf ~/   mkfs   dd of=/dev/
@@ -114,7 +114,7 @@ mv … /dev
 
 ### Confirm — runs only after explicit user yes
 
-`_CONFIRM_RES` (`src/agent/middleware/policy.py`):
+`_CONFIRM_RES` (`src/agent/long_running/middleware/policy.py`):
 
 ```
 sudo   eval   $(…)   `…`   process substitution
@@ -127,7 +127,7 @@ pip|pip3|npm install|uninstall      apt/apt-get
 
 ### The confirmation flow
 
-`VoiceAgent._confirm_wrapper` (`src/main.py:534-551`) wraps `confirm_fn`. It
+`TurnRunner._confirm_wrapper` (`src/agent/long_running/turn.py`) wraps `confirm_fn`. It
 understands three user answers:
 
 | Answer | Effect |
@@ -136,14 +136,14 @@ understands three user answers:
 | `false` | cancel → `term/deny` |
 | `"always"` / `"a"` / `"allowlist"` | run once **and** `remember_approval` |
 
-Approvals live in `self.approvals`, keyed by session and by the first token of
-the command or the op name (`main.py:467-472`); `is_approved` checks it
-(`main.py:474-481`). **This is per agent process, in RAM** — restart the bridge
+Approvals live in `LongRunningAgent.approvals`, keyed by session and by the
+first token of the command or the op name; `is_approved` checks it
+(in `LongRunningAgent.approvals`). **This is per agent process, in RAM** — restart the backend
 and every allowlist entry is gone.
 
 A blocked or cancelled call comes back as an observation string starting with
-`Blocked:` or `Cancelled`, which `_agent_invoke` converts to `term/deny`
-(`main.py:731-743`).
+`Blocked:` or `Cancelled`, which `_invoke_boxed` converts to `term/deny`
+(in `TurnBox.open`).
 
 ## 2.5 MCP
 
@@ -159,12 +159,12 @@ with cwd at repo root and a merged `PYTHONPATH` (`config.py:45-57`).
 `load_connections` returns `(connections, tool_name_prefix)` so multiple
 servers can expose the same tool name without collision (`config.py:94-128`).
 
-`load_extra_tools` (`src/main.py:258-263`) merges discovered tools into the
-agent alongside the native ops.
+`load_extra_tools` (`src/agent/mcp/client.py:38`) merges discovered tools into
+the agent alongside the native ops.
 
 ## 2.6 Prompt contract
 
-`TERMINAL_PREAMBLE` (`src/agent/prompts.py:12`) is the single shared contract,
+`TERMINAL_PREAMBLE` (`src/agent/prompts/terminal.py`) is the single shared contract,
 reused by the voice/TTS system prompt, the deep-agent system prompt, and
 `/browser`. It states the ops in prose, gives XML *and* JSON examples, and
 spells out the rules that matter:

@@ -17,10 +17,11 @@ server binary need a fresh download anyway.
 # cell 1: code
 !git clone https://github.com/Se00n00/VoiceRT.git
 %cd VoiceRT/voice-pipeline
-# cell 2: env (torch CUDA build is the big download; requirements.txt
-# pins are verified for Python 3.13: kokoro splits by version marker,
-# torch trio is 2.6.0/0.21.0/2.6.0, mcp-adapters is 0.3.2)
-!pip install -r requirements.txt
+# cell 2: env (torch CUDA build is the big download; pyproject.toml +
+# uv.lock pins are verified for Python 3.13: kokoro splits by version
+# marker, torch pair is 2.6.0/2.6.0, mcp-adapters is 0.3.2)
+!pip install -q uv
+!uv export --frozen --no-hashes --no-emit-project -o /tmp/uv-req.txt && uv pip install --system -r /tmp/uv-req.txt
 # cell 3: preconditions (all must print OK)
 !PYTHONPATH=. python3 -c "import torch; print(torch.cuda.is_available())"
 ```

@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import re
 
-from src.prompts.title import (  # noqa: F401  (single home, re-exported)
+from src.agent.prompts.title import (  # noqa: F401  (single home, re-exported)
     TITLE_FEWSHOT,
     TITLE_MAX_TOKENS,
     TITLE_SYSTEM,

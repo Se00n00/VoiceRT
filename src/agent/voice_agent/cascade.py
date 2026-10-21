@@ -1,7 +1,7 @@
 """Voice cascade: VAD -> STT -> LLM -> TTS on Qwen3-0.6B.
 
 Owns the audio legs; the LLM, chat model, sessions and scheduler stay on
-the harness (``src/long_running.py``) and are read live.
+the harness (``src/agent/long_running/agent.py``) and are read live.
 """
 
 import re
@@ -12,14 +12,14 @@ from engine import SentenceSplitter, new_session_id
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.agent.events import AgentEvent
-from src.long_running import _cap_words, _vram_mb
+from src.agent.long_running import cap_words, vram_mb
+from src.agent.prompts.voice import VOICE_FAST_SYSTEM
 from src.models.llm import LlmModel
 from src.models.runtime import check_budget
 from src.models.runtime.device import gpu_rev, keepalive_start
 from src.models.stt import SttConfig, SttModel
 from src.models.tts import TtsConfig, TtsModel
 from src.models.vad import VadConfig, VadModel
-from src.prompts.voice import VOICE_FAST_SYSTEM, VOICE_SUFFIX
 
 __all__ = ["CascadeConfig", "CascadePipeline"]
 
@@ -120,14 +120,14 @@ class CascadePipeline:
 
         ..
         """
-        return await self.harness._admit()
+        return await self.harness.admission.admit()
 
     def _release(self, ticket) -> None:
         """Release a scheduler slot via the harness.
 
         ..
         """
-        return self.harness._release(ticket)
+        return self.harness.admission.release(ticket)
 
     def _identity_sentence(self) -> str:
         """Model identity line via the harness.
@@ -137,18 +137,17 @@ class CascadePipeline:
         return self.harness._identity_sentence()
 
     async def _run_locked(
-        self, text, *, sid, cwd, confirm_fn, system_suffix, out_turns
+        self, text, *, sid, cwd, confirm_fn, out_turns
     ):
         """Text turn via the harness loop. Yields events.
 
         ..
         """
-        async for ev in self.harness._run_locked(
+        async for ev in self.harness.run_events(
             text,
             sid=sid,
             cwd=cwd,
             confirm_fn=confirm_fn,
-            system_suffix=system_suffix,
             out_turns=out_turns,
         ):
             yield ev
@@ -228,7 +227,7 @@ class CascadePipeline:
                         "node_s": dict(node_s),
                         "ttfa_s": total,
                         "total_s": total,
-                        "vram_mb": _vram_mb(),
+                        "vram_mb": vram_mb(),
                         "session_id": sid,
                     },
                 )
@@ -262,7 +261,7 @@ class CascadePipeline:
                         "node_s": dict(node_s),
                         "ttfa_s": total,
                         "total_s": total,
-                        "vram_mb": _vram_mb(),
+                        "vram_mb": vram_mb(),
                         "session_id": sid,
                     },
                 )
@@ -338,7 +337,7 @@ class CascadePipeline:
                     pass
 
             first_audio_at = None
-            reply = _cap_words(reply)
+            reply = cap_words(reply)
             if (reply or "").strip():
                 t_tts = time.perf_counter()
                 try:
@@ -368,7 +367,7 @@ class CascadePipeline:
                     "node_s": dict(node_s),
                     "ttfa_s": first_audio_at if first_audio_at is not None else total,
                     "total_s": total,
-                    "vram_mb": _vram_mb(),
+                    "vram_mb": vram_mb(),
                     "session_id": sid,
                 },
             )
@@ -436,7 +435,7 @@ class CascadePipeline:
                         "node_s": dict(node_s),
                         "ttfa_s": total,
                         "total_s": total,
-                        "vram_mb": _vram_mb(),
+                        "vram_mb": vram_mb(),
                         "session_id": sid,
                     },
                 )
@@ -470,7 +469,7 @@ class CascadePipeline:
                         "node_s": dict(node_s),
                         "ttfa_s": total,
                         "total_s": total,
-                        "vram_mb": _vram_mb(),
+                        "vram_mb": vram_mb(),
                         "session_id": sid,
                     },
                 )
@@ -486,7 +485,6 @@ class CascadePipeline:
                 sid=eff_sid,
                 cwd=".",
                 confirm_fn=None,
-                system_suffix=VOICE_SUFFIX,
                 out_turns=turns,
             ):
                 if ev.kind == "token":
@@ -519,7 +517,7 @@ class CascadePipeline:
             node_s["llm"] = node_s.get("llm", 0.0) + time.perf_counter() - t_llm
 
             for _t, reply, _th in turns:
-                reply = _cap_words(reply)
+                reply = cap_words(reply)
                 if not (reply or "").strip():
                     continue
                 splitter = SentenceSplitter()
@@ -583,7 +581,7 @@ class CascadePipeline:
                     "node_s": dict(node_s),
                     "ttfa_s": first_audio_at if first_audio_at is not None else total,
                     "total_s": total,
-                    "vram_mb": _vram_mb(),
+                    "vram_mb": vram_mb(),
                     "session_id": sid,
                 },
             )

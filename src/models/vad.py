@@ -1,7 +1,7 @@
 """VAD leg: Silero speech detection via the pip ``silero-vad`` package.
 
 Single-file facade: weights ship inside the installed wheel
-(``silero-vad==6.2.3``, see requirements.txt), so there is no vendored
+(``silero-vad==6.2.3``, see pyproject.toml), so there is no vendored
 onnx blob and no engine module. ``onnx=True`` (default) uses the pip
 ONNX backend — byte-identical weights to the old vendored file, fastest
 on CPU (~0.12ms/frame); ``onnx=False`` uses the torch JIT twin.

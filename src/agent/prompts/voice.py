@@ -1,16 +1,16 @@
 """Voice/text turn prompts. Single source of truth.
 
-Moved here from ``src.main`` (``_FRONT_SYSTEM``, ``_VOICE_FAST_SYSTEM``,
-``_TEXT_SUFFIX``, ``_VOICE_SUFFIX``) and ``src.models.llm``
-(``SYSTEM_PROMPT``, via :mod:`src.prompts.base`). ``src.main`` keeps
-backward-compatible aliases (``_FRONT_SYSTEM`` etc.) re-exported from
-here so existing imports keep working.
+Moved here from the old voice-agent module (``_FRONT_SYSTEM``,
+``_VOICE_FAST_SYSTEM``, ``_TEXT_SUFFIX``, ``_VOICE_SUFFIX``) and
+``src.models.llm`` (``SYSTEM_PROMPT``, via
+:mod:`src.agent.prompts.base`). Callers import the public names here;
+the voice agent keeps no private prompt aliases.
 
 Also owns the small user-facing reply templates used by ``VoiceAgent``:
 the worker-down notice and the degenerate-output fallback.
 """
 
-from src.prompts.base import SYSTEM_PROMPT
+from src.agent.prompts.base import SYSTEM_PROMPT
 
 __all__ = [
     "SYSTEM_PROMPT",
@@ -57,7 +57,7 @@ TEXT_SUFFIX = (
 VOICE_SUFFIX = "\n\n" + SYSTEM_PROMPT
 
 # "I handed that to the worker agent, but it could not start, so nothing
-# was done: {reason}" — VoiceAgent._worker_down_notice.
+# was done: {reason}" — WorkerLeg.down_notice.
 WORKER_DOWN_TEMPLATE = (
     "I handed that to the worker agent, but it could not "
     "start, so nothing was done: {reason}"

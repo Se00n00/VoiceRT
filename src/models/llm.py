@@ -5,7 +5,7 @@ import re
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.prompts.base import SYSTEM_PROMPT  # noqa: F401  (re-exported for back-compat)
+from src.agent.prompts.base import SYSTEM_PROMPT  # noqa: F401  (re-exported for back-compat)
 
 # Sidecar truth lives on LlmModel.SIDECAR_BACKENDS below; cloud backends
 # are stock LangChain chat models via src/models/provider.py.
@@ -429,8 +429,8 @@ class LlmModel:
         stays 48; callers pass a larger per-step limit to ``generate``
         (e.g. 128) so JSON fits.
         """
-        # Prompt text lives in src.prompts.terminal (single home).
-        from src.prompts.terminal import BROWSER_PREAMBLE as _BROWSER_PREAMBLE
+        # Prompt text lives in src.agent.prompts.terminal (single home).
+        from src.agent.prompts.terminal import BROWSER_PREAMBLE as _BROWSER_PREAMBLE
 
         system = self.config.system_prompt + " " + _BROWSER_PREAMBLE
         msgs = [{"role": "system", "content": system}]
@@ -455,11 +455,11 @@ class LlmModel:
         catalogue (for legs whose template may ignore native tool specs);
         native-function legs pass False — pure English suffices there.
         """
-        from src.prompts.terminal import TERMINAL_PREAMBLE
+        from src.agent.prompts.terminal import TERMINAL_PREAMBLE
 
         preamble = getattr(self, "terminal_preamble", None) or TERMINAL_PREAMBLE
         if catalogue:
-            from src.prompts.terminal import TERMINAL_TOOL_CATALOGUE
+            from src.agent.prompts.terminal import TERMINAL_TOOL_CATALOGUE
 
             preamble = preamble + " " + TERMINAL_TOOL_CATALOGUE
         system = self.config.system_prompt + " " + preamble

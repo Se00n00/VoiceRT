@@ -41,7 +41,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.models.llm import LlmConfig
-from src.prompts.delegate import (  # noqa: F401  (single home, re-exported)
+from src.agent.prompts.delegate import (  # noqa: F401  (single home, re-exported)
     BOOLEAN_FEWSHOT,
     BOOLEAN_MAX_TOKENS,
     BOOLEAN_SYSTEM,
@@ -248,7 +248,7 @@ class Route(BaseModel):
     forced: bool = False
 
 
-# Boolean escalation contract lives in src.prompts.delegate (single home;
+# Boolean escalation contract lives in src.agent.prompts.delegate (single home;
 # re-exported at the top of this module). Rationale stays in the module
 # docstring and in that prompt module.
 

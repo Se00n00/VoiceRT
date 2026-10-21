@@ -92,16 +92,16 @@ async def amain(backend: str, model: str, workdir: str,
 
     from src.models.provider import ChatModel
     from src.agent.mcp.session import open_sessions
-    from src.agent.middleware.errors import ErrorHintMiddleware
-    from src.agent.middleware.inject import InjectToolMiddleware
-    from src.agent.middleware.policy import PolicyMiddleware
-    from src.agent.middleware.trim import TrimObservationsMiddleware
-    from src.agent.middleware.verify import VerifyMiddleware
     from src.agent.tool_router import build_execution_tools
+    from src.agent.long_running.middleware.errors import ErrorHintMiddleware
+    from src.agent.long_running.middleware.inject import InjectToolMiddleware
+    from src.agent.long_running.middleware.policy import PolicyMiddleware
+    from src.agent.long_running.middleware.trim import TrimObservationsMiddleware
+    from src.agent.long_running.middleware.verify import VerifyMiddleware
+    from src.agent.long_running.prompts.todo import TODO_SYSTEM_PROMPT, TODO_TOOL_DESCRIPTION
     from src.models.llm import LlmConfig, LlmModel
     from src.models.chat_model import LocalChatModel
-    from src.prompts.base import SYSTEM_PROMPT
-    from src.prompts.middleware import TODO_SYSTEM_PROMPT, TODO_TOOL_DESCRIPTION
+    from src.agent.prompts.base import SYSTEM_PROMPT
 
     os.makedirs(workdir, exist_ok=True)
     os.environ["VOICE_WORKDIR"] = workdir

@@ -10,24 +10,19 @@ Device placement:
 
 Pipeline: speech -> VAD spans -> STT text -> deep-agent turn (tools +
 JSON session memory) -> TTS. Text turns go through :meth:`run_text`
-(TUI, bridge, CLI, evals); voice turns through :meth:`__call__`
+(text clients, CLI, evals); voice turns through :meth:`__call__`
 (``server.py`` ``/talk``). If a turn is already running for a session,
 new input is queued and injected as follow-up message(s) once the
 active turn drains.
 """
 
-from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.cascade import CascadeConfig, CascadePipeline
-from src.long_running import (
-    LongRunningAgent,
-    LongRunningConfig,
-    _lc_messages,
-)
-from src.models.llm import LlmModel
+from src.agent.long_running import LongRunningAgent, LongRunningConfig
+from src.agent.voice_agent.cascade import CascadeConfig, CascadePipeline
 
 __all__ = ["VoiceAgentConfig", "VoiceAgent"]
+
 
 class VoiceAgentConfig(BaseModel):
     """Shell config: cascade + harness sub-configs.
@@ -78,45 +73,12 @@ class VoiceAgent(LongRunningAgent):
 
     async def _text_reply(self, text: str, session_id: str | None = None) -> str:
         """One text turn, reply string only (no audio synthesis)."""
-        hist = self.sessions.history(session_id) if session_id else []
-        task = str(text)
-
-        reason = await self._ensure_worker()
-        if reason:
-            return self._worker_down_notice(task, reason)[1]
-
-        self.agent = self._build_agent()
-        res = await self.agent.ainvoke(
-            {"messages": [*_lc_messages(hist), HumanMessage(content=task)]},
-            config={"recursion_limit": self.config.recursion_limit},
-        )
-        msgs = res.get("messages", []) if isinstance(res, dict) else []
         reply = ""
-        for m in reversed(list(msgs or [])):
-            if isinstance(m, dict):
-                role = m.get("type") or m.get("role") or ""
-                content = m.get("content", "")
-            else:
-                role = getattr(m, "type", None) or ""
-                content = getattr(m, "content", "")
-            if role not in ("ai", "assistant"):
-                continue
-            if isinstance(content, list):
-                content = " ".join(
-                    str(c.get("text", c)) for c in content if isinstance(c, dict)
-                )
-            reply = str(content or "")
-            break
-        try:
-            _thinking, answer = LlmModel.split_thinking(reply)
-        except Exception:
-            answer = reply
-        reply = str(answer or reply or "").strip()
-        if session_id and (text or reply):
-            try:
-                self.sessions.remember_turn(session_id, str(text), reply)
-            except Exception:
-                pass
+        async for ev in self.run_text(
+            str(text), session_id=session_id, speak=False
+        ):
+            if ev.kind == "chat":
+                reply = str((ev.data or {}).get("reply", "") or "")
         return reply
 
     # ---- voice agent (audio legs: fast path, full voice turns) ----
@@ -129,11 +91,12 @@ class VoiceAgent(LongRunningAgent):
     async def warm(self) -> "VoiceAgent":
         """Build every leg; collect failures instead of raising."""
         self.missing = []
+        self.worker.unavailable = None
         for name in ("vad", "stt", "tts", "llm"):
             if name == "tts" and not self.config.speak_text_turns:
                 self.missing.append("tts leg: skipped (text-only)")
                 continue
-            if name == "llm" and not self._worker_eager:
+            if name == "llm" and not self.worker.eager:
                 continue
             leg = getattr(self.cascade, name, None) or getattr(self, name, None)
             if leg is None:
@@ -141,7 +104,7 @@ class VoiceAgent(LongRunningAgent):
             try:
                 await leg.warm()
                 if name == "llm":
-                    self._worker_warmed = True
+                    self.worker.warmed = True
             except Exception as exc:  # noqa: BLE001 - omit-and-report
                 self.missing.append(f"{name} leg: {exc}")
         if (
@@ -149,7 +112,7 @@ class VoiceAgent(LongRunningAgent):
             and getattr(self, "chat_model", None) is not None
         ):
             try:
-                self._worker_warmed = True
+                self.worker.warmed = True
             except Exception:
                 pass
         try:

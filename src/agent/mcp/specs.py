@@ -54,7 +54,7 @@ TOOL_TAGS = {
     "get_active_window": ("ComputerUse",),
     "list_windows": ("ComputerUse",),
     "open_app": ("ComputerUse",),
-    "task": ("Main",),
+    "task": ("ShellUse",),
     "question": ("Main",),
     "skill": ("Main",),
 }

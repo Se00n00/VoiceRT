@@ -3,7 +3,7 @@
 :class:`SemanticRouter` embeds the request once with BAAI/bge-small-en-v1.5
 (plain transformers, CLS pooling, CPU by default — milliseconds per turn,
 zero VRAM impact) and returns the top-k ops by cosine similarity.
-:class:`src.agent.middleware.InjectToolMiddleware` is the pluggable hook:
+:class:`src.agent.long_running.middleware.InjectToolMiddleware` is the pluggable hook:
 add it to the deepagents middleware list and it hands that shortlist to
 :class:`src.models.chat_model.LocalChatModel` for the current model call
 only (a ContextVar, always reset). Anything unresolved — model missing,

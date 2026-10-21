@@ -427,7 +427,7 @@ async def _switch_to_cloud(name: str, profile: dict, agent) -> dict:
     try:
         agent.active_model_label = str(profile.get("label", "") or name)
         agent.chat_model = chat_model
-        agent.agent = agent._build_agent()
+        agent.agent = agent.build_longrunning_agent()
     except Exception:
         pass
     try:
@@ -441,8 +441,8 @@ async def _switch_to_cloud(name: str, profile: dict, agent) -> dict:
     except Exception:
         pass
     try:
-        agent._worker_warmed = True
-        agent._worker_unavailable = None
+        agent.worker.warmed = True
+        agent.worker.unavailable = None
     except Exception:
         pass
     _current_model["name"] = name
@@ -517,7 +517,7 @@ async def switch_model(name: str) -> dict:
 
             agent.active_model_label = str(profile.get("label", "") or name)
             agent.chat_model = LocalChatModel(llm=new_llm)
-            agent.agent = agent._build_agent()
+            agent.agent = agent.build_longrunning_agent()
         except Exception:
             pass
         try:
@@ -533,8 +533,8 @@ async def switch_model(name: str) -> dict:
 
 
         try:
-            agent._worker_warmed = True
-            agent._worker_unavailable = None
+            agent.worker.warmed = True
+            agent.worker.unavailable = None
         except Exception:
             pass
         _current_model["name"] = name
@@ -574,12 +574,12 @@ def _apply_default_profile(agent) -> None:
             return
         agent.llm = None
         try:
-            agent.agent = agent._build_agent()
+            agent.agent = agent.build_longrunning_agent()
         except Exception:
             agent.llm, agent.chat_model = old_llm, old_chat
             _current_model["name"] = "qwen"
             return
-        agent._worker_warmed = True
+        agent.worker.warmed = True
     except Exception:
         pass
 
@@ -598,12 +598,12 @@ def get_agent():
     if _agent is None:
         import os
 
-        from src.long_running import LongRunningConfig
-        from src.main import VoiceAgent, VoiceAgentConfig
+        from src.agent.long_running import LongRunningConfig
+        from src.agent.voice_agent.agent import VoiceAgent, VoiceAgentConfig
 
         try:
+            from src.agent.store import VoicertStore
             from src.app_config import AppConfig
-            from src.store import VoicertStore
 
             AppConfig.ensure_global()
             store = VoicertStore()

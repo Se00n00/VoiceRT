@@ -5,7 +5,7 @@
 - Ternary Bonsai 2 27B GGUF (worker LLM backend) via snapshot_download
   with allow-list (PTQ pack, not the full repo)
 - Silero VAD ships inside the ``silero-vad`` pip wheel
-  (see requirements.txt) — nothing to fetch here.
+  (see pyproject.toml) — nothing to fetch here.
 
 Run: PYTHONPATH=. python -m src.models.download [--dest DIR]
 """

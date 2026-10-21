@@ -2,7 +2,7 @@
   "name": "voicert-tauri",
   "version": "0.1.0",
   "private": true,
-  "description": "Tauri GUI (fresh rewrite, Tailwind) for the local voice-terminal agent. Pure client to bridge.py on :8004.",
+  "description": "Tauri GUI (fresh rewrite, Tailwind) for the local voice-terminal agent. Pure client to src.server on :8004.",
   "type": "module",
   "scripts": {
     "dev": "vite",

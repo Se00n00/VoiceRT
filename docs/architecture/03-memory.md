@@ -55,7 +55,7 @@ ever used as a filename.
 
 ## 3.3 L2 — episodic
 
-`EpisodicStore` (`src/agent/episodic.py`) is sqlite plus embeddings.
+`EpisodicStore` (`src/agent/long_running/episodic.py`) is sqlite plus embeddings.
 `EMBED_MODEL_ID` is `bge-small-en-v1.5` (`episodic.py`).
 
 `store()` (`episodic.py:100-122`) writes a summary and its blob embedding.
@@ -87,34 +87,33 @@ used when no model is available to condense.
 
 ## 3.5 Injection — the one place
 
-`_memory_context` (`src/main.py:958-980`) is the single injection point. It
-returns `""` when `memory_recall` is off, otherwise it assembles:
+`MemoryMiddleware` (`src/agent/long_running/middleware/memory.py`) is the
+single injection point. It asks `AgentMemory.context` (in
+`src/agent/long_running/recall.py`) for a string, which returns `""` when
+`memory_recall` is off, otherwise it assembles:
 
 ```
-<L2 bullets>   episodic_store().recall(text, k=3, session)     main.py:965-971
-<L3 block>     format_block(load_facts(memory_dir / facts.md)) main.py:973-977
+<L2 bullets>   EpisodicStore.recall(text, k=3, session)
+<L3 block>     format_block(load_facts(memory_dir / facts.md))
 ```
 
-That string is concatenated into the human message in `_agent_invoke`:
-
-```python
-content = str(text) + mem_ctx + f"\nCWD: {cwd} SHELL: bash"
-```
-
-at `src/main.py:648`.
+The middleware appends that string to the model system prompt with
+`append_to_system_message`; the user message stays the raw utterance.
+`TurnContextMiddleware` separately appends the working directory and shell.
 
 Only three of the 199 earlier retrieval candidates are injected per turn. The
-budget is small because the front brain's context is 4096 tokens on some
-backends — recall that costs recall.
+budget is small because the model context is 8192 (qwen) or 16384 (bonsai)
+tokens — recall that costs recall.
 
 ## 3.6 Write-back
 
-`_memory_consolidate` (`src/main.py:938-956`) diffs the history contents before
-and after `remember_turn`, identifies messages that were dropped by eviction,
-summarizes them with `summarize_turns`, and stores the result into the episodic
-store (`main.py:949-955`).
+`AgentMemory.consolidate` (`src/agent/long_running/recall.py`) diffs the
+history contents before and after `remember_turn`, identifies messages that
+were dropped by eviction, summarizes them with `summarize_turns`, and stores
+the result into the episodic store.
 
-It is called only when `memory_store` is enabled (`src/main.py:761-769`).
+`SessionMiddleware.after_agent` calls it only when `memory_store` is enabled,
+after the session file has been updated.
 
 So the loop is: turn runs → window is pruned → whatever fell out is summarized
 once and promoted to L2 → next turn recalls up to 3 of them. Nothing is

@@ -3,7 +3,7 @@
 How many sessions fit on the GPU — and how overflow is queued.
 Implementation: `src/models/runtime/capacity.py` (estimator, CPU-testable;
  knobs are `VoiceAgentConfig` fields, no YAML). Admission itself lives in
-`src/main.py` (`FIFOScheduler` + `check_budget` per turn). Tests:
+`src/agent/voice_agent/agent.py` (`FIFOScheduler` + `check_budget` per turn). Tests:
 `tests/runtime/test_capacity.py`.
 
 ## 1. The pipeline
@@ -84,8 +84,8 @@ All serving knobs are config fields (`CascadeConfig`: `per_turn_mb`,
 `safety_factor`) live in `src/models/runtime/capacity.py` next to the math:
 
 ```python
-from src.long_running import LongRunningConfig
-from src.main import VoiceAgent, VoiceAgentConfig
+from src.agent.long_running import LongRunningConfig
+from src.agent.voice_agent.agent import VoiceAgent, VoiceAgentConfig
 
 agent = VoiceAgent(VoiceAgentConfig(harness=LongRunningConfig(
     max_inflight=4, queue_timeout_s=10)))

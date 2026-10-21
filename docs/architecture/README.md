@@ -9,56 +9,53 @@ are labeled as such rather than smoothed over.
 | # | Part | What it covers |
 |---|---|---|
 | 00 | [ARCHITECTURE](../../ARCHITECTURE.md) | system design, contracts, dependency rules (single file) |
-| 01 | [Agent](01-agent.md) | `VoiceAgent`, warm order, the turn loop, events, two-brain routing, budgets |
-| 02 | [Tools](02-tools.md) | the twelve ops, the five parser formats, semantic router, deny/confirm policy, MCP |
+| 01 | [Agent](01-agent.md) | `VoiceAgent`, warm order, the turn loop, events, planner/specialists, budgets |
+| 02 | [Tools](02-tools.md) | the execution ops, the five parser formats, semantic router, deny/confirm policy, MCP |
 | 03 | [Memory](03-memory.md) | L1 window, L2 episodic, L3 facts, the one injection point, write-back |
 | 04 | [Sessions](04-sessions.md) | identity, window ownership, persistence, serialization, resume |
 | 05 | [Models](05-models.md) | the four legs, `LlmConfig`, backends, streaming, VRAM |
-| 06 | [Processes](06-processes.md) | bridge, server, their endpoints, and the startup-warm trap |
+| 06 | [Processes](06-processes.md) | one `:8004` backend, endpoints, and the startup-warm trap |
 | 07 | [Inference](07-inference.md) | retired (custom paged runtime deleted) |
-| 08 | [TUI](08-tui.md) | the OpenTUI client, command palette, shades, exit card |
+| 08 | [TUI](08-tui.md) | the Tauri + SolidJS client, commands, voice mode, persistence |
 
 ## The short version
 
 ```
    mic ──▶ VAD ──▶ STT ──▶ VoiceAgent ──▶ TTS ──▶ speakers
                                  │
-                    ┌────────────┴────────────┐
-                    │  front brain 0.6B       │  no tools; one yes/no question
-                    │  worker   Bonsai 27B    │  all tools, router, memory, subagents
-                    └─────────────────────────┘
+                    LongRunningAgent (deep agent)
+                    planner + simulated specialists
                                  │
                        AgentEvent stream
                     (token/thinking/action/
                      observation/deny/summary)
 ```
 
-Three processes, never two at once on a 4 GB card:
+One backend on `:8004`, one GPU process at a time on a 4 GB card:
 
 ```
-voicert (OpenTUI)  ──:8004──▶  bridge.py     terminal turns
-server.py          ──:8003──▶  (voice API)   WS /talk, contacts
-llm_chat.py        ───────────▶               text REPL
+voicert (Tauri)   ──:8004──▶ src.server   voice + terminal + TUI turns
+console_cli       ─────────▶             text REPL (no GPU)
 ```
 
 ## The three things worth knowing
 
-**The front brain fails toward escalation.** A 0.6B model asked one yes/no
-question is untrustworthy, so an unparseable answer means "go do the work"
-([01](01-agent.md#16-two-brain-delegation)).
+**The planner decides, the specialists act.** Multi-step work is planned with
+`write_todos` and handed to tag-narrowed specialists; simple actions run
+directly on the planner ([01](01-agent.md)).
 
 **Enter never runs a command you did not type.** The TUI palette only hijacks
 Enter after you move the highlight, because a palette that silently executes
 `/model` when you typed `/mode` is a trap ([08](08-tui.md#enter-does-not-hijack)).
 
-**A hung warm looks exactly like a dead bridge.** Uvicorn awaits lifespan
+**A hung warm looks exactly like a dead backend.** Uvicorn awaits lifespan
 startup before it binds, so a model download that hangs inside `_warm()` leaves
 no listener at all ([06](06-processes.md#64-the-startup-warm-trap)).
 
 ## On-disk layout (XDG)
 
 Seeded on first backend start (`src/app_config.py:AppConfig`,
-paths in `src/paths.py:VoicertPaths`, store in `src/store.py:VoicertStore`).
+paths in `src/paths.py:VoicertPaths`, store in `src/agent/store.py:VoicertStore`).
 No legacy fallbacks: `configs/` and `.voicert/` are gone.
 
 ```

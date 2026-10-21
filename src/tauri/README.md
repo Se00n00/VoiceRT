@@ -4,7 +4,7 @@ Fresh rewrite with Tailwind CSS, from the floating-cards-over-wallpaper template
 black icon rail left,chat transcript + composer center, Get Started / model /
 Copy&Run cards right.
 
-Pure client by design: it **never spawns** `bridge.py`. Run the model backend
+Pure client by design: it **never spawns** the backend (`src.server`). Run it
 first, then point the UI at it.
 
 ```bash
