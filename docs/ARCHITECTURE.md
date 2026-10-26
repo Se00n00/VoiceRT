@@ -155,7 +155,7 @@ this design minimizes.
 | `ToolRouter` | semantic op shortlist + deny/confirm/allowlist policy | [02](architecture/02-tools.md) |
 | `Memory` | L1 window injection, L2 episodes, L3 facts | [03](architecture/03-memory.md) |
 | `Sessions` | per-session history, titles, locks, resume | [04](architecture/04-sessions.md) |
-| `Backend` (:8004) | terminal + voice + console sockets, confirm mailbox | [06](architecture/06-processes.md) |
+| `Backend` (:8004) | terminal + voice sockets, confirm mailbox | [06](architecture/06-processes.md) |
 | `TUI` (`voicert`) | panels, palette, mic viz, playback, interrupt | [08](architecture/08-tui.md) |
 
 Rules that cross entities: one GPU process at a time · `PYTHONPATH=.`

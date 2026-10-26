@@ -222,6 +222,12 @@ export async function fetchTitle(sid: string): Promise<string> {
   }
 }
 
+export type Legs = {
+  legs: { vad: string; stt: string; llm: string; tts: string };
+  model: { name: string; label: string; backend: string };
+  policy: { ops: string[]; deny: string[]; confirm: string[] };
+};
+
 export type Metrics = {
   uptime_s: number;
   turns: { done: number; total_s: number; last_s: number };
@@ -230,27 +236,17 @@ export type Metrics = {
   ram: { total_mb: number; used_mb: number; available_mb: number };
   cpu: { percent: number; load: number[]; count: number };
   gpu_util: number;
+  health: { agent_loaded: boolean; missing: string[] };
+  context: { tokens: number; ctx: number; pct: number };
+  legs: Legs["legs"];
+  model: Legs["model"];
+  policy: Legs["policy"];
 };
 
-export async function getMetrics(): Promise<Metrics> {
-  const r = await fetch(`${API}/metrics`);
+export async function getMetrics(sid = ""): Promise<Metrics> {
+  const q = sid ? `?sid=${encodeURIComponent(sid)}` : "";
+  const r = await fetch(`${API}/metrics${q}`);
   return json<Metrics>(r);
-}
-
-export async function getMetricsContext(sid: string): Promise<{ tokens: number; ctx: number; pct: number }> {
-  const r = await fetch(`${API}/metrics/context?sid=${encodeURIComponent(sid)}`);
-  return json(r);
-}
-
-export type Legs = {
-  legs: { vad: string; stt: string; llm: string; tts: string };
-  model: { name: string; label: string; backend: string };
-  policy: { ops: string[]; deny: string[]; confirm: string[] };
-};
-
-export async function getLegs(): Promise<Legs> {
-  const r = await fetch(`${API}/legs`);
-  return json<Legs>(r);
 }
 
 export type KeyStatus = {

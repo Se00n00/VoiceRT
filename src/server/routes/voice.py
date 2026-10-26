@@ -1,46 +1,25 @@
-"""Voice legs: one-shot STT, live STT streaming, TTS."""
+"""Voice-leg endpoints: one-shot STT, live STT streaming, TTS."""
 
 import asyncio
-import base64
 import json
 
 import numpy as np
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from ..state import _wav_b64, get_agent
+from ..services import voice as service
+from ..state import get_agent
 
-router = APIRouter()
+router = APIRouter(tags=["voice"])
 
 
 @router.post("/term/stt")
-async def term_stt(payload: dict):
+async def term_stt(payload: dict) -> dict:
     """Mic PCM16 mono -> transcript (VAD gate + Whisper)."""
-    try:
-        raw = base64.b64decode((payload or {}).get("pcm_b64", ""))
-    except Exception:
-        return {"kind": "error", "message": "bad pcm_b64"}
-    sr = int((payload or {}).get("sr", 16000))
-    wav = (np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0)
-    if wav.size < 1600:
-        return {"kind": "error", "message": "nothing recorded"}
-    agent = get_agent()
-    try:
-        segs = await agent.vad.segments(wav, sr)
-    except Exception as exc:
-        return {"kind": "error", "message": f"VAD failed: {exc}"[:200]}
-    if not segs.segments:
-        return {"kind": "empty", "message": "silence"}
-    try:
-        res = await agent.stt.transcribe(wav, sr)
-    except Exception as exc:
-        return {"kind": "error", "message": f"STT failed: {exc}"[:200]}
-    if not res.text.strip():
-        return {"kind": "empty", "message": "STT empty"}
-    return {"kind": "text", "text": res.text}
+    return await service.transcribe(payload or {})
 
 
 @router.websocket("/term/stt-stream")
-async def term_stt_stream(ws: WebSocket):
+async def term_stt_stream(ws: WebSocket) -> None:
     """Live voice pipeline: binary PCM16 mono frames in, transcripts out.
 
     The client streams raw int16 frames (any chunk size; 16kHz mono is
@@ -185,15 +164,6 @@ async def term_stt_stream(ws: WebSocket):
 
 
 @router.post("/term/say")
-async def term_say(payload: dict):
+async def term_say(payload: dict) -> dict:
     """Text -> Kokoro wav (float32 b64) for Ink playback + viz."""
-    text = str((payload or {}).get("text", "") or "")[:500]
-    if not text.strip():
-        return {"kind": "error", "message": "empty text"}
-    agent = get_agent()
-    try:
-        out = await agent.tts.speak(text)
-    except Exception as exc:
-        return {"kind": "error", "message": f"TTS failed: {exc}"[:200]}
-    return {"kind": "audio", "wav_b64": _wav_b64(out.wav),
-            "sr": int(out.sample_rate)}
+    return await service.synthesize(payload or {})

@@ -17,9 +17,9 @@ CONFIRM_LOG = "auto-approve (deny verdicts still block)"
 async def warm_agent(model="Qwen/Qwen3-0.6B", backend="qwen",
                      sessions_dir=None, max_tokens=None):
     """Build VoiceAgent with warmed LLM leg, TTS disabled."""
+    from src.agent.long_running import LongRunningConfig
+    from src.agent.voice_agent.agent import VoiceAgent, VoiceAgentConfig
     from src.models.provider import ChatModel
-    from src.long_running import LongRunningConfig
-    from src.main import VoiceAgent, VoiceAgentConfig
 
     # sessions_dir kept for API compat (JsonSessionMemory persists per sid).
     cfg = VoiceAgentConfig(harness=LongRunningConfig(
@@ -31,7 +31,7 @@ async def warm_agent(model="Qwen/Qwen3-0.6B", backend="qwen",
         cloud_model = model if model != "Qwen/Qwen3-0.6B" else ""
         agent.llm = None
         agent.chat_model = ChatModel.get(backend, cloud_model)
-        agent._worker_warmed = True
+        agent.worker.warmed = True
         status = f"cloud {backend} {cloud_model or 'default'}"
     else:
         from src.models.llm import LlmConfig, LlmModel

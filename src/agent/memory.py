@@ -123,6 +123,7 @@ class LangChainSessionMemory:
         cutoff = now - self.max_age_s
         for sid in [s for s, h in self._data.items() if h.at < cutoff]:
             del self._data[sid]
+            self._titles.pop(sid, None)
 
     def _get_locked(self, sid, now) -> LCSessionHistory:
         h = self._data.get(sid)
@@ -130,6 +131,7 @@ class LangChainSessionMemory:
             if len(self._data) >= self.max_sessions:
                 oldest = min(self._data, key=lambda k: self._data[k].at)
                 del self._data[oldest]
+                self._titles.pop(oldest, None)
             h = LCSessionHistory()
             self._data[sid] = h
             self._seq += 1
@@ -329,18 +331,23 @@ class JsonSessionMemory(LangChainSessionMemory):
         try:
             from src.agent.store import VoicertStore
 
-            hit = VoicertStore().load_session(str(sid))
+            store = VoicertStore()
+            hit = store.load_session(str(sid))
             if hit and isinstance(hit.get("messages"), list) and hit["messages"]:
-                h = LCSessionHistory()
-                for m in hit["messages"]:
-                    if isinstance(m, dict) and m.get("content"):
-                        h.messages.append(_to_pair(str(m.get("role", "user")),
-                                                  str(m.get("content"))))
-                h.at = now
-                if str(hit.get("title", "") or "").strip():
-                    self._titles[sid] = str(hit["title"])
-                self._prune_locked(h)
-                return h
+                at = float(hit.get("at", 0.0) or 0.0)
+                if at and now - at > self.max_age_s:
+                    store.delete_session(str(sid))
+                else:
+                    h = LCSessionHistory()
+                    for m in hit["messages"]:
+                        if isinstance(m, dict) and m.get("content"):
+                            h.messages.append(_to_pair(str(m.get("role", "user")),
+                                                      str(m.get("content"))))
+                    h.at = now
+                    if str(hit.get("title", "") or "").strip():
+                        self._titles[sid] = str(hit["title"])
+                    self._prune_locked(h)
+                    return h
         except Exception:
             pass
         try:
@@ -383,6 +390,7 @@ class JsonSessionMemory(LangChainSessionMemory):
                     oldest = min(self._data, key=lambda k: self._data[k].at)
                     self._unlink_locked(oldest)
                     del self._data[oldest]
+                    self._titles.pop(oldest, None)
                 h = LCSessionHistory()
                 self._seq += 1
             else:

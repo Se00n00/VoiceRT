@@ -22,7 +22,7 @@ Endpoints (`src/server/routes/`):
 | `GET /health` | `system.py` | liveness, warm state, missing legs |
 | `GET /model` | `system.py` | current model profile |
 | `POST /model/switch` | `system.py` | hot-swap the LLM leg |
-| `GET /metrics`, `/legs`, `/brain` | `system.py` | counters and active legs |
+| `GET /metrics?sid=`, `/brain` | `system.py` | counters, health, context and active legs |
 | `GET /term/title` | `sessions.py` | session title |
 | `GET /term/history` | `sessions.py` | past session transcript |
 | `POST /term/stt` | `voice.py` | audio → text |
@@ -31,7 +31,6 @@ Endpoints (`src/server/routes/`):
 | `WS /term` | `turns.py` | the terminal turn stream |
 | `WS /deep` | `turns.py` | the deep-agent turn stream |
 | `WS /chat` | `chat.py` | chat turn stream |
-| `GET /console/snapshot`, `WS /console/stream` | `console.py` | live console view |
 | `GET/POST/DELETE /keys` | `keys.py` | provider key storage |
 | `POST /talk/offer` | `talk.py` | WebRTC voice offer |
 

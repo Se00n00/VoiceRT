@@ -208,10 +208,10 @@ export function DitherBg(props: { scrollId: string; light: boolean }) {
     const waveUniforms: Record<string, THREE.IUniform> = {
       time: { value: 0 },
       resolution: { value: new THREE.Vector2(1, 1) },
-      waveSpeed: { value: 0.015 },
+      waveSpeed: { value: 0.005 },
       waveFrequency: { value: 3 },
       waveAmplitude: { value: 0.3 },
-      waveColor: { value: new THREE.Color(0.5, 0.5, 0.5) },
+      waveColor: { value: new THREE.Color(0.34, 0.34, 0.34) },
       backgroundColor: { value: new THREE.Color(0, 0, 0) },
       mousePos: { value: new THREE.Vector2(0, 0) },
       enableMouseInteraction: { value: 1 },
@@ -261,9 +261,9 @@ export function DitherBg(props: { scrollId: string; light: boolean }) {
         light ? 0.94 : 0,
       );
       (waveUniforms.waveColor!.value as THREE.Color).setRGB(
-        light ? 0.42 : 0.5,
-        light ? 0.48 : 0.5,
-        light ? 0.66 : 0.5,
+        light ? 0.53 : 0.34,
+        light ? 0.58 : 0.34,
+        light ? 0.73 : 0.34,
       );
     });
 
@@ -290,7 +290,7 @@ export function DitherBg(props: { scrollId: string; light: boolean }) {
     let scrollPhase = 0;
     const scroller = document.getElementById(props.scrollId);
     const onScroll = () => {
-      scrollTarget = scroller ? scroller.scrollTop * 0.0002 : 0;
+      scrollTarget = scroller ? scroller.scrollTop * 0.00007 : 0;
     };
     scroller?.addEventListener("scroll", onScroll, { passive: true });
 

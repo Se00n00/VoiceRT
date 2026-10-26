@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo, createSignal } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { EqBars, fmtClock } from "./EqBars.js";
 import { WarpOrb } from "./WarpOrb.js";
 import { ChainOfThoughtThread, type CotStepData } from "./chain-of-thought.js";
@@ -47,6 +47,103 @@ export function suggestTypo(word: string): string | null {
   return best;
 }
 
+/** Starters for the live headline: all read naturally before a base verb. */
+const STARTERS = [
+  "Let's", "Let us", "Time to", "Ready to", "I want to", "We should", "We must", "We could", "Help me",
+  "Now let's", "Together let's", "It's time to", "Let me", "Now we", "Come on, let's", "We're going to",
+  "Tonight let's", "Let's finally",
+] as const;
+
+/** Verbs and objects for the live headline: 50 + 50 words, combined in pairs. */
+const VERBS = [
+  "study", "conquer", "build", "explore", "decode", "simulate", "map", "master", "chase", "dissect",
+  "measure", "discover", "question", "rethink", "visualize", "program", "unlock", "reverse", "teach", "imagine",
+  "engineer", "derive", "sketch", "model", "probe", "compile", "orbit", "trace", "tame", "paint",
+  "compose", "compute", "predict", "distill", "launch", "wire", "grow", "debug", "summarize", "navigate",
+  "sculpt", "dream", "test", "explain", "quantify", "invent", "filter", "connect", "rebuild", "rewrite",
+] as const;
+
+const OBJECTS = [
+  "blackhole", "mathematics", "solar system", "universe", "quantum realm", "human brain", "deep ocean", "internet", "distant galaxy", "periodic table",
+  "climate", "ancient history", "music theory", "cryptography", "genome", "time itself", "chaos theory", "artificial mind", "space station", "philosophy",
+  "swarm intelligence", "dark matter", "human language", "megacities", "biology", "chemistry", "physics", "robotics", "neuroscience", "economics",
+  "geology", "weather", "fusion", "mars colony", "satellites", "ecosystems", "pandemics", "gravity", "antimatter", "genetic code",
+  "relativity", "quantum computing", "solar wind", "exoplanets", "supernovae", "neural nets", "tides", "magnetism", "light itself", "wilderness",
+] as const;
+
+/** Cycles a word pool first-to-last, resting one period then staggering by `offsetMs`. */
+function cycle(pool: readonly string[], offsetMs: number, periodMs: number): () => string {
+  const [i, setI] = createSignal(0);
+  onMount(() => {
+    let interval = 0;
+    const first = window.setTimeout(() => {
+      setI((v) => (v + 1) % pool.length);
+      interval = window.setInterval(() => setI((v) => (v + 1) % pool.length), periodMs);
+    }, offsetMs + periodMs);
+    onCleanup(() => {
+      window.clearTimeout(first);
+      window.clearInterval(interval);
+    });
+  });
+  return () => pool[i()]!;
+}
+
+/** One rotating word: the old word slides out while the new one slides in,
+    and the box width eases between both so the sentence never jumps. */
+function SlideWord(props: { word: string }) {
+  let box!: HTMLSpanElement;
+  let inner!: HTMLSpanElement;
+  let clearTimer = 0;
+  const [cur, setCur] = createSignal(props.word);
+  const [prev, setPrev] = createSignal<string | null>(null);
+  const [width, setWidth] = createSignal<number | null>(null);
+
+  createEffect(() => {
+    const next = props.word;
+    const old = cur();
+    if (next === old) return;
+    setPrev(old);
+    setCur(next);
+    window.clearTimeout(clearTimer);
+    clearTimer = window.setTimeout(() => setPrev(null), 640);
+  });
+  onMount(() => {
+    const ro = new ResizeObserver(() => setWidth(inner.getBoundingClientRect().width));
+    ro.observe(inner);
+    setWidth(inner.getBoundingClientRect().width);
+    onCleanup(() => {
+      window.clearTimeout(clearTimer);
+      ro.disconnect();
+    });
+  });
+
+  return (
+    <span ref={box} class="word-swap" style={width() === null ? undefined : { width: `${width()}px` }}>
+      <span ref={inner} class="word-swap-in">
+        <Show keyed when={cur()}>
+          {(w) => <span class="word-slide">{w}</span>}
+        </Show>
+      </span>
+      <Show keyed when={prev()}>
+        {(w) => <span class="word-swap-out word-slide-out">{w}</span>}
+      </Show>
+    </span>
+  );
+}
+
+/** Headline whose slots rotate independently: only the slot that actually
+    changed remounts its word, so only that word slides. */
+function BeatHeading() {
+  const starter = cycle(STARTERS, 0, 6000);
+  const verb = cycle(VERBS, 3000, 6000);
+  const thing = cycle(OBJECTS, 0, 6000);
+  return (
+    <h1 class="mt-4 text-[26px] font-bold leading-[1.35] tracking-tight text-white">
+      <SlideWord word={starter()} /> <SlideWord word={verb()} /> the <SlideWord word={thing()} />!
+    </h1>
+  );
+}
+
 export type AgentMode = "Agent" | "Assistant";
 export type Perf = "High" | "Medium" | "Low";
 export type BrainMode = "voice" | "harness";
@@ -62,7 +159,7 @@ export function Greeting() {
           d="M2 12C2 6.47715 6.47715 2 12 2C17.5228 2 22 6.47715 22 12C22 17.5228 17.5228 22 12 22C6.47715 22 2 17.5228 2 12ZM13 6C13 5.44772 13.4477 5 14 5H16C16.5523 5 17 5.44772 17 6C17 6.55228 16.5523 7 16 7H14C13.4477 7 13 6.55228 13 6ZM14 9C13.4477 9 13 9.44772 13 10C13 10.5523 13.4477 11 14 11H19C19.5523 11 20 10.5523 20 10C20 9.44772 19 9 19 9H14ZM13 14C13 13.4477 13.4477 13 14 13H19C19.5523 13 20 13.4477 20 14C20 14.5523 19.5523 15 19 15H14C13.4477 15 13 14.5523 13 14ZM14 17C13.4477 17 13 17.4477 13 18C13 18.5523 13.4477 19 14 19H16C16.5523 19 17 18.5523 17 18C17 17.4477 16.5523 17 16 17H14Z"
         />
       </svg>
-      <h1 class="mt-4 text-[26px] font-bold tracking-tight text-white">Welcome to VoiceRT</h1>
+      <BeatHeading />
       <p data-erase="" data-erase-pad="12" class="mt-1 text-[13px] text-white/45">Speak or type — your own local agent is listening</p>
     </div>
   );

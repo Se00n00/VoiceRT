@@ -8,7 +8,7 @@ import { CustomProviderPick } from "./components/Keys.js";
 import { WarpOrb } from "./components/WarpOrb.js";
 import collapseSvg from "./assets/collapse.svg?raw";
 import expandSvg from "./assets/expand.svg?raw";
-import { API, TurnSocket, fetchHistory, fetchTitle, getBrain, getLegs, getMetrics, getMetricsContext, getModel, health, stt, switchBrain, switchModel, type Legs, type Metrics, type TurnEvent } from "./api/client.js";
+import { API, TurnSocket, fetchHistory, fetchTitle, getBrain, getMetrics, getModel, stt, switchBrain, switchModel, type Legs, type Metrics, type TurnEvent } from "./api/client.js";
 import type { CotStepData } from "./components/chain-of-thought.js";
 import { createRecorder, recordSecs, type Recorder } from "./audio/webaudio.js";
 
@@ -546,85 +546,72 @@ export function App() {
 
   async function refresh(): Promise<void> {
     try {
-      const h = await health();
-      setBridgeOk(h.ok);
-      setAgentLoaded(!!h.agent_loaded);
-      setMissing(h.missing ?? []);
-      if (h.ok) {
-        try {
-          const m = await getModel();
-          setModelCurrent(m.current);
-          setModelChoices(m.available.map((a) => ({ name: a.name, label: a.label, desc: a.desc, backend: a.backend, model: a.model })));
-          if (!modelRestored()) {
-            // First contact: re-apply the globally saved model choice so the
-            // user never re-picks bonsai vs a custom provider after restart.
-            setModelRestored(true);
-            const want = storedModel();
-            if (want && want !== m.current && m.available.some((a) => a.name === want)) {
-              try {
-                const r = await switchModel(want);
-                if (r.kind === "ok") {
-                  setModelCurrent(want);
-                  saveModel(want);
-                  push("sys", `model restored -> ${want} (saved preference)`);
-                } else {
-                  push("err", r.message ?? "model restore failed");
-                  saveModel(m.current);
-                }
-              } catch {
-                push("err", "model restore failed (bridge down?)");
+      const met = await getMetrics(sessionId());
+      setBridgeOk(true);
+      setAgentLoaded(met.health.agent_loaded);
+      setMissing(met.health.missing);
+      setMetrics(met);
+      setCtxPct(met.context);
+      setLegs({ legs: met.legs, model: met.model, policy: met.policy });
+      setHist((h) =>
+        [
+          ...h,
+          {
+            vram: met.vram.total_mb > 0 ? (met.vram.allocated_mb / met.vram.total_mb) * 100 : 0,
+            gpu: met.gpu_util,
+            cpu: met.cpu.percent,
+            ctx: met.context.pct * 100,
+          },
+        ].slice(-80),
+      );
+      try {
+        const m = await getModel();
+        setModelCurrent(m.current);
+        setModelChoices(m.available.map((a) => ({ name: a.name, label: a.label, desc: a.desc, backend: a.backend, model: a.model })));
+        if (!modelRestored()) {
+          // First contact: re-apply the globally saved model choice so the
+          // user never re-picks bonsai vs a custom provider after restart.
+          setModelRestored(true);
+          const want = storedModel();
+          if (want && want !== m.current && m.available.some((a) => a.name === want)) {
+            try {
+              const r = await switchModel(want);
+              if (r.kind === "ok") {
+                setModelCurrent(want);
+                saveModel(want);
+                push("sys", `model restored -> ${want} (saved preference)`);
+              } else {
+                push("err", r.message ?? "model restore failed");
                 saveModel(m.current);
               }
-            } else {
+            } catch {
+              push("err", "model restore failed (bridge down?)");
               saveModel(m.current);
             }
           } else {
             saveModel(m.current);
           }
-        } catch {
-          /* model endpoint optional */
+        } else {
+          saveModel(m.current);
         }
-        try {
-          const b = await getBrain();
-          if (b.mode === "harness" || b.mode === "voice") {
-            if (b.mode === "harness" && brain() === "voice") stopVoiceMode();
-            setBrain(b.mode);
-          }
-        } catch {
-          /* brain endpoint optional */
+      } catch {
+        /* model endpoint optional */
+      }
+      try {
+        const b = await getBrain();
+        if (b.mode === "harness" || b.mode === "voice") {
+          if (b.mode === "harness" && brain() === "voice") stopVoiceMode();
+          setBrain(b.mode);
         }
-        try {
-          const met = await getMetrics();
-          setMetrics(met);
-          try {
-            const c = await getMetricsContext(sessionId());
-            setCtxPct(c);
-            setHist((h) =>
-              [
-                ...h,
-                {
-                  vram: met.vram.total_mb > 0 ? (met.vram.allocated_mb / met.vram.total_mb) * 100 : 0,
-                  gpu: met.gpu_util,
-                  cpu: met.cpu.percent,
-                  ctx: c.pct * 100,
-                },
-              ].slice(-80),
-            );
-          } catch {
-            setCtxPct(null);
-          }
-        } catch {
-          setMetrics(null);
-        }
-        try {
-          setLegs(await getLegs());
-        } catch {
-          setLegs(null);
-        }
+      } catch {
+        /* brain endpoint optional */
       }
     } catch {
       setBridgeOk(false);
       setAgentLoaded(false);
+      setMetrics(null);
+      setCtxPct(null);
+      setLegs(null);
     }
   }
 
@@ -1019,7 +1006,7 @@ export function App() {
         <div id="hero-scroll" class="thin-scroll relative z-10 min-h-0 flex-1 overflow-y-auto">
 
           <Show when={!hasReal()}>
-            <div class="mx-auto flex min-h-full w-full max-w-4xl flex-col justify-center px-6 py-8">
+            <div class="mx-auto flex min-h-full w-full max-w-4xl -translate-y-24 flex-col justify-center px-6 py-8">
               <Show when={!voiceMode()}>
                 <Greeting />
               </Show>

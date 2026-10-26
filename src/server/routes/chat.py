@@ -16,31 +16,15 @@ import asyncio
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from ..state import console_emit, get_agent, note_turn_end, note_turn_start, qwen_leg
+from ..services.chat import history_messages
+from ..state import get_agent, note_turn_end, note_turn_start, qwen_leg
 
-router = APIRouter()
-
-_HISTORY_TURNS = 20
-
-
-def _history_messages(agent, sid: str) -> list:
-    try:
-        sessions = getattr(agent, "sessions", None)
-        if sessions is None or not sid:
-            return []
-        hist = sessions.history(sid) or []
-        msgs = [{"role": str(m.get("role", "user") or "user"),
-                 "content": str(m.get("content", "") or "")}
-                for m in hist if isinstance(m, dict)
-                and str(m.get("content", "") or "").strip()
-                and str(m.get("role", "user") or "user") in ("user", "assistant")]
-        return msgs[-(_HISTORY_TURNS * 2):]
-    except Exception:
-        return []
+router = APIRouter(tags=["chat"])
 
 
 @router.websocket("/chat")
-async def chat(ws: WebSocket):
+async def chat(ws: WebSocket) -> None:
+    """Stream one Qwen reply per chat frame until the socket closes."""
     await ws.accept()
     closed = {"done": False}
     try:
@@ -67,8 +51,7 @@ async def chat(ws: WebSocket):
                 llm = qwen_leg(agent)
                 if llm is None:
                     raise RuntimeError("no qwen leg available")
-                console_emit("chat", "user", text, sid)
-                messages = _history_messages(agent, sid) + [
+                messages = history_messages(agent, sid) + [
                     {"role": "user", "content": text}]
                 try:
                     res = await llm.generate(messages, max_tokens=512)
@@ -95,11 +78,9 @@ async def chat(ws: WebSocket):
                     pass
                 try:
                     await ws.send_json({"event": "reply", "reply": reply})
-                    console_emit("chat", "agent", reply, sid)
                 except Exception:
                     pass
             except Exception as exc:
-                console_emit("chat", "error", str(exc)[:300], sid)
                 try:
                     await ws.send_json({"event": "error", "message": str(exc)[:300]})
                 except Exception:

@@ -169,7 +169,7 @@ Architecture first — one part per file:
 ─── 06 / PROCESSES ───────────────────────────────────────────────────────────────────────────
 
   voicert (Tauri)   ──:8004──▶ src.server    /health /model /term/{stt,say} /term /deep
-  src.server        ──:8004──▶ voice API     /chat WS · /console/stream WS · /talk/offer
+  src.server        ──:8004──▶ voice API     /chat WS · /talk/offer
   src.server.console_cli ────▶ text REPL
                     └──────────▶ runs ONE at a time, never two
 
@@ -345,7 +345,6 @@ voice-pipeline/
 │   │       ├── turns.py     # turn endpoints
 │   │       ├── sessions.py  # session endpoints
 │   │       ├── keys.py      # /keys bridge
-│   │       ├── console.py   # console endpoints
 │   │       └── system.py    # system endpoints
 │   ├── prompts/
 │   │   ├── base.py          # system prompts

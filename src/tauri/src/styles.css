@@ -48,6 +48,68 @@ body {
   }
 }
 
+/* ---- headline word swap: width eases, old word slides out, new slides in ---- */
+.word-swap {
+  position: relative;
+  display: inline-block;
+  overflow: hidden;
+  vertical-align: bottom;
+  line-height: 1.35;
+  white-space: nowrap;
+  transition: width 620ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.word-swap-in {
+  display: inline-block;
+  white-space: nowrap;
+}
+.word-swap-out {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+.word-slide {
+  display: inline-block;
+  animation: word-slide-in 620ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.word-slide-out {
+  display: inline-block;
+  animation: word-slide-out 620ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+@keyframes word-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.7em);
+    filter: blur(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+@keyframes word-slide-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-0.7em);
+    filter: blur(3px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .word-swap {
+    transition: none;
+  }
+  .word-slide,
+  .word-slide-out {
+    animation: none;
+  }
+}
+
 /* ---- warp orb pulse (cult ai-blob-warp motion loop as CSS, transforms only) ---- */
 .warp-pulse {
   animation: warp-pulse 5.2s ease-in-out infinite;

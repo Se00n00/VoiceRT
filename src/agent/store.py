@@ -137,7 +137,29 @@ class VoicertStore:
             messages = []
         if not isinstance(messages, list):
             messages = []
-        return {"sid": str(sid), "title": str(row[0] or ""), "messages": messages}
+        return {"sid": str(sid), "at": float(row[1] or 0.0),
+                "title": str(row[0] or ""), "messages": messages}
+
+    def delete_session(self, sid: str) -> bool:
+        """Delete one stored session row, True when removed.
+
+        ..
+        """
+        if not str(sid or "").strip():
+            return False
+        try:
+            if not os.path.isfile(self.db_path):
+                return False
+            con = sqlite3.connect(self.db_path)
+            try:
+                cur = con.execute(
+                    "DELETE FROM sessions WHERE sid = ?", (str(sid),))
+                con.commit()
+                return cur.rowcount > 0
+            finally:
+                con.close()
+        except (OSError, sqlite3.Error, ValueError, TypeError):
+            return False
 
     def spill(self, sid: str, name: str, text: str, limit: int = 8000) -> str:
         """Spill long tool output to a file, path or empty.

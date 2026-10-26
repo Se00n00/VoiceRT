@@ -3,8 +3,8 @@
 **Liveness, model, brain and metrics**
 
 Liveness plus model-leg switching and resource metrics. Nothing here
-runs a turn; `GET /metrics` and `GET /legs` build the agent (and its
-XDG bootstrap) on first call via `get_agent()`.
+runs a turn; `GET /metrics` builds the agent (and its XDG bootstrap)
+on first call via `get_agent()`.
 
 ---
 | Method | Path | Description |
@@ -14,9 +14,7 @@ XDG bootstrap) on first call via `get_agent()`.
 | POST | `/model/switch` | Hot-swap the LLM leg |
 | GET | `/brain` | Voice vs harness brain mode |
 | POST | `/brain/switch` | Switch brains |
-| GET | `/metrics` | Uptime, turns, VRAM/RAM/CPU/GPU |
-| GET | `/metrics/context` | Session context usage |
-| GET | `/legs` | Leg labels, model, tool policy |
+| GET | `/metrics?sid=` | Uptime, turns, resources, health, context, legs, policy |
 ---
 
 ## Objects
@@ -88,6 +86,33 @@ device VRAM total
 
 `gpu_util` integer
 nvidia-smi utilization percent
+
+`health.agent_loaded` boolean
+whether the agent warmed without missing legs
+
+`health.missing` string[]
+leg names that failed to warm
+
+`context.tokens` integer
+estimated tokens in the session history
+
+`context.ctx` integer
+active context window size
+
+`context.pct` float
+tokens divided by the context window (0.0–1.0)
+
+`legs.vad`, `legs.stt`, `legs.llm`, `legs.tts` string
+active backend label for each leg
+
+`model.name`, `model.label`, `model.backend` string
+active model profile
+
+`policy.ops` string[]
+allowed tool operations
+
+`policy.deny`, `policy.confirm` string[]
+denied and confirmation-gated operations
 ---
 
 ## Each operation
@@ -217,11 +242,18 @@ RESPONSE
 ----
 
 GET    /metrics
-Uptime, turn counters, VRAM/RAM/CPU plus GPU utilization.
+Uptime, turn counters, VRAM/RAM/CPU plus GPU utilization, and the
+health, context, legs and policy snapshot for one session.
+
+QUERY
+---
+`sid` string optional
+session id used for the context estimate
+---
 
 REQUEST
 ```curl
-curl http://127.0.0.1:8004/metrics
+curl 'http://127.0.0.1:8004/metrics?sid=ses_abc123'
 ```
 
 RESPONSE
@@ -244,40 +276,16 @@ RESPONSE
     "total_mb": 4096,
     "cuda": false
   },
-  "gpu_util": 0
-}
-```
-----
-
-GET    /metrics/context
-Token estimate for one session against the active context window.
-
-REQUEST
-```curl
-curl 'http://127.0.0.1:8004/metrics/context?sid=ses_abc123'
-```
-
-RESPONSE
-```json
-{
-  "tokens": 128,
-  "ctx": 4096,
-  "pct": 0.031
-}
-```
-----
-
-GET    /legs
-Leg labels, active model and the allowed tool-op policy.
-
-REQUEST
-```curl
-curl http://127.0.0.1:8004/legs
-```
-
-RESPONSE
-```json
-{
+  "gpu_util": 0,
+  "health": {
+    "agent_loaded": true,
+    "missing": []
+  },
+  "context": {
+    "tokens": 128,
+    "ctx": 4096,
+    "pct": 0.031
+  },
   "legs": {
     "vad": "silero",
     "stt": "whisper",

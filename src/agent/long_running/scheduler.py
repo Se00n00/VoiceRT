@@ -92,3 +92,6 @@ class TurnScheduler:
                 texts.extend(self._pending.pop(sid, []))
         finally:
             lock.release()
+            if not self._pending.get(sid):
+                self._locks.pop(sid, None)
+                self._pending.pop(sid, None)

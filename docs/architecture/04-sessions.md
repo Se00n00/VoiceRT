@@ -100,8 +100,6 @@ loading its own persisted JSON via `import_session`.
 
 ## 4.8 Known gaps
 
-- Stale titles survive session eviction — `_titles` is not swept with the
-  LRU.
 - `_maybe_title` is wired only to `/term`; the `/deep` path does not mint
   titles.
 

@@ -4,32 +4,10 @@ import asyncio
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from ..state import _maybe_title, _seen_sids, _wav_b64, get_agent, note_turn_end, note_turn_start
+from ..services.turns import event_json, send_cancelled
+from ..state import _maybe_title, _seen_sids, get_agent, note_turn_end, note_turn_start
 
-router = APIRouter()
-
-
-def _event_json(event) -> dict:
-    """Bridge event -> WS JSON, extracting wav bytes to b64.
-
-    ..
-    """
-    d = dict(event.data or {})
-    wav = d.pop("wav", None)
-    if wav is not None:
-        d["wav_b64"] = _wav_b64(wav)
-    return {"event": event.kind, **d}
-
-
-async def _send_cancelled(ws: WebSocket) -> None:
-    """Best-effort cancelled notice. Never raises.
-
-    ..
-    """
-    try:
-        await ws.send_json({"event": "cancelled"})
-    except Exception:
-        pass
+router = APIRouter(tags=["turns"])
 
 
 @router.websocket("/term")
@@ -98,12 +76,12 @@ async def term(ws: WebSocket) -> None:
                 if event.node != "term":
                     continue
                 try:
-                    await ws.send_json(_event_json(event))
+                    await ws.send_json(event_json(event))
                 except Exception:
                     break
         except asyncio.CancelledError:
             was_cancelled = True
-            await _send_cancelled(ws)
+            await send_cancelled(ws)
         except Exception as exc:
             try:
                 await ws.send_json({"event": "error", "message": str(exc)[:300]})
@@ -206,11 +184,11 @@ async def deep(ws: WebSocket) -> None:
             async for event in harness.run_text(text, session_id=sid, cwd=cwd,
                                                 confirm_fn=lambda action: True):
                 try:
-                    await ws.send_json(_event_json(event))
+                    await ws.send_json(event_json(event))
                 except Exception:
                     break
         except asyncio.CancelledError:
-            await _send_cancelled(ws)
+            await send_cancelled(ws)
         except Exception as exc:
             try:
                 await ws.send_json({"event": "error", "message": str(exc)[:300]})

@@ -98,29 +98,32 @@ async def main_async(args, tasks):
     agent = await warm_agent(model=args.model, backend=args.backend,
                              max_tokens=args.max_tokens or None)
     rows = []
-    for task in tasks:
-        if args.level and int(task.get("level", 1)) not in args.level:
-            continue
-        workdir = make_workdir(task.get("setup"), task.get("attachments"))
-        await areanchor_workdir(agent, workdir)
-        res = await run_task(agent, task["prompt"], workdir,
-                             timeout_s=args.timeout,
-                             session_id=f"eval-{task['id']}")
-        checks = grade_task(workdir, res["reply"], task.get("oracle"))
-        if checks and all(c["ok"] is None for c in checks):
-            passed = None
-        else:
-            passed = bool(checks) and all(c["ok"] for c in checks)
-        row = {"id": task["id"], "level": int(task.get("level", 1)),
-               "prompt": task["prompt"][:160],
-               "passed": passed, "checks": checks, **res}
-        rows.append(row)
-        mark = "PEND" if passed is None else ("OK " if passed else "FAIL")
-        print(f"[{mark}] {task['id']:6s} steps={res['steps']:2d} "
-              f"confirms={res['confirms']} {res['seconds']:6.1f}s "
-              f"reply={res['reply'][:70]!r}", flush=True)
-    return rows, {"model": args.model, "backend": args.backend,
-                  "timeout_s": args.timeout}
+    try:
+        for task in tasks:
+            if args.level and int(task.get("level", 1)) not in args.level:
+                continue
+            workdir = make_workdir(task.get("setup"), task.get("attachments"))
+            await areanchor_workdir(agent, workdir)
+            res = await run_task(agent, task["prompt"], workdir,
+                                 timeout_s=args.timeout,
+                                 session_id=f"eval-{task['id']}")
+            checks = grade_task(workdir, res["reply"], task.get("oracle"))
+            if checks and all(c["ok"] is None for c in checks):
+                passed = None
+            else:
+                passed = bool(checks) and all(c["ok"] for c in checks)
+            row = {"id": task["id"], "level": int(task.get("level", 1)),
+                   "prompt": task["prompt"][:160],
+                   "passed": passed, "checks": checks, **res}
+            rows.append(row)
+            mark = "PEND" if passed is None else ("OK " if passed else "FAIL")
+            print(f"[{mark}] {task['id']:6s} steps={res['steps']:2d} "
+                  f"confirms={res['confirms']} {res['seconds']:6.1f}s "
+                  f"reply={res['reply'][:70]!r}", flush=True)
+        return rows, {"model": args.model, "backend": args.backend,
+                      "timeout_s": args.timeout}
+    finally:
+        await agent.aclose()
 
 
 def summarize(rows):

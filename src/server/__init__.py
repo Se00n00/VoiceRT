@@ -23,12 +23,7 @@ Endpoints (see ``src/server/routes/`` for the handlers):
 - ``GET /keys`` — per-provider stored flags (never values)
 - ``POST /keys`` {provider, key} — store one key in the OS keychain
 - ``DELETE /keys/{provider}`` — remove one key from the OS keychain
-- ``GET /metrics`` — uptime, turns, VRAM/RAM/CPU/GPU, legs
-- ``GET /metrics/context?sid=`` — session context usage
-- ``GET /legs`` — leg labels, model profile, tool policy
-- ``GET /console/snapshot`` — recent console events + active calls
-- ``WS /console/stream`` — live console event tail
-  (terminal UI: ``python -m src.server.console_cli``)
+- ``GET /metrics`` — uptime, turns, resources, health, context, legs, policy
 """
 
 from fastapi import FastAPI
@@ -37,7 +32,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import state
 from .routes import (
     chat_router,
-    console_router,
     keys_router,
     sessions_router,
     system_router,
@@ -65,7 +59,6 @@ def create_app(agent=None):
     app.include_router(turns_router)
     app.include_router(chat_router)
     app.include_router(talk_router)
-    app.include_router(console_router)
     app.include_router(keys_router)
 
     @app.on_event("startup")
