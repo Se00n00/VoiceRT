@@ -3,6 +3,7 @@ import { EqBars, fmtClock } from "./EqBars.js";
 import { WarpOrb } from "./WarpOrb.js";
 import { ChainOfThoughtThread, type CotStepData } from "./chain-of-thought.js";
 import { CodeBlockView } from "./code-block.js";
+import { ConnectorStrip } from "./Connectors.js";
 
 export type Msg = { id: string; who: "you" | "agent" | "sys" | "err" | "cot"; text: string; steps?: CotStepData[] };
 
@@ -497,6 +498,8 @@ export function AskCard(props: {
               </Show>
             </div>
           </div>
+
+          <ConnectorStrip />
         </div>
         </div>
 

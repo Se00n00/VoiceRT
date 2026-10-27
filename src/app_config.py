@@ -28,6 +28,66 @@ servers:
     args: ["-m", "src.agent.mcp.mcp"]
     cwd: "."
     env: {}
+
+  # Remote connector shelf (the composer's "Get better answers from your
+  # apps" row). They ship disabled: each needs its own OAuth grant, handled
+  # by the MCP client, before you flip `enabled: true`.
+  slack:
+    enabled: false
+    transport: streamable_http
+    url: "https://mcp.slack.com/mcp"
+  gmail:
+    enabled: false
+    transport: streamable_http
+    url: "https://gmailmcp.googleapis.com/mcp/v1"
+  calcom:
+    enabled: false
+    transport: streamable_http
+    url: "https://mcp.cal.com/mcp"
+  google-calendar:
+    enabled: false
+    transport: streamable_http
+    url: "https://calendarmcp.googleapis.com/mcp/v1"
+  google-drive:
+    enabled: false
+    transport: streamable_http
+    url: "https://drivemcp.googleapis.com/mcp/v1"
+  microsoft-teams:
+    enabled: false
+    transport: streamable_http
+    url: "https://microsoft365.mcp.claude.com/mcp"
+  dropbox:
+    enabled: false
+    transport: streamable_http
+    url: "https://mcp.dropbox.com/mcp"
+  stripe:
+    enabled: false
+    transport: streamable_http
+    url: "https://mcp.stripe.com"
+  asana:
+    enabled: false
+    transport: streamable_http
+    url: "https://mcp.asana.com/v2/mcp"
+  box:
+    enabled: false
+    transport: streamable_http
+    url: "https://mcp.box.com"
+  github:
+    enabled: false
+    transport: streamable_http
+    url: "https://api.githubcopilot.com/mcp/"
+  jira:
+    enabled: false
+    transport: streamable_http
+    url: "https://mcp.atlassian.com/v2/mcp"
+  linear:
+    enabled: false
+    transport: streamable_http
+    url: "https://mcp.linear.app/mcp"
+  salesforce:
+    enabled: false
+    transport: streamable_http
+    url: "https://api.salesforce.com/platform/mcp/v1/platform/sobject-reads"
 """
 
 DEFAULT_BACKENDS = (

@@ -1002,6 +1002,8 @@ export function App() {
       <div class="stage flex min-h-0 w-full flex-1 overflow-hidden rounded-[18px]">
         <section class="hero relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl ring-1 ring-black">
         <DitherBg scrollId="hero-scroll" light={theme() === "light"} />
+        {/* Full-width top band uses the same eraser as chat: clean upper stage. */}
+        <div aria-hidden="true" data-erase="" data-erase-pad="0" data-erase-strength="3" class="pointer-events-none absolute inset-x-0 top-0 h-[200px]" />
 
         <div id="hero-scroll" class="thin-scroll relative z-10 min-h-0 flex-1 overflow-y-auto">
 

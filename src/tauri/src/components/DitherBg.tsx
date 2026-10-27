@@ -36,6 +36,7 @@ uniform vec4 uErase[${MAX_ERASE}];
 uniform int uEraseCount;
 uniform float uEraseRadius;
 uniform float uEraseFeather;
+uniform float uEraseStrength[${MAX_ERASE}];
 
 vec4 mod289(vec4 x) { return x - floor(x * (1.0/289.0)) * 289.0; }
 vec4 permute(vec4 x) { return mod289(((x * 34.0) + 1.0) * x); }
@@ -116,7 +117,7 @@ void main() {
       float leftness = clamp((e.x - uv.x) / max(1e-4, e.z + uEraseFeather), 0.0, 1.0);
       leftness = leftness * leftness * (3.0 - 2.0 * leftness);
       float feather = mix(uEraseFeather, uEraseFeather * 2.6, leftness);
-      float strength = mix(0.5, 0.3, leftness);
+      float strength = mix(0.5, 0.3, leftness) * uEraseStrength[i];
       float eff = 1.0 - smoothstep(0.0, feather, d);
       f -= strength * eff;
     }
@@ -225,6 +226,8 @@ export function DitherBg(props: { scrollId: string; light: boolean }) {
       uEraseCount: { value: 0 },
       uEraseRadius: { value: 0.03 },
       uEraseFeather: { value: 0.08 },
+      // Per-rect multiplier; 1 = soft wash, higher values erase fully.
+      uEraseStrength: { value: Array.from({ length: MAX_ERASE }, () => 1) },
     };
 
     const ditherUniforms: Record<string, THREE.IUniform> = {
@@ -311,6 +314,8 @@ export function DitherBg(props: { scrollId: string; light: boolean }) {
       const H = Math.max(1, res.y);
       const aspect = W / H;
       const arr = waveUniforms.uErase!.value as THREE.Vector4[];
+      const strengths = waveUniforms.uEraseStrength!.value as number[];
+      strengths.fill(1);
       let n = 0;
       for (const el of eraseEls) {
         if (n >= MAX_ERASE) break;
@@ -330,6 +335,8 @@ export function DitherBg(props: { scrollId: string; light: boolean }) {
         v.y = 0.5 - cy / H;
         v.z = ((r.width / 2 + pad) / W) * aspect;
         v.w = (r.height / 2 + pad) / H;
+        const strengthAttr = el.getAttribute("data-erase-strength");
+        strengths[n] = strengthAttr ? Math.max(0, parseFloat(strengthAttr) || 1) : 1;
         n++;
       }
       for (let i = n; i < MAX_ERASE; i++) arr[i]!.set(0, 0, -1, -1);
