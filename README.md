@@ -1,34 +1,21 @@
 <img src="VoiceRT.png">
 
+---
+
 <img src="docs/app.png" alt="VoiceRT desktop app">
 
 <p align="center">
-  <a href="https://se00n00.github.io/My_Portfolio/">
-    <img src="https://img.shields.io/badge/Portfolio-FFDD00?style=for-the-badge&logo=angular&logoColor=black" alt="Website" />
-  </a>
-  <a href="https://se00n00.github.io/Personal-Blog/">
-    <img src="https://img.shields.io/badge/My Blogs-2D65D6?style=for-the-badge&logo=linkedin&logoColor=white" alt="Blog" />
-  </a>
-  <a href="https://www.youtube.com/@anantami2634">
-    <img src="https://img.shields.io/badge/YouTube-FF0000?style=for-the-badge&logo=youtube&logoColor=white" alt="YouTube" />
+  <a href="https://se00n00.github.io/Personal-Blog/article/d04e66e7-caba-4155-bd6a">
+    <img src="https://img.shields.io/badge/Release Blog-2D65D6?style=for-the-badge&logo=linkedin&logoColor=white" alt="Blog" />
   </a>
   <a href="https://x.com/Se00n001">
     <img src="https://img.shields.io/badge/X%2FTwitter-000000?style=for-the-badge&logo=x&logoColor=white" alt="Twitter" />
   </a>
-  <a href="https://www.linkedin.com/in/mohit-kumar-055126248/">
-    <img src="https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white" alt="LinkedIn" />
-  </a>
-  <a href="https://huggingface.co/Se00n00">
-    <img src="https://img.shields.io/badge/Hugging%20Face-F79E1B?style=for-the-badge&logo=huggingface&logoColor=white" alt="Hugging Face" />
-  </a>
-  <a href="https://www.kaggle.com/se00n00">
-    <img src="https://img.shields.io/badge/Kaggle-20BEFF?style=for-the-badge&logo=kaggle&logoColor=white" alt="Kaggle" />
-  </a>
   <a href="docs/README.md">
-    <img src="https://img.shields.io/badge/Docs-4B8BBE?style=for-the-badge&logo=readthedocs&logoColor=white" alt="Docs" />
+    <img src="https://img.shields.io/badge/Documentations-4B8BBE?style=for-the-badge&logo=readthedocs&logoColor=white" alt="Docs" />
   </a>
   <a href="docs/guide.md">
-    <img src="https://img.shields.io/badge/Usage-2EA44F?style=for-the-badge&logo=bookstack&logoColor=white" alt="Usage" />
+    <img src="https://img.shields.io/badge/Usage Guide-2EA44F?style=for-the-badge&logo=bookstack&logoColor=white" alt="Usage" />
   </a>
 </p>
 
@@ -39,9 +26,9 @@ One planner runs the agentic loop, handing steps to tag-narrowed specialists on 
 Sessions persist, memory compounds, and the local path fits a 4GB card.
 A Tauri desktop client, FastAPI backend, and XDG-managed local state keep the loop on your machine.
 
-## Index
+---
 
-Architecture first — one part per file:
+### Index
 
 | # | Part | |
 |---|---|---|
@@ -56,6 +43,7 @@ Architecture first — one part per file:
 | 07 | [Inference](docs/architecture/07-inference.md) | retired custom runtime |
 | 08 | [TUI](docs/architecture/08-tui.md) | Tauri client, commands, voice mode |
 
+---
 
 ```
 ─── 01 ~ 1 / HIGH LEVEL ──────────────────────────────────────────────────────────────────────────────
