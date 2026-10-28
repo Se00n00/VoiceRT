@@ -9,6 +9,7 @@ import json
 import os
 
 from src.agent.memory import _safe_sid
+from src.paths import VoicertPaths
 
 from ..state import get_agent
 
@@ -37,7 +38,9 @@ def history(sid: str) -> dict:
     if not sid:
         return {"session_id": "", "title": "", "messages": []}
     try:
-        base = getattr(get_agent().sessions, "sessions_dir", "sessions") or "sessions"
+        base = getattr(
+            get_agent().sessions, "sessions_dir", VoicertPaths.sessions_dir()
+        ) or VoicertPaths.sessions_dir()
         path = os.path.join(str(base), _safe_sid(sid) + ".json")
         with open(path, "r", encoding="utf-8") as f:
             payload = json.load(f)

@@ -54,9 +54,10 @@ no listener at all ([06](06-processes.md#64-the-startup-warm-trap)).
 
 ## On-disk layout (XDG)
 
-Seeded on first backend start (`src/app_config.py:AppConfig`,
-paths in `src/paths.py:VoicertPaths`, store in `src/agent/store.py:VoicertStore`).
-No legacy fallbacks: `configs/` and `.voicert/` are gone.
+Seeded by `python -m src.setup` (`src/setup.py:VoicertSetup`, also called on
+first backend start; paths in `src/paths.py:VoicertPaths`, store in
+`src/agent/store.py:VoicertStore`). No legacy fallbacks: `configs/` and
+`.voicert/` are gone.
 
 ```
 ~/.config/voicert/          # global
@@ -68,7 +69,9 @@ No legacy fallbacks: `configs/` and `.voicert/` are gone.
 ~/.local/share/voicert/     # local session
 ├── voicert.db              # mainstore — sessions + tool_outputs (sqlite)
 ├── voicert.log             # timestamped log
+├── memory/                 # episodic.db + facts.md
 ├── sessions/               # JSON session files (mirrored into voicert.db)
+│   └── tg/                 # Telegram pairing + bot state
 └── tool_outputs/           # spilled tool outputs over spill_chars (8000)
 ```
 

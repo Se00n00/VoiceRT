@@ -21,6 +21,7 @@ from langchain_openai import ChatOpenAI
 
 from src.agent.keystore import get_secret
 from src.app_config import AppConfig
+from src.setup import VoicertSetup
 
 __all__ = ["ChatModel"]
 
@@ -117,7 +118,7 @@ class ChatModel:
         Returns the seeded mapping for immediate use.
         ..
         """
-        AppConfig.ensure_global()
+        VoicertSetup.ensure()
         return AppConfig.load_models()
 
     @classmethod

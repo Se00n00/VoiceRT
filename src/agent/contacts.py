@@ -34,6 +34,8 @@ import httpx
 import numpy as np
 import qrcode
 
+from src.paths import VoicertPaths
+
 __all__ = [
     "normalize_phone",
     "gateway_status",
@@ -179,10 +181,16 @@ def _tg_token() -> str:
         return ""
 
 
+def _tg_file(name: str) -> str:
+    """One Telegram state file under the XDG data dir.
+
+    ..
+    """
+    return os.path.join(VoicertPaths.tg_dir(), name)
+
+
 def _tg_agents_file() -> str:
-    here = os.path.dirname(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__))))
-    return os.path.join(here, "sessions", "tg", "agents.json")
+    return _tg_file("agents.json")
 
 
 def register_agent(agent_id: str, name: str, chat_id: str, token: str,
@@ -225,9 +233,7 @@ def get_agent_record(agent_id: str = "default") -> dict | None:
 
 
 def _tg_bot_file() -> str:
-    here = os.path.dirname(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__))))
-    return os.path.join(here, "sessions", "tg", "bot.json")
+    return _tg_file("bot.json")
 
 
 def _tg_bot_info() -> dict:
@@ -310,9 +316,7 @@ def tg_deeplink_qr() -> tuple[bool, str]:
 
 
 def _tg_state_file() -> str:
-    here = os.path.dirname(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__))))
-    return os.path.join(here, "sessions", "tg", "chat.json")
+    return _tg_file("chat.json")
 
 
 def remember_tg_chat(chat_id: str) -> str:

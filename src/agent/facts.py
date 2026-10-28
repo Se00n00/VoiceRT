@@ -13,6 +13,7 @@ import tempfile
 import time
 
 from src.agent.prompts.memory import ANCHOR_LINE, FACTS_ANCHOR_LINE, FACTS_HEADER  # noqa: F401  (single home, re-exported)
+from src.paths import VoicertPaths
 
 __all__ = ["load_facts", "upsert_fact", "format_block", "parse_line",
            "ANCHOR_LINE", "FACTS_HEADER", "FACTS_ANCHOR_LINE"]
@@ -39,8 +40,9 @@ def parse_line(line: str):
             "object": parts[2], "source": src}
 
 
-def load_facts(path: str = "memory/facts.md") -> list:
+def load_facts(path: str = "") -> list:
     """Read facts file -> [{subject, predicate, object, source}]."""
+    path = str(path or os.path.join(VoicertPaths.memory_dir(), "facts.md"))
     out = []
     try:
         with open(path, encoding="utf-8") as f:
@@ -61,7 +63,7 @@ def upsert_fact(path: str, subject: str, predicate: str, obj: str,
                                str(obj or "").strip())
     if not subject or not predicate or not obj:
         return False
-    path = str(path or "memory/facts.md")
+    path = str(path or os.path.join(VoicertPaths.memory_dir(), "facts.md"))
     try:
         d = os.path.dirname(os.path.abspath(path))
         os.makedirs(d, exist_ok=True)

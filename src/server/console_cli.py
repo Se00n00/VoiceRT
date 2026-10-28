@@ -18,6 +18,8 @@ import tempfile
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from src.setup import VoicertSetup
+
 DIM = "\033[2m"
 RESET = "\033[0m"
 
@@ -103,6 +105,7 @@ async def amain(backend: str, model: str, workdir: str,
     from src.models.chat_model import LocalChatModel
     from src.agent.prompts.base import SYSTEM_PROMPT
 
+    VoicertSetup.ensure()
     os.makedirs(workdir, exist_ok=True)
     os.environ["VOICE_WORKDIR"] = workdir
     use_color = sys.stdout.isatty()

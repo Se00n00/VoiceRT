@@ -81,7 +81,7 @@ flowchart LR
   lives in `SessionMiddleware`; memory and turn context are middleware too.
 - Cloud backends skip `LlmModel`: the harness holds a stock
   LangChain chat model from `provider.ChatModel.get` instead.
-- Sessions persist as `sessions/*.json` (default dir `~/.voicert`);
+- Sessions persist as `~/.local/share/voicert/sessions/*.json`;
   RAM windows are the live source of truth.
 
 ## 4. External dependencies, model runtimes, hardware

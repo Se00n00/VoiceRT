@@ -10,6 +10,9 @@ import time
 
 import numpy as np
 
+from src.agent.store import VoicertStore
+from src.setup import VoicertSetup
+
 __all__ = [
     "MODEL_PROFILES",
     "_brain",
@@ -553,13 +556,8 @@ def get_agent():
         from src.agent.voice_agent.agent import VoiceAgent, VoiceAgentConfig
 
         try:
-            from src.agent.store import VoicertStore
-            from src.app_config import AppConfig
-
-            AppConfig.ensure_global()
-            store = VoicertStore()
-            store.ensure()
-            store.log("info", "backend start")
+            VoicertSetup.ensure()
+            VoicertStore().log("info", "backend start")
         except Exception:
             pass
         text_only = os.environ.get("VOICE_TEXT_ONLY", "").strip() == "1"

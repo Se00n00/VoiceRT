@@ -46,6 +46,30 @@ class VoicertPaths:
         return os.path.expanduser(os.path.join("~", ".local", "share", VoicertPaths.APP))
 
     @staticmethod
+    def sessions_dir() -> str:
+        """Local JSON session directory path.
+
+        ..
+        """
+        return os.path.join(VoicertPaths.data_dir(), "sessions")
+
+    @staticmethod
+    def tg_dir() -> str:
+        """Local Telegram pairing and bot state directory path.
+
+        ..
+        """
+        return os.path.join(VoicertPaths.sessions_dir(), "tg")
+
+    @staticmethod
+    def memory_dir() -> str:
+        """Local memory directory path.
+
+        ..
+        """
+        return os.path.join(VoicertPaths.data_dir(), "memory")
+
+    @staticmethod
     def skills_dir() -> str:
         """Global skills directory path.
 

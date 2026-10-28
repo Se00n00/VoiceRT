@@ -1,7 +1,7 @@
 """
-First-start bootstrap for ~/.config/voicert. Plus file metadata:
-contract seeds skills/mcp.yaml/models.yaml/voicert.json once,
-dependencies stdlib + yaml + src.paths, who calls it server get_agent.
+Global config reads and writes under ~/.config/voicert. Plus file metadata:
+contract defaults + YAML/JSON load/save, dependencies stdlib + yaml +
+src.paths, who calls it provider/delegate/setup.
 """
 
 import json
@@ -131,80 +131,10 @@ DEFAULT_SETTINGS = {
 
 
 class AppConfig:
-    """Seed and load the global config dir.
+    """Load and save the global config files.
 
     ..
     """
-
-    @staticmethod
-    def ensure_global() -> str:
-        """Create config dir + seed the four entries once.
-
-        ..
-        """
-        cfg = VoicertPaths.config_dir()
-        os.makedirs(cfg, exist_ok=True)
-        os.makedirs(VoicertPaths.skills_dir(), exist_ok=True)
-        AppConfig._ensure_mcp()
-        AppConfig._ensure_models()
-        AppConfig._ensure_settings()
-        return cfg
-
-    @staticmethod
-    def _write_if_absent(path: str, text: str) -> bool:
-        """Write text when path is missing, True when seeded.
-
-        ..
-        """
-        if os.path.isfile(path):
-            return False
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write(text)
-        return True
-
-    @staticmethod
-    def _ensure_mcp() -> bool:
-        """Seed mcp.yaml from the builtin default.
-
-        ..
-        """
-        dest = VoicertPaths.mcp_path()
-        if os.path.isfile(dest):
-            return False
-        AppConfig._write_if_absent(dest, DEFAULT_MCP_YAML)
-        return True
-
-    @staticmethod
-    def _ensure_models() -> bool:
-        """Seed models.yaml from builtin defaults.
-
-        ..
-        """
-        dest = VoicertPaths.models_path()
-        if os.path.isfile(dest):
-            return False
-        payload = {"default_backend": "groq", "models": dict(DEFAULT_MODELS)}
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
-        with open(dest, "w", encoding="utf-8") as fh:
-            yaml.safe_dump(payload, fh, sort_keys=True)
-            fh.write("\n")
-        return True
-
-    @staticmethod
-    def _ensure_settings() -> bool:
-        """Seed voicert.json with permissions and defaults.
-
-        ..
-        """
-        dest = VoicertPaths.settings_path()
-        if os.path.isfile(dest):
-            return False
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
-        with open(dest, "w", encoding="utf-8") as fh:
-            json.dump(DEFAULT_SETTINGS, fh, indent=2, sort_keys=True)
-            fh.write("\n")
-        return True
 
     @staticmethod
     def load_models() -> dict:

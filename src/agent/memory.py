@@ -28,6 +28,7 @@ import time
 from engine.session import new_session_id as _new_session_id
 
 from src.agent.budget import estimate_tokens
+from src.paths import VoicertPaths
 
 try:
     from langchain_core.chat_history import BaseChatMessageHistory
@@ -274,9 +275,9 @@ class JsonSessionMemory(LangChainSessionMemory):
     opportunistically on the write path; LRU eviction unlinks too.
     """
 
-    def __init__(self, sessions_dir: str = "sessions", **kw):
+    def __init__(self, sessions_dir: str = "", **kw):
         super().__init__(**kw)
-        self.sessions_dir = str(sessions_dir or "sessions")
+        self.sessions_dir = str(sessions_dir or VoicertPaths.sessions_dir())
 
     # -- persistence --------------------------------------------------
     def _path_locked(self, sid: str) -> str:

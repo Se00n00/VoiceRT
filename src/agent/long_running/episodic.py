@@ -18,6 +18,8 @@ import torch
 import torch.nn.functional as _F
 from transformers import AutoModel, AutoTokenizer
 
+from src.paths import VoicertPaths
+
 __all__ = ["EpisodicStore", "summarize_turns"]
 
 EMBED_MODEL_ID = "BAAI/bge-small-en-v1.5"
@@ -52,8 +54,10 @@ def summarize_turns(turns: list) -> str:
 class EpisodicStore:
     """Thread-safe sqlite episode store with cosine recall."""
 
-    def __init__(self, path: str = "memory/episodic.db", embed_fn=None):
-        self.path = str(path or "memory/episodic.db")
+    def __init__(self, path: str = "", embed_fn=None):
+        self.path = str(
+            path or os.path.join(VoicertPaths.memory_dir(), "episodic.db")
+        )
         self._embed_fn = embed_fn
         self._lock = threading.Lock()
         self._model = None

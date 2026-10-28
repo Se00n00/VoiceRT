@@ -7,7 +7,7 @@ chats with the Creator Bot (/start KEY -> name -> BotFather guide ->
 pastes new bot token), and the backend validates + stores the
 association. Tokens never appear in logs or status responses.
 
-Store (gitignored): sessions/tg/pairing.json::
+Store: ~/.local/share/voicert/sessions/tg/pairing.json::
 
     {"keys": {key: {agent_id, created, expires, status, chat_id,
                     agent_name, fail_reason}},
@@ -24,6 +24,7 @@ import secrets
 import time
 
 from src.agent import contacts
+from src.paths import VoicertPaths
 
 __all__ = [
     "PAIRING_TTL_S",
@@ -48,9 +49,7 @@ TOKEN_RE = re.compile(r"\d{6,}:[A-Za-z0-9_-]{20,}")
 
 
 def _tg_dir() -> str:
-    here = os.path.dirname(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__))))
-    return os.path.join(here, "sessions", "tg")
+    return VoicertPaths.tg_dir()
 
 
 def _pairing_file() -> str:
