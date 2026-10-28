@@ -4,6 +4,7 @@ Technical documentation for `voice-pipeline`. Start here, then go deep.
 
 | Doc | What it covers |
 |---|---|
+| [guide.md](guide.md) | Full walkthrough moved from the root README: run steps, architecture, agent loop, benchmarks, TUI, sandbox |
 | [**architecture/**](architecture/README.md) | **The system, split by part: [01 Agent](architecture/01-agent.md) · [02 Tools](architecture/02-tools.md) · [03 Memory](architecture/03-memory.md) · [04 Sessions](architecture/04-sessions.md) · [05 Models](architecture/05-models.md) · [06 Processes](architecture/06-processes.md) · [07 Inference](architecture/07-inference.md) · [08 TUI](architecture/08-tui.md)** |
 | [**APIReferences/**](APIReferences/README.md) | **Every `:8004` route, one file per group: [System](APIReferences/System.md) · [Turns](APIReferences/Turns.md) · [Voice](APIReferences/Voice.md) · [Talk](APIReferences/Talk.md) · [Chat](APIReferences/Chat.md) · [Sessions](APIReferences/Sessions.md) · [Keys](APIReferences/Keys.md)** |
 | [architecture.md](architecture.md) | Older single-file architecture: components, data flow per endpoint, module map, startup sequence, failure modes |

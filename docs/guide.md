@@ -1,0 +1,755 @@
+# VoiceRT — full guide
+
+**Full voice loop — speech in, speech out — on a single 4GB laptop GPU.** Mic/wav → text → reply → voice in ≈0.5–1.0 s, no cloud.
+
+## Run in 2 minutes
+
+```bash
+cd VoiceAgent/voice-pipeline
+uv sync                                  # pinned CUDA torch + all deps
+PYTHONPATH=. uv run python -m src.setup             # config files, dirs, session store
+PYTHONPATH=. uv run python -m src.models.download   # first time: ~5GB weights
+PYTHONPATH=. uv run python -m src.server          # warms 4 legs (~2 min first boot) → voice-agent ready
+curl http://localhost:8004/health            # {ok, agent_loaded, missing:[], vram_mb, engine:{active}}
+curl http://localhost:8004/metrics
+# talk: POST http://localhost:8004/talk/offer  (see docs/APIReferences/Talk.md)
+```
+
+`PYTHONPATH=.` is required — kernels live at `src.models.triton_kernels`.
+
+The charts below are the summaries; the project [Index](../README.md#index) lists every part.
+
+Docs: [`architecture/`][arch-index] · [`architecture.md`](architecture.md) (legacy single-file) · [`capacity.md`](capacity.md) · [`benchmarks.md`](benchmarks.md) · [`README.md`](README.md)
+
+[arch-index]: architecture/README.md
+
+## Architecture — VoiceAgent + Inference Engine + Kernels
+
+```
+                    ┌─────────────────────────────────────────┐
+                    │              VoiceAgent                 │
+  mic/wav ──► VAD ──┤  Silero ONNX (CPU, RTF 0.01)            │
+              │     │       │                                 │
+              │     │       ▼                                 │
+              │     │  STT  Whisper-base ─┐                   │
+              │     │  fused decoder x6   │ fused Triton      │
+              │     │  batched B=1..8     │ + torch fallback  │
+              │     │       │             │ parity-tested     │
+              │     │       ▼             │                   │
+                      │     │  front LLM Qwen3-0.6B ─┐ yes/no:   │
+                      │     │  is this worker work?  │ escalate? │
+                      │     │       │                 │ (no tool) │
+                      │     │       ▼ (escalated)    │           │
+                     │     │  worker LLM Bonsai 27B ─┤           │
+                     │     │       │ streaming tokens      │
+                     │     │  sentence splitter (overlap)          │
+              │     │       │                                 │
+              │     │  TTS  Kokoro-82M ─┐                   │
+              │     │  batched post     │ fused in1d_silu / │
+              │     │  filter           │ conv1d_silu       │
+              │     │       │           │ + resample       │
+              └─────┘       ▼           └───────────────────┘
+                         wav out (24kHz)
+```
+
+**How a kernel is built (same for Qwen/Whisper/Kokoro):**
+`src/models/triton_kernels/qwen_fused.py` — *one file* = all fused kernels + `@triton.testing.perf_report` bench + torch exact fallback. `src/models/pytorch/qwen.py` is the PyTorch reference. `src/models/qwen.py:QwenFused` loops it `28×` with `KVCacheBatched` and `check_budget`. Same pattern for `whisper_fused` (6×) and `tts_fused`. Facades `src/models/stt.py:SttModel` / `src/models/tts.py:TtsModel` are mandatory fused (no legacy `engines/*` fallback).
+
+Verbose specs → docs: capacity model, queue, Triton details, API and config.
+
+### Project structure
+
+```
+voice-pipeline/
+├── src/
+│   ├── main.py              # VoiceAgent entry points
+│   ├── long_running/        # agent.py + prompts/ + AGENTS.md
+│   ├── cascade.py           # VAD/STT/LLM/TTS voice turns
+│   ├── agent/
+│   │   ├── keystore.py      # OS-keychain secrets
+│   │   ├── tool_router.py   # tool shortlist
+│   │   ├── budget.py        # token budgets
+│   │   ├── delegate.py      # orphaned routing contract
+│   │   ├── events.py        # stream envelope
+│   │   ├── memory.py        # session memory
+│   │   ├── episodic.py      # L2 store
+│   │   ├── facts.py         # L3 facts
+│   │   ├── contacts.py      # contacts
+│   │   ├── prompts.py       # prompt helpers
+│   │   ├── title.py         # session titles
+│   │   ├── simtask.py       # sim-agent subtasks
+│   │   ├── shell.py         # persistent shell
+│   │   ├── pairing.py       # device pairing
+│   │   ├── tg_poll.py       # telegram polling
+│   │   ├── middleware/
+│   │   │   ├── errors.py    # error hints
+│   │   │   ├── inject.py    # tool injection
+│   │   │   ├── policy.py    # deny/confirm gate
+│   │   │   ├── summarization.py  # in-turn summarizer
+│   │   │   ├── trim.py      # observation trimmer
+│   │   │   └── verify.py    # result verifier
+│   │   └── mcp/
+│   │       ├── mcp.py       # MCP entry
+│   │       ├── client.py    # stdio client
+│   │       ├── session.py   # stateful sessions
+│   │       ├── specs.py     # tool specs + tags
+│   │       ├── config.py    # server configs
+│   │       ├── BrowserUse.py     # browser tool
+│   │       ├── ComputerUse.py    # computer tool
+│   │       ├── PlanningTools.py  # planner tools
+│   │       └── ShellUse.py  # shell tool
+│   ├── models/
+│   │   ├── llm.py           # LlmModel: Qwen + bonsai
+│   │   ├── bonsai.py        # BonsaiLlamaCpp + ChatModel
+│   │   ├── vad.py           # VadModel: Silero
+│   │   ├── stt.py           # SttModel: Whisper
+│   │   ├── tts.py           # TtsModel: Kokoro + voices
+│   │   ├── provider.py      # ChatModel: providers
+│   │   ├── chat_model.py    # LocalChatModel: LC face
+│   │   ├── qwen.py          # QwenFused weights
+│   │   ├── whisper.py       # WhisperFused weights
+│   │   ├── kokoro.py        # KokoroFused weights
+│   │   ├── download.py      # weight fetcher
+│   │   ├── engines/
+│   │   │   ├── qwen.py      # legacy Qwen engine
+│   │   │   ├── whisper.py   # legacy Whisper engine
+│   │   │   └── tts.py       # legacy TTS engine
+│   │   ├── pytorch/
+│   │   │   ├── qwen.py      # torch reference
+│   │   │   ├── whisper.py   # torch reference
+│   │   │   └── tts.py       # torch reference
+│   │   ├── triton_kernels/
+│   │   │   ├── qwen_fused.py   # fused Qwen kernels
+│   │   │   ├── qwen.py      # kernel pieces
+│   │   │   ├── attention.py # attention kernels
+│   │   │   ├── rmsnorm.py   # norm kernels
+│   │   │   ├── rope.py      # rotary kernels
+│   │   │   ├── activation.py   # activation kernels
+│   │   │   └── utils.py     # kernel utils
+│   │   └── runtime/
+│   │       ├── guard.py     # preflight gates
+│   │       ├── capacity.py  # capacity planner
+│   │       ├── device.py    # device + VRAM stats
+│   │       ├── memory.py    # weight budgets
+│   │       ├── scheduler.py # FIFO queue
+│   │       ├── profiler.py  # timing profiler
+│   │       └── tensor.py    # tensor helpers
+│   ├── server/
+│   │   ├── state.py         # process-wide agent
+│   │   ├── console_cli.py   # REPL console
+│   │   ├── __main__.py      # server entry
+│   │   └── routes/
+│   │       ├── talk.py      # /talk websocket
+│   │       ├── voice.py     # voice endpoints
+│   │       ├── chat.py      # chat endpoints
+│   │       ├── turns.py     # turn endpoints
+│   │       ├── sessions.py  # session endpoints
+│   │       ├── keys.py      # /keys bridge
+│   │       └── system.py    # system endpoints
+│   ├── prompts/
+│   │   ├── base.py          # system prompts
+│   │   ├── chat.py          # chat retries
+│   │   ├── terminal.py      # terminal preamble
+│   │   ├── voice.py         # voice prompts
+│   │   ├── memory.py        # memory headers
+│   │   ├── delegate.py      # orphaned routing text
+│   │   ├── sim.py           # sim templates
+│   │   ├── middleware.py    # middleware prompts
+│   │   └── title.py         # title prompts
+│   ├── sandbox/
+│   │   └── docker.py        # container sandbox
+│   └── tauri/
+│       ├── package.json     # desktop app manifest
+│       ├── vite.config.ts   # web build config
+│       ├── tsconfig.json    # typecheck config
+│       ├── index.html       # app shell
+│       ├── src-tauri/       # Rust shell
+│       ├── src/
+│       │   ├── app.tsx      # desktop UI root
+│       │   ├── index.tsx    # UI entry
+│       │   ├── styles.css   # theme + light remap
+│       │   ├── api/
+│       │   │   └── client.ts   # bridge + keys API
+│       │   ├── audio/
+│       │   │   ├── webaudio.ts # mic capture + playback
+│       │   │   ├── dsp.ts   # DSP helpers
+│       │   │   └── recorder-worklet.js  # recorder node
+│       │   ├── assets/
+│       │   │   ├── collapse.svg  # collapse icon
+│       │   │   └── expand.svg    # expand icon
+│       │   └── components/
+│       │       ├── Keys.tsx            # provider + key picker
+│       │       ├── Kbd.tsx             # keycap visuals
+│       │       ├── Hero.tsx            # hero panel
+│       │       ├── chain-of-thought.tsx # thinking view
+│       │       ├── code-block.tsx      # code view
+│       │       ├── DitherBg.tsx        # dither backdrop
+│       │       ├── EqBars.tsx          # mic level bars
+│       │       ├── WarpOrb.tsx         # voice orb
+│       │       ├── ReactVoiceMode.tsx  # voice mode screen
+│       │       └── samples.ts          # sample data
+├── engine/
+│   ├── audio.py             # resample + wav utils
+│   ├── inference_engine.py  # engine entry
+│   ├── session.py           # engine sessions
+│   └── streaming.py         # token streaming
+├── benchmarks/
+│   ├── worker_profile.py    # Bonsai TTFT/decode sweep
+│   ├── longctx_eval.py      # prefill + needle eval
+│   ├── plot_worker_longctx.py  # worker/longctx charts
+│   ├── leg_profile.py       # per-leg spot checks
+│   ├── leg_stages.py        # stage-split profile
+│   ├── voice_latency.py     # turn timing
+│   ├── toolcall_eval.py     # tool-call F1
+│   ├── tts_ab.py            # voice A/B
+│   ├── memory_eval.py       # retention + correction
+│   ├── eval_agent_tasks.py  # task pass rate
+│   ├── plot_triton_speedup.py  # kernel speedup chart
+│   ├── plot_voice_lazy.py   # lazy-turn charts
+│   ├── run_all_evals.sh     # full eval runner
+│   ├── terminal_bench.json  # terminal task set
+│   ├── toolcall_subset.json # tool-call subset
+│   ├── kaggle.md            # Kaggle notes
+│   ├── README.md            # bench docs
+│   ├── llm/
+│   │   ├── benchmark_concurrency.py # concurrency sweep
+│   │   ├── benchmark_kernels.py     # kernel bench
+│   │   ├── benchmark_pytorch.py     # torch baseline
+│   │   ├── benchmark_triton.py      # triton baseline
+│   │   └── _shared.py       # shared setup
+│   ├── stt/
+│   │   ├── benchmark_pytorch.py     # torch baseline
+│   │   ├── benchmark_triton.py     # triton baseline
+│   │   └── _shared.py       # shared setup
+│   ├── tts/
+│   │   ├── benchmark_pytorch.py     # torch baseline
+│   │   ├── benchmark_triton.py     # triton baseline
+│   │   └── _shared.py       # shared setup
+│   ├── common/
+│   │   ├── benchmark.py     # shared harness
+│   │   ├── environments.py  # environments
+│   │   ├── memory.py        # memory tracking
+│   │   ├── metrics.py       # metric helpers
+│   │   ├── plotting.py      # plot helpers
+│   │   ├── reporting.py     # result reports
+│   │   ├── roofline.py      # roofline analysis
+│   │   ├── summary.py       # run summaries
+│   │   └── timing.py        # timing helpers
+│   ├── harness/
+│   │   ├── eval.py          # GAIA/TB runner
+│   │   ├── gaia/            # GAIA task files
+│   │   └── tb21/            # TerminalBench-2.1 files
+│   └── profiling/
+│       ├── nsight_compute/  # Compute captures
+│       └── nsight_systems/  # Systems captures
+├── eval/
+│   ├── evaluate.py          # unified eval CLI
+│   ├── common.py            # result envelopes
+│   └── gaia/
+│       ├── runner.py        # GAIA leg probe
+│       ├── loader.py        # GAIA tasks
+│       └── grader.py        # GAIA scoring
+├── configs/
+│   ├── delegate.yaml        # unused routing config
+│   └── mcp_servers.yaml     # MCP servers
+├── docs/
+│   ├── benchmarks.md        # measured numbers
+│   ├── capacity.md          # VRAM notes
+│   ├── exp.md               # experiments log
+│   ├── README.md            # docs index
+│   ├── ARCHITECTURE.md      # architecture notes
+│   ├── architecture.md      # legacy single-file arch
+│   ├── plans/
+│   │   └── gpu-memory-guard.md  # VRAM guard plan
+│   └── architecture/
+│       ├── README.md        # architecture index
+│       ├── 01-agent.md      # agent doc
+│       ├── 02-tools.md      # tools doc
+│       ├── 03-memory.md     # memory doc
+│       ├── 04-sessions.md   # sessions doc
+│       ├── 05-models.md     # models doc
+│       ├── 06-processes.md  # processes doc
+│       ├── 07-inference.md  # inference doc
+│       └── 08-tui.md        # TUI doc
+├── sessions/                # legacy local state (now ~/.local/share/voicert)
+├── third_party/             # vendored deps
+├── test.py                  # smoke test
+├── MODEL.md                 # model notes
+├── PLAN.md                  # plan notes
+├── COMPLETE.md              # completion notes
+├── AGENTS.md                # agent instructions
+└── .env.example             # keys template for .env
+```
+
+Models in this project:
+
+```
+# VAD Model : Silero VAD — src/models/vad.py : VadModel
+# STT Model : Whisper — src/models/stt.py : SttModel
+# LLM Model : Qwen3-0.6B — src/models/llm.py : LlmModel
+# Worker Model : Bonsai 2 27B — src/models/bonsai.py : BonsaiLlamaCpp
+# TTS Model : Kokoro TTS — src/models/tts.py : TtsModel
+# Provider Models : Groq / Gemini / Anthropic / OpenAI / OpenRouter / DeepSeek / OpenAI-compat — src/models/provider.py : ChatModel
+# Chat Model : LangChain face over LlmModel — src/models/chat_model.py : LocalChatModel
+```
+
+## Agent — text in, tools out, reply back
+
+### Historical: the removed two-brain front
+
+> The front/worker split below is retired. The current harness lives in
+> `src/agent/long_running/agent.py`: one planner acts directly or hands steps to
+> tag-narrowed specialists. See the root `ARCHITECTURE.md`.
+
+`src.server` ran **delegation on by default**. A small
+front model (Qwen3-0.6B) owns the conversation and is given **no tools at
+all**: it is asked one yes/no question — *does this need the worker?* — and
+answers with a single word. On `YES` the turn runs on the worker leg (Bonsai
+27B) with the whole existing agentic harness. Delegation does not build a
+second harness — it routes into the one already there, so tools, memory and
+sessions stay shared.
+
+```
+user ──► front (Qwen3-0.6B, no tools, one-word decision)
+            │
+            ├── NO ──► front writes a short reply ──► TTS  (never touches the 27B)
+            │
+            └── YES ─► worker (Bonsai 27B, full tool set) ──► reply → TTS
+```
+
+Four deliberate properties:
+
+- **Chat never loads the worker.** "hi" costs a 0.6B generate, not a 27B
+  one. This is the whole latency argument.
+- **The worker gets the user's own words.** The front writes no task
+  string, so there is nothing for it to garble, drop or invent — Bonsai
+  re-reads the raw utterance and the history and extracts the intent
+  itself. A delegated result also goes straight to TTS; the front does not
+  get to reword it, so a correct result can't be mangled on the way out.
+- **Failure is asymmetric.** A dead front leg, an unparseable answer or a
+  narration-shaped reply all route to the worker, because that is the leg
+  that can actually do anything. A worker that dies **says so** instead of
+  going silent, since silence there reads as "done".
+- **The decision is asked first.** The flag is the *first* call of the
+  turn, so a delegated task costs one 6-token generate and never produces a
+  chat reply nobody will hear. Asking for the flag and the reply in one
+  generation was measured and drops real tasks (31/37 vs 34/37).
+
+### Why a boolean and not a tool
+
+The front leg used to hold exactly one tool, `delegate`, and pick a
+function envelope with a task string as its argument. Measured on real
+task prompts with Qwen3-0.6B, that was the bottleneck, not the routing
+idea: **0 of 8** prompts produced a valid call. The model had the intent
+and no trouble narrating it ("Sure, I renamed it"), and just could not be
+made to fill in the envelope. True token-level prefill, which bypassed the
+envelope entirely, delegated 10/10 — but it also escalated every bit of
+chit-chat, because a 1B-scale model cannot express "not this one" without
+being handed the alternative.
+
+A single yes/no question is the one form of that discrimination a 0.6B
+does reliably, and the asymmetry lets it be biased hard toward `YES`: a
+false positive costs one slow worker turn, a false negative silently drops
+a task the user asked for. With a 5-pair few-shot prompt, on real weights — re-measured 2026-10-02
+on the committed prompt set (`src/agent/prompts/delegate.py`: 13 TASK +
+15 CHAT), live Qwen3-0.6B fused front, greedy boolean. (The original
+37-prompt list — 19/19 escalated, 15/18 kept, 0.25 s chat latency — is
+not in the repo, so the table below replaces it with the rerunnable set.)
+
+| | result |
+| --- | --- |
+| task prompts escalated | **13 / 13** (zero dropped) |
+| chit-chat kept on the front leg | **11 / 15** (4 false positives: time, joke, 2+2, price) |
+| routing decision latency | **≈0.1 s** mean (first call 0.9 s, steady 0.0–0.1 s) |
+| front reply, 10 ids | **≈0.3 s** (≈36 tok/s, `benchmarks/leg_profile.py`) |
+
+Turn cost: `YES` = 1 call, 6 tokens. `NO` = 2 calls (flag, then reply).
+
+`configs/delegate.yaml` picks the front's placement — `fused` (CUDA,
+default), `cpu` (0 VRAM), or `sidecar` (a 0-VRAM llama.cpp CPU server) —
+plus the backstop and route-event switches. The backstop is a scored regex
+pass with no second LLM call, kept **on** as the last override before a
+chat reply: a 0.6B model's default failure is narrating work it never did,
+and that is the one bug this design must never ship. It barely fires — on
+the 28-prompt run above the model never said `NO` to anything the regex
+scored as work — so it costs a regex match and buys insurance against the
+worst outcome.
+
+The same regex runs on **every** turn as telemetry either way. Where it
+disagrees with the model, the count surfaces on `GET /health`
+(`delegate.route_skew`): `regex_no_model_yes` means the model escalated
+something the regex reads as chatter (the regex is usually wrong — it
+scored "how do i center a div" 0), and `model_no_regex_yes` is the
+backstop catching a miss. Skew is recorded, never used to decide.
+
+| Switch | Default | Effect |
+| --- | --- | --- |
+| `VOICE_DELEGATE=0` | on | single brain — the llm leg answers everything |
+| `VOICE_DELEGATE_CONFIG` | `configs/delegate.yaml` | path to the placement/routing config |
+| `VoiceAgentConfig(harness=LongRunningConfig(delegate=...))` | **off** | library default: no second set of weights unless asked |
+
+The library default is off on purpose: delegation builds a *second* set of
+weights, so a bare `VoiceAgent()` that never asked for two brains should
+not pay for it. The app entry points are where that decision belongs.
+
+### Lazy worker: measured 2026-10-02
+
+The worker sidecar boots on the first delegate route, not at app start
+(`worker_eager: false`). Same box, live backend, worker CPU-only
+(`--n-gpu-layers 0`):
+
+| | measured |
+|---|---|
+| Boot to ready (lazy) | **~40 s**, 2283 MB VRAM, 0 worker procs, `missing: []` |
+| Chat turn (front only) | **0.9–1.7 s**, no spawn |
+| First YES (cold worker) | route 0.1 s → first output **44 s** (spawn+load+prefill) → done **208 s** |
+| Steady YES (warm worker) | route ~1 s → done **~340 s**; direct `:8081` timings: 13.7 s prompt, decode **1.4 tok/s** |
+| RAM | 8 GB avail at boot → 6 GB with worker resident (5.6 GB GGUF vs 7.7 GB need at 16K ctx) |
+| VRAM | 2283 MB boot → 3676 MB post-turn (sidecar CUDA context alone costs ~886 MB despite `ngl=0`) |
+
+Two failure modes observed, both loud (no hangs): a sidecar can die
+minutes after a good boot (probable kernel OOM at ~6 GB avail vs ~7 GB
+need) — the next YES then fails fast with `Connection refused`; and one
+456 s worker turn died at the final TTS step with CUDA OOM (64 MB alloc,
+62 MB free). Worker turns on 4 GB are possible but fragile — see
+`docs/plans/gpu-memory-guard.md`.
+
+![turn anatomy](../benchmarks/results/plots_voice/turn_anatomy.png)
+![decode tok/s by leg](../benchmarks/results/plots_voice/toks_comparison.png)
+![footprint](../benchmarks/results/plots_voice/footprint.png)
+
+Source data: `benchmarks/results/voice_lazy_20261002.json`, plots via
+`benchmarks/plot_voice_lazy.py` (300 dpi, no GPU needed to regenerate).
+
+### The deep-agent loop (worker leg)
+
+```
+text in ──► VoiceAgent.run_text ──► deep-agent loop (≤6 steps, lock+queue per session)
+                                          │ think → toolcall (one action per step)
+                                          ▼
+                                   exec/read/write/edit/list/grep (host backend)
+                                   python_exec/fetch/web_search (MCP stdio)
+                                          │ policy deny/confirm + y/n gate
+                                          ▼
+                                   chat reply (+ thinking + token stream)
+sessions/*.json: 8-turn window + token budget (see Context Engineering)
+```
+
+## Context Engineering — one budget per backend, enforced at assembly
+
+```
+16K window
+├─ system + preamble ......... fixed (~2.5K, never cut)
+├─ tool specs ................ fixed (~1K narrowed, never cut)
+├─ history window ............ elastic (newest-first fill to remainder)
+├─ observations .............. elastic per-call (1500 → 500 → drop)
+└─ generation reserve ........ fixed floor (256/512, never spent by input)
+```
+
+Rule: step floor ≥ think cap + min answer (a think cap above the floor
+truncates mid-thought). Per-backend rows (`src/agent/budget.py:BUDGETS`):
+
+```
+backend    ctx    think cap   floor   history ≈
+bonsai     16K    128         512     ~9K
+qwen       8K     256         256     ~4K
+```
+
+`pack_prompt` cuts obs → history, never system/facts. L1 window, L2
+episodic (`~/.local/share/voicert/memory/episodic.db`), L3 facts (`.../memory/facts.md`) distill
+from packed context — see PLAN.md (local-only).
+
+## Benchmarks — RTX 3050 Laptop 4GB (torch 2.5.1+cu124, driver 615.71)
+
+Legs, turns and routing re-measured 2026-10-02 (means over n=4 steady-state
+turns unless noted; first-call warmup excluded). Rows marked historical
+were not re-run: kernel microbenches need a long exclusive GPU session,
+and the concurrency/cost tables are a Qwen2.5-era reference stack. Engine
+benches were re-run 2026-10-03 after the `src.inference` parser fix.
+
+All commands assume `PYTHONPATH=.` from inside `voice-pipeline/`.
+
+### Reproduce
+
+```bash
+# fused kernel microbenchmarks (perf_report inside each Triton file)
+.venv/bin/python -m src.models.triton_kernels.qwen_fused --bench --save_path benchmarks/results
+.venv/bin/python -m src.models.triton_kernels.whisper_fused --bench --save_path benchmarks/results
+.venv/bin/python -m src.models.triton_kernels.tts_fused --bench --save_path benchmarks/results
+```
+
+### Fused Triton speedup (measured 2026-10-05, same box, real weights)
+
+How many × faster the fused Triton leg runs vs pure torch
+(same workload both sides, steady state, warmup excluded):
+
+![Fused Triton speedup per model](../benchmarks/results/plots/triton_speedup.png)
+
+Raw pair (torch → triton): LLM leg 18.5 → 65.9 tok/s (Qwen3-0.6B,
+64+16, TTFT 407ms → 17ms). Only Qwen keeps Triton now — STT/TTS are pure torch by design, so
+there is no Triton bar for them (their last paired runs tied at 1.0×:
+encoder-dominated Whisper, synthesis-dominated Kokoro). The chart's
+second row is the retired paged engine's last pair, kept for history.
+Reproduce:
+`benchmark_pytorch.py` vs `benchmark_triton.py` in `benchmarks/llm/`
+(same flags both sides);
+regenerate the chart with `benchmarks/plot_triton_speedup.py` (extend
+`ROWS`, raw leg CSVs under `benchmarks/results/quick_20261005_qwen3/`).
+
+### Worker sweep — Bonsai 27B TTFT/decode (measured 2026-10-15)
+
+TTFT + wall per (prompt, gen) cell through the production sidecar path
+(`benchmarks/worker_profile.py`, warm sidecar :8081, first rep per cell
+excluded; VRAM lives server-side):
+
+| Prompt | Gen | TTFT | Decode | Wall |
+|---|---|---|---|---|
+| ~40 toks (56 ids) | 32 | 2.80 s | **1.4 tok/s** | 25.8 s |
+
+![Bonsai worker sweep](../benchmarks/results/plots/worker_sweep.png)
+
+Full sweep (`--max-tokens 32 128 512`, prompts ~40/500/2000) pending —
+re-run `benchmarks/worker_profile.py`, then
+`benchmarks/plot_worker_longctx.py` to extend chart and tables.
+
+### Long-context — prefill scale + needle recall (measured 2026-10-15)
+
+`benchmarks/longctx_eval.py` (qwen backend, ctx 8192; fused legs report
+TTFT 0.0 so wall carries the prefill signal):
+
+| Length | Prompt ids | Wall (gen 16) | Needle d=0.5 |
+|---|---|---|---|
+| ~256 | 224 | 1.84 s | HIT |
+
+![Prefill scaling](../benchmarks/results/plots/longctx_scale.png)
+![Needle recall](../benchmarks/results/plots/longctx_needle.png)
+
+Full sweep (`--lengths 1024 2048 4096 8192 --depths 0.0 0.5 1.0`, then
+`--backend bonsai` to 16K) pending — same re-run procedure as above.
+
+### Fused kernel microbenchmarks (single layer vs eager torch)
+
+Historical — not re-run 2026-10-02 (needs a long exclusive GPU session;
+plots in `benchmarks/results/plots_fused/` are from the last full run).
+
+Parity: `max_err 9.7e-04` (fp16) under `1e-2`. VRAM `check_budget` passes at B=8 (448MB KV + 1200MB weights < 4000MB).
+
+**LLM — `qwen_fused_decode_layer` (28 layers, B=1..8, seq 1..512)**
+
+| | B=1 | B=4 | B=8 | seq 512 |
+|---|---|---|---|---|
+| fused | 0.66ms | 1.05ms | 1.65ms | 0.99ms |
+| torch | 0.88ms | 1.62ms | 2.25ms | 1.73ms |
+| **speedup** | **24%** | **35%** | **27%** | **43%** |
+
+![qwen fused B](../benchmarks/results/plots_fused/qwen-fused-layer-B.png)
+![qwen fused seq](../benchmarks/results/plots_fused/qwen-fused-layer-seq.png)
+
+**STT — `whisper_fused_decoder_layer` (6 layers, B=1..8)**
+
+| | B=1 | B=4 | B=8 |
+|---|---|---|---|
+| fused | 0.28ms | 0.42ms | 0.56ms |
+| torch | 0.59ms | 0.89ms | 1.19ms |
+| **speedup** | **52%** | **53%** | **53%** |
+
+![whisper fused B](../benchmarks/results/plots_fused/whisper-fused-layer-B.png)
+![whisper fused seq](../benchmarks/results/plots_fused/whisper-fused-layer-seq.png)
+
+**TTS — `in1d_silu` / `conv1d_silu` / `postprocess_batched`**
+
+| | B=1 | B=4 | B=8 | L=2048 |
+|---|---|---|---|---|
+| `in1d_silu` | 0.12ms | 0.31ms | 0.58ms | 3-6× torch |
+| `conv1d_silu` | 0.08ms | 0.22ms | 0.41ms | cuDNN parity |
+
+![tts fused B](../benchmarks/results/plots_fused/tts-fused-B.png)
+![tts fused L](../benchmarks/results/plots_fused/tts-fused-L.png)
+
+### LLM: latency vs concurrency vs generation length (reference Qwen2.5-0.5B stack — historical, not re-run)
+
+| genlen | conc | TTFT p50 | TPO | TPS | req/s | tok/s | util% | W | tok/s/W | $/1M |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 16 | 1 | 214ms¹ | 20.3ms | 26.4 | 2.40 | 26.4 | 2.0 | 19.8 | 1.33 | $0.5265 |
+| 16 | 2 | 30ms | 29.4ms | 34.6 | 4.85 | 65.5 | 1.0 | 22.1 | 2.96 | $0.2122 |
+| 48 | 1 | 14ms | 14.4ms | 69.6 | 6.31 | 69.4 | 1.0 | 22.1 | 3.14 | $0.2000 |
+| 48 | 2 | 28ms | 25.8ms | 40.3 | 3.44 | 67.1 | 16.0 | 27.5 | 2.44 | $0.2070 |
+
+¹ First generate after load includes CUDA init; steady-state TTFT 14–30 ms band.
+
+Concurrency doubles token throughput (26 → 66 tok/s at genlen 16) while per-request latency rises — measured, not assumed. Peak efficiency: **3.14 tok/s per watt** (conc 1, genlen 48).
+
+### Cost per million tokens (local $0.05/hr)
+
+| workload | tok/s | $/1M tokens |
+|---|---|---|
+| genlen 48, conc 1 | 69.4 | **$0.2000** |
+| genlen 48, conc 2 | 67.1 | $0.2070 |
+| genlen 16, conc 2 | 65.5 | $0.2122 |
+
+### Full voice turn (round-trip: synthetic speech → full pipeline)
+
+Re-measured 2026-10-02 via `benchmarks/voice_latency.py` (single-brain
+Qwen3-0.6B, 48 max-tokens, 1.95 s synth input, first turn excluded):
+
+| | TTFA | E2E | VRAM |
+|---|---|---|---|
+| Fast path `--fast` (VAD→STT→1 LLM call→TTS, 7 ids) | 551 ms | 551 ms | 3038 MB |
+| Default path (same input, 48 max-tokens) | 859 ms | 1021 ms | 3065 MB |
+
+Earlier rows, kept for history: synthetic round-trip 308/827 ms,
+live turn 438/640 ms, LibriSpeech samples 531–858 / 1321–2590 ms
+(VRAM ~1940 MB — lighter legs than today's full stack).
+
+Two-brain chat turn re-measured the same day over the live backend
+(`/deep`, fused front, worker never loaded): **1.6–1.9 s**
+utterance-to-reply. See `src/agent/delegate.py` for the routing
+contract (92 unit tests green).
+
+### Per-leg spot checks
+
+Re-measured 2026-10-02 via `benchmarks/leg_profile.py` (steady-state of
+3, 1.95 s speech in / 3.02 s audio out) and `benchmarks/voice_latency.py`
+(n=4 turns, ranges in brackets):
+
+| Leg | Latency | Real-time factor |
+|---|---|---|
+| VAD (Silero ONNX, CPU) | 23–25 ms / ~2 s audio [19–31] | **≈0.012** |
+| STT (Whisper-base fused) | 113 ms / 1.95 s audio [113–113 steady; 143–221 in-turn] | **≈0.06–0.09** |
+| LLM TTFT / decode (batch-1 fused) | 178 ms TTFT (~40-tok prompt) / 22.7 tok/s over 48 ids | — |
+| TTS (Kokoro-82M, eager) | ~210 ms / 3.02 s audio [198–434 in-turn] | **≈0.07–0.14** |
+
+Historical steady-state claims kept for reference: TTFT 14–30 ms band
+(tiny prompts), decode ~69 tok/s at genlen 48 (batched harness), STT
+59 ms / 3 s (RTF 0.020), TTS 141 ms (RTF 0.045). Today's box reads
+slower across the board than those rows.
+
+### Larger legs (2026-10-02 — retired backends, kept for reference)
+
+| Leg | Latency / throughput |
+|---|---|
+| Qwen3-1.7B Q4_K_M CPU sidecar (`backend=qwen17`, :8084, greedy 48 ids) | warm 7 s · server TTFT ~80 ms steady (557 ms first call) · decode **12.5 tok/s** stable over 3 reps |
+| Bonsai 27B worker | not runnable here: RAM guard refused (5.6 GB GGUF vs 3.9 GB available) — no tok/s |
+| Gemma-4-E4B sidecar | not runnable here: needs ~6 GB RAM |
+
+CUDA-graphs, engine features and kernel plots are blocked behind the
+2026-10-02 GPU wedge (`ERR!`, cold boot required) plus the pre-existing
+`src/inference` breakage — see `docs/plans/gpu-memory-guard.md` for the
+pre-execution guard plan written up after the incident.
+
+### Capacity: VRAM-probed sessions (RTX 3050 4096 MB, Qwen3-0.6B)
+
+Recomputed 2026-10-02 via `src/models/runtime/capacity.py`
+(baseline 2381 MB legs-resident, up from ~1900 MB):
+
+| | genlen 48 | genlen 128 |
+|---|---|---|
+| Baseline (weights) | ~2380 MB | ~2380 MB |
+| Headroom (10%) | 410 MB | 410 MB |
+| Usable | ~1300 MB | ~1300 MB |
+| Per session (~270 MB) | **~4 sessions** | **~4 sessions** |
+
+Session VRAM math lives in `src/models/runtime/capacity.py`.
+
+---
+
+All plots in `benchmarks/results/plots_fused/` · capacity math in `src/models/runtime/capacity.py`.
+
+## References
+
+### Transformers
+
+- [1]: https://www.aleksagordic.com/blog/transformer | Transformer from scratch - by Aleksa Gordić
+- [2]: https://www.youtube.com/playlist?list=PLqO45Dg1pMhlDBZTMqVL2GU-14xYip2y2 | Transformer playlist - by Umar Jamil
+
+### Inference
+
+- [3]: https://learn-inference.com/ | learn-inference.com - by learn-inference.com
+- [11]: https://udayan.co/writing/inference-engineering-101/ | Inference Engineering 101 - by Udayan
+- [12]: https://udayan.co/writing/voice-ai-inference-101/ | Voice AI Inference 101 - by Udayan
+
+### Kernels
+
+- [4]: https://triton-lang.org/ | OpenAI Triton - by OpenAI
+
+### Harness
+
+- [5]: https://martinfowler.com/articles/harness-engineering.html | Harness engineering for coding agent users - by Birgitta Böckeler
+- [6]: https://youtu.be/C_GG5g38vLU?si=RaptRWbS-27f7r78 | Harnesses in AI: A Deep Dive - by Tejas Kumar (IBM)
+- [7]: https://youtu.be/tYchws8hpd8?si=pcI1PIS1qqmmSLIX | AI Harness Engineering - Forward Deployed Engineering Tutorial - by YouTube
+
+### Agentic Design
+
+- [8]: https://github.com/ombharatiya/ai-system-design-guide/tree/main | AI system design guide - by Om Bharatiya
+
+### Context Engineering
+
+- [9]: https://www.langchain.com/blog/context-engineering-for-agents | Context Engineering for Agents - by LangChain
+- [10]: https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents | Effective context engineering for AI agents - by Anthropic (Applied AI team)
+
+More: [`architecture.md`](architecture.md) startup + WS flow, [`capacity.md`](capacity.md) VRAM math, plots in `benchmarks/results/plots_fused/`.
+
+---
+
+## 🚧 TUI version — work in progress
+
+I'm building an opencode-style **terminal voice agent** on top of this pipeline: full-screen split UI — conversation + input on the left, live USER/AGENT audio visualizer on the right — with the same single Qwen model chatting or running shell commands (`v` voice turn, `y`/`n` confirm gate, `/` commands, per-session LangChain memory). The current frontend is the **Tauri + SolidJS app in `src/tauri/`**, backed by `src.server` (`:8004`). Not done yet: visual polish and edge cases are still being worked on.
+
+See it live (backend in one shell, Tauri client in another):
+
+```bash
+PYTHONPATH=. uv run python -m src.server      # :8004
+cd src/tauri && npm install && npm run dev    # in another shell
+```
+
+First boot warms legs (~1-2 min). Headphones (or speakers down) avoid the mic re-ingesting replies; without them the app still works — it pauses listening while speaking and discards its own echo. Point the client at a different backend with `VITE_VOICE_BRIDGE=http://127.0.0.1:8004`.
+
+On quit (`ctrl+c` or `/quit`) a farewell card prints a two-word name for the session and the command to resume it:
+
+```bash
+voicert -s ses_f09c7b175ffews1QW321k2D9An
+```
+
+Session ids are `ses_` + 26 base62 chars, written to `~/.local/share/voicert/sessions/<id>.json`, so a resume survives a restart of both the TUI and the backend. `voicert -s <id>` also accepts a bare id (no prefix); anything that isn't 6–64 alphanumerics is rejected.
+
+### Monotonic shades
+
+The palette is black and white plus **one** hue. `/shade <name>` collapses every chromatic role (accent, warn, danger, voice label) onto that single color; the backdrop, ink and borders stay exactly where they were. `/shade` lists them, `/shade none` restores the original multi-hue palette, and `VOICE_SHADE=blue|yellow|red|orange|green|none` picks the starting shade (default **green**). The wordmark's `RT` half is painted in the active shade too.
+
+The trade is deliberate: errors and confirm prompts stop being red and yellow, so they're told apart by their glyph and label rather than color.
+
+## Sandboxed tool execution (docker)
+
+Terminal tools run on the host by default. Pass a `SandboxConfig` to run
+each worker turn inside a fresh per-turn container instead
+(`src/agent/sandbox/docker.py:SandboxShellBackend`, host file ops + container
+`execute`, over the docker CLI — no new dependencies):
+
+```python
+from src.agent.long_running import LongRunningConfig
+from src.agent.voice_agent.agent import VoiceAgent, VoiceAgentConfig
+from src.agent.sandbox.docker import SandboxConfig
+agent = VoiceAgent(VoiceAgentConfig(
+    harness=LongRunningConfig(sandbox=SandboxConfig())))
+```
+
+What it is (honest version): one `--rm` container per turn, separate
+pid/network/mount namespaces, `--cap-drop ALL`, memory/cpu/pids limits,
+no privileged flag. The turn cwd is jailed (no `/`, system prefixes,
+`~/.ssh`, or the session store) then bind-mounted at `/work`, so file
+ops work on host files unchanged — containment covers processes,
+network, devices and resources, not filesystem secrecy. Policy
+deny-list + `y/n` confirm stay on top. `read`/`write`/`edit`/`grep`/
+`list` stay host-side on the same tree. `exec` and `python_exec` run
+containerized (`VOICE_SANDBOX_CONTAINER` switches `python_exec` from
+host `sys.executable` to `docker exec`). Sessions persist globally in
+`~/.local/share/voicert/sessions/<id>.json` regardless of where the turn runs.
+
+Image policy: one pinned global image, `python:3.12-slim` (needs
+`bash`, `python3`, GNU `timeout`) — never one image per session. Images
+are immutable, so runs can't grow them: turn output lands in the
+container layer (discarded by `--rm`) or the mounted workdir.
+Defaults: `--network none`, `--memory 1g`, `--cpus 2`. Requirements:
+docker daemon access (`sudo usermod -aG docker $USER` + re-login) —
+without it the turn fails fast with the fix printed, never silently
+on the host.
