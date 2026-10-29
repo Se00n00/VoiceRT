@@ -40,7 +40,7 @@ seconds since backend boot
 profile id used by `/model/switch`
 
 `label` string
-human label shown in the TUI
+human label shown in the GUI
 
 `backend` string
 leg id: qwen, bonsai, or a cloud backend

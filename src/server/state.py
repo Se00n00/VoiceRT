@@ -244,7 +244,7 @@ async def _maybe_title(agent, sid, text, ws) -> None:
     queues behind the real turn and taxes the user's slowest one.
 
     Everything about this is best-effort — a name is decoration on an exit
-    card, and the TUI falls back to an offline name when it never arrives.
+    card, and the client falls back to an offline name when it never arrives.
     """
     try:
         if not sid or sid in _titled_sids:

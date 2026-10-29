@@ -3,7 +3,7 @@
 **Persisted session title and transcript**
 
 Model-free reads for resumes. `/term/title` serves the persisted name
-(the TUI calls it on mount); `/term/history` replays user/assistant
+(the GUI calls it on mount); `/term/history` replays user/assistant
 turns straight off disk and touches the file against the sweeper.
 
 ---

@@ -24,7 +24,7 @@ flowchart TD
     Memory["Memory: recall, consolidate"]
     Sessions["Sessions: history, titles"]
     Bridge["Backend 8004: runText, confirm, talk/offer"]
-    TUI["TUI: render, playback"]
+    GUI["GUI: render, playback"]
     User -->|text audio cancel| VoiceAgent
     VoiceAgent -->|speech spans| VadModel
     VoiceAgent -->|transcript| SttModel
@@ -37,7 +37,7 @@ flowchart TD
     VoiceAgent -->|speak replies| TtsModel
     TtsModel -->|audio| User
     Bridge -->|run_text confirm| VoiceAgent
-    TUI -->|turns over WS| Bridge
+    GUI -->|turns over WS| Bridge
 ```
 
 ASCII twin (same entities, same edges):
@@ -67,7 +67,7 @@ VoiceAgent ◀── remember_turn ───┤
    │                            │ audio (interruptible: barge restarts VAD)
    └────────────────────────────┘
 
-Transports:  TUI ──WS──▶ Backend (:8004, run_text + confirm + talk/offer)
+Transports:  GUI ──WS──▶ Backend (:8004, run_text + confirm + talk/offer)
              mic ──WS──▶ same backend (:8004, loop + partials + barge)
 Shared:      ToolRouter (allow/deny policy) · Memory (L1/L2/L3) · Sessions
 ```
@@ -144,7 +144,7 @@ this design minimizes.
 
 | Entity | What it does | Detail |
 |---|---|---|
-| `User` | speaks, types, hits Ctrl+C | [TUI](architecture/08-tui.md) |
+| `User` | speaks, types, hits Ctrl+C | — |
 | `VoiceAgent` (`src/agent/voice_agent/agent.py`) | owns legs, locks, queue, confirm gate, turn loop | [01](architecture/01-agent.md) |
 | `VadModel` (Silero ONNX) | speech spans, live per-chunk test, endpointing | [05](architecture/05-models.md) |
 | `SttModel` (Whisper) | full + rolling-partial transcription | [05](architecture/05-models.md) |
@@ -156,7 +156,7 @@ this design minimizes.
 | `Memory` | L1 window injection, L2 episodes, L3 facts | [03](architecture/03-memory.md) |
 | `Sessions` | per-session history, titles, locks, resume | [04](architecture/04-sessions.md) |
 | `Backend` (:8004) | terminal + voice sockets, confirm mailbox | [06](architecture/06-processes.md) |
-| `TUI` (`voicert`) | panels, palette, mic viz, playback, interrupt | [08](architecture/08-tui.md) |
+| `GUI` (`voicert`) | panels, palette, mic viz, playback, interrupt | — |
 
 Rules that cross entities: one GPU process at a time · `PYTHONPATH=.`
 always · confirm before mutating tools · sys logs never in the transcript.

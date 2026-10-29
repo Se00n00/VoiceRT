@@ -16,7 +16,6 @@ are labeled as such rather than smoothed over.
 | 05 | [Models](05-models.md) | the four legs, `LlmConfig`, backends, streaming, VRAM |
 | 06 | [Processes](06-processes.md) | one `:8004` backend, endpoints, and the startup-warm trap |
 | 07 | [Inference](07-inference.md) | retired (custom paged runtime deleted) |
-| 08 | [TUI](08-tui.md) | the Tauri + SolidJS client, commands, voice mode, persistence |
 
 ## The short version
 
@@ -34,7 +33,7 @@ are labeled as such rather than smoothed over.
 One backend on `:8004`, one GPU process at a time on a 4 GB card:
 
 ```
-voicert (Tauri)   ──:8004──▶ src.server   voice + terminal + TUI turns
+voicert (Tauri)   ──:8004──▶ src.server   voice + terminal + GUI turns
 console_cli       ─────────▶             text REPL (no GPU)
 ```
 
@@ -44,9 +43,9 @@ console_cli       ─────────▶             text REPL (no GPU)
 `write_todos` and handed to tag-narrowed specialists; simple actions run
 directly on the planner ([01](01-agent.md)).
 
-**Enter never runs a command you did not type.** The TUI palette only hijacks
+**Enter never runs a command you did not type.** The GUI palette only hijacks
 Enter after you move the highlight, because a palette that silently executes
-`/model` when you typed `/mode` is a trap ([08](08-tui.md#enter-does-not-hijack)).
+`/model` when you typed `/mode` is a trap.
 
 **A hung warm looks exactly like a dead backend.** Uvicorn awaits lifespan
 startup before it binds, so a model download that hangs inside `_warm()` leaves
@@ -79,9 +78,9 @@ first backend start; paths in `src/paths.py:VoicertPaths`, store in
 
 | Suite | Result |
 |---|---|
-| TUI headless checks | 158 pass |
-| TUI typecheck | clean |
-| TUI build | 8 files → `dist/` |
+| GUI headless checks | 158 pass |
+| GUI typecheck | clean |
+| GUI build | 8 files → `dist/` |
 | Python unittest | 634 run, 630 pass, 0 errors, 4 skipped |
 | GPU | available, no model resident |
 

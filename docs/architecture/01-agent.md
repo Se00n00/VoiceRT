@@ -217,4 +217,3 @@ without mutating the original.
 - [05-models.md](05-models.md) — legs and `LlmModel`
 - [06-processes.md](06-processes.md) — the `:8004` backend
 - [07-inference.md](07-inference.md) — retired custom runtime
-- [08-tui.md](08-tui.md) — the Tauri desktop client

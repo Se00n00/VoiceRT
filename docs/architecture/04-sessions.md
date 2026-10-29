@@ -106,4 +106,3 @@ loading its own persisted JSON via `import_session`.
 ## 4.9 See also
 
 - [03-memory.md](03-memory.md) — the tiers above the window
-- [08-tui.md](08-tui.md) — the client that mints ids

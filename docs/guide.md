@@ -269,8 +269,7 @@ voice-pipeline/
 │       ├── 04-sessions.md   # sessions doc
 │       ├── 05-models.md     # models doc
 │       ├── 06-processes.md  # processes doc
-│       ├── 07-inference.md  # inference doc
-│       └── 08-tui.md        # TUI doc
+│       └── 07-inference.md  # inference doc
 ├── sessions/                # legacy local state (now ~/.local/share/voicert)
 ├── third_party/             # vendored deps
 ├── test.py                  # smoke test
@@ -691,9 +690,9 @@ More: [`architecture.md`](architecture.md) startup + WS flow, [`capacity.md`](ca
 
 ---
 
-## 🚧 TUI version — work in progress
+## 🚧 Desktop app — work in progress
 
-I'm building an opencode-style **terminal voice agent** on top of this pipeline: full-screen split UI — conversation + input on the left, live USER/AGENT audio visualizer on the right — with the same single Qwen model chatting or running shell commands (`v` voice turn, `y`/`n` confirm gate, `/` commands, per-session LangChain memory). The current frontend is the **Tauri + SolidJS app in `src/tauri/`**, backed by `src.server` (`:8004`). Not done yet: visual polish and edge cases are still being worked on.
+I'm building an opencode-style **voice agent** on top of this pipeline: a split UI — conversation + input on the left, live USER/AGENT audio visualizer on the right — with the same single Qwen model chatting or running shell commands (`v` voice turn, `y`/`n` confirm gate, `/` commands, per-session LangChain memory). The frontend is the **Tauri + SolidJS app in `src/tauri/`**, backed by `src.server` (`:8004`). Not done yet: visual polish and edge cases are still being worked on.
 
 See it live (backend in one shell, Tauri client in another):
 
@@ -710,7 +709,7 @@ On quit (`ctrl+c` or `/quit`) a farewell card prints a two-word name for the ses
 voicert -s ses_f09c7b175ffews1QW321k2D9An
 ```
 
-Session ids are `ses_` + 26 base62 chars, written to `~/.local/share/voicert/sessions/<id>.json`, so a resume survives a restart of both the TUI and the backend. `voicert -s <id>` also accepts a bare id (no prefix); anything that isn't 6–64 alphanumerics is rejected.
+Session ids are `ses_` + 26 base62 chars, written to `~/.local/share/voicert/sessions/<id>.json`, so a resume survives a restart of both the app and the backend. `voicert -s <id>` also accepts a bare id (no prefix); anything that isn't 6–64 alphanumerics is rejected.
 
 ### Monotonic shades
 

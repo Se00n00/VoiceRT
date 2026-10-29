@@ -7,7 +7,7 @@ import uvicorn
 from . import create_app
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="voice-term bridge for Ink TUI")
+    ap = argparse.ArgumentParser(description="voice-term bridge for the VoiceRT desktop client")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8004)
     args = ap.parse_args()

@@ -1,12 +1,12 @@
 # 06 — Processes
 
-One backend on `:8004`, plus a TUI client and a GPU-free text console.
+One backend on `:8004`, plus a GUI client and a GPU-free text console.
 
 ## 6.1 Which process is which
 
 | Command | Port | Purpose |
 |---|---|---|
-| `PYTHONPATH=. .venv/bin/python -m src.server` | 8004 | FastAPI backend (voice + text + TUI) |
+| `PYTHONPATH=. .venv/bin/python -m src.server` | 8004 | FastAPI backend (voice + text + GUI) |
 | `PYTHONPATH=. .venv/bin/python -m src.server.console_cli` | — | text REPL (no GPU) |
 | `cd src/tauri && npm run dev` | — | Tauri + SolidJS client |
 
@@ -47,7 +47,7 @@ Turn work is dispatched with `asyncio.create_task`.
 it re-warms after the old close so the swap never commits a dead port.
 
 `/health` must stay liveness-safe — it answers before the agent exists, which
-is what lets the TUI show `backend down` versus `warming` correctly.
+is what lets the GUI show `backend down` versus `warming` correctly.
 
 ## 6.3 The separate voice API is gone
 
@@ -76,7 +76,7 @@ downloading model weights from inside the lifespan hook.
 The fix is to bind first and warm second — a background task plus an explicit
 `warming` / `warmed` / `warm_error` state on `/health`, and a bounded warm so a
 hung download cannot wedge startup. **Not implemented yet.** Until it is, a
-hung warm looks exactly like a dead backend to the TUI.
+hung warm looks exactly like a dead backend to the GUI.
 
 ## 6.5 Process hygiene
 
@@ -90,4 +90,3 @@ ps aux | grep -E 'console_cli|test_toolcall|src.server'
 ## 6.6 See also
 
 - [01-agent.md](01-agent.md) — what `create_app` wraps
-- [08-tui.md](08-tui.md) — the client

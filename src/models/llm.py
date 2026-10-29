@@ -586,7 +586,7 @@ class LlmModel:
     async def stream(self, messages: list, max_tokens: int | None = None,
                      tools: list | None = None,
                      stop: list[str] | None = None):
-        """Async generator of :class:`LlmToken` as produced (for TTS/TUI).
+        """Async generator of :class:`LlmToken` as produced (for TTS and the client).
 
         ``tools`` is forwarded to the chat template like in
         :meth:`generate`, so streamed terminal steps keep MiniCPM's native

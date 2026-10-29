@@ -8,7 +8,7 @@ template calls out) and pass through verbatim as ``tool_calls`` —
 extraction lives in :meth:`src.models.llm.LlmModel.extract_tool_calls`,
 op mapping to the execution layer outside this file. This module holds
 no grammar and no parser. Thinking traces (``<think>…</think>``) ride
-in ``additional_kwargs`` for the TUI.
+in ``additional_kwargs`` for the client.
 """
 import asyncio
 import concurrent.futures
@@ -465,7 +465,7 @@ class LocalChatModel(BaseChatModel):
             if not live:
                 continue
             if kind == "think":
-                # Live think lane: the TUI appends these to the think
+                # Live think lane: the client appends these to the think
                 # bubble (main.py emits thinking/append events for them).
                 # The full trace still lands via the final parse as well.
                 yield _cgc(AIMessageChunk(

@@ -364,7 +364,7 @@ def compose_raw(content, tool_calls, reasoning=""):
     The server returns reasoning in a separate ``reasoning_content`` field —
     wrapping it in ``<think>`` here is what lets ``LlmModel.split_thinking``
     downstream turn it into ``thinking`` events (otherwise Bonsai's
-    thoughts are silently dropped and the TUI shows no think trace).
+    thoughts are silently dropped and the client shows no think trace).
     Same raw-text grammar the sidecar parser consumes.
     """
     parts = []

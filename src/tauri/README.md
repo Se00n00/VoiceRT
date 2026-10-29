@@ -1,4 +1,4 @@
-# VoiceRT — Tauri GUI (replaces `src/tui`)
+# VoiceRT — Tauri GUI
 
 Fresh rewrite with Tailwind CSS, from the floating-cards-over-wallpaper template:
 black icon rail left,chat transcript + composer center, Get Started / model /

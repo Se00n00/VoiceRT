@@ -1,4 +1,4 @@
-/* Pure audio DSP ported from src/tui/src/audio.ts (no Node Buffer). */
+/* Pure audio DSP (no Node Buffer). */
 
 export const NB = 24;
 

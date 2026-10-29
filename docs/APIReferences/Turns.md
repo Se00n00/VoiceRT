@@ -79,7 +79,7 @@ RESPONSE
 ----
 
 WS    /deep
-Same loop as `/term` but confirms auto-pass; used by the TUI agent mode.
+Same loop as `/term` but confirms auto-pass; used by the GUI agent mode.
 
 REQUEST
 ```json

@@ -41,7 +41,6 @@ A Tauri desktop client, FastAPI backend, and XDG-managed local state keep the lo
 | 05 | [Models](docs/architecture/05-models.md) | four legs, backends, streaming, VRAM |
 | 06 | [Processes](docs/architecture/06-processes.md) | backend endpoints, startup-warm trap |
 | 07 | [Inference](docs/architecture/07-inference.md) | retired custom runtime |
-| 08 | [TUI](docs/architecture/08-tui.md) | Tauri client, commands, voice mode |
 
 ---
 
@@ -176,28 +175,11 @@ A Tauri desktop client, FastAPI backend, and XDG-managed local state keep the lo
                     └──────────▶ runs ONE at a time, never two
 
   ⚠ uvicorn awaits lifespan BEFORE it binds. A warm that hangs leaves NO listener,
-    which the TUI cannot tell from a dead backend.  (fix pending)
+    which the GUI cannot tell from a dead backend.  (fix pending)
 
 ─── 07 / INFERENCE ───────────────────────────────────────────────────────────────────────────
 
   Retired: the custom paged runtime (`src/inference/`, paged KV, prefix
   cache, CUDA graphs) is deleted. Legs run fused kernels or sidecars;
   batching is one-request-at-a-time. Historical numbers stay below.
-
-─── 08 / TUI (v0.0.1) ────────────────────────────────────────────────────────────────────────
-
-  ┌──────────────┬───────────────────────────────────────────┐
-  │ conversation │  USER / AGENT audio visualiser           │
-  │              ├───────────────────────────────────────────┤
-  │              │  ┌─────────────────────────────────────┐  │
-  │              │  │ / palette - 8 rows, above the input │  │
-  │              │  ├─────────────────────────────────────┤  │
-  │              │  │ auto -> _                            │  │
-  │              │  └─────────────────────────────────────┘  │
-  └──────────────┴───────────────────────────────────────────┘
-     bonsai-2-27b · auto · /cwd · ○ bridge    shades: blue yellow red orange green
-
-  11 commands: /new /cwd /clear /model /mode /mic /voice /shade /opencode /help /quit
-  Enter runs the selection ONLY after you move the highlight - otherwise it submits
-  what you typed. A palette that silently ran /model for /mode is worse than none.
 ```

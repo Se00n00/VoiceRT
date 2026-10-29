@@ -1,4 +1,4 @@
-"""Terminal bridge: FastAPI service for the Ink TUI (stock React/Ink).
+"""Terminal bridge: FastAPI service for the VoiceRT desktop client.
 
 Runs the unified VoiceAgent (voice + terminal turns over one deepagents
 loop) and exposes it over HTTP + WebSocket on :8004. Run ONE backend
