@@ -76,10 +76,12 @@ A Tauri desktop client, FastAPI backend, and XDG-managed local state keep the lo
 
 ─── 02 / TOOLS ───────────────────────────────────────────────────────────────────────────────
 
-  30 ops (src/agent/tool_router.py:ALLOWED_OPS)
+  28 MCP tools (src/agent/mcp/specs.py) + write_todos + done
   shell/files: bash python_exec read write edit list glob grep move delete
-  web/gui: webfetch websearch open_url browser_* screenshot click type_text …
-  meta: task question skill done write_todos
+  web: webfetch websearch open_url browser_click browser_type browser_scroll download_file
+  gui: screenshot click type_text press_key scroll get_active_window list_windows open_app
+  meta: task question skill
+  planner: Main group (12) + deepagents write_todos/task/filesystem built-ins
 
   model text ──▶ 5 parsers, tried in order ──▶ action ──▶ 2 gates ──▶ run
                 gemma → functiongemma         ┌──────────────┐
@@ -89,8 +91,8 @@ A Tauri desktop client, FastAPI backend, and XDG-managed local state keep the lo
                 edit = ANCHORED replace      │ CONFIRM sudo │
                 fails if anchor missing      │ rm docker ssh│
                                              └──────────────┘
-  router: bge-small-en-v1.5 embeds the request, top-k=3 ops + deps, ContextVar → prompt
-  MCP: python_exec / fetch / web_search over stdio, merged into the same op set
+  router: bge-small-en-v1.5 embeds the request, top-k=5 ops + deps, ContextVar → prompt
+  MCP: the same 28 tools over stdio, merged into one tag-filtered tool pool
 
 ─── 03 / MEMORY ──────────────────────────────────────────────────────────────────────────────
 

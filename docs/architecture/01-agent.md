@@ -167,9 +167,9 @@ deepagents subagents over the **same** warmed model:
 
 | Role | Tag | Tools |
 |---|---|---|
-| `shell-use` | `ShellUse` | terminal, files, Python, jobs |
-| `browser-use` | `BrowserUse` | web search/read/operate |
-| `computer-use` | `ComputerUse` | desktop GUI |
+| `shell-use` | `ShellUse` | `bash`, `python_exec`, `read`, `write`, `edit`, `list`, `glob`, `grep`, `move`, `delete`, `download_file`, `task` |
+| `browser-use` | `BrowserUse` | `webfetch`, `websearch`, `open_url`, `browser_click`, `browser_type`, `browser_scroll`, `download_file` |
+| `computer-use` | `ComputerUse` | `screenshot`, `click`, `type_text`, `press_key`, `scroll`, `get_active_window`, `list_windows`, `open_app` |
 
 Specialization is prompt + tag-filtered tools + middleware, never extra
 weights. Non-shell specialists also get a read-only filesystem allowlist

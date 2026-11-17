@@ -3,100 +3,146 @@
 What the agent can actually do, how a model's text becomes a call, and the two
 policy gates in front of execution.
 
-## 2.1 The ops
+## 2.1 The tools
 
-`ALLOWED_OPS` (`src/agent/tool_router.py`) — the MCP ops plus `done` is not really a
-tool, it is the "I am finished talking" sentinel:
+The long-running agent's tools come from three places:
 
-```
-exec  exec_bg  poll  read  write  edit  grep  list  python_exec  fetch  searxng  done
-```
-
-`TERMINAL_TOOLS` (`src/agent/tool_router.py`) declares JSON-Schema specs for
-models whose chat template supports tools natively (Qwen renders them into
-`<tools>` XML, Bonsai takes OpenAI-style `tools[]`).
-
-| Op | Params | Notes |
+| Source | Tools | Where |
 |---|---|---|
-| `exec` | `command` | blocking bash, `exec_timeout_s` 30 |
-| `exec_bg` | `command` | returns a job id |
-| `poll` | `command` | job id from `exec_bg` |
-| `read` | `path` | |
-| `write` | `path`, `text` | create or overwrite |
-| `edit` | `path`, `anchor`, `text` | anchored replace; **fails if the anchor is missing** |
-| `grep` | `pattern`, `path?` | |
-| `list` | `path?` | |
-| `python_exec` | `code` | isolated container |
-| `fetch` | `path` (a URL) | page as text |
-| `searxng` | `pattern` | search |
+| MCP registry | 28 ops (four categories) | `src/agent/mcp/specs.py` |
+| deepagents built-ins | `write_todos`, `task`, `ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep` | `src/agent/long_running/builder.py` middleware |
+| sentinel | `done` — "I am finished talking", not a tool | `src/agent/tool_router.py` |
 
-The same capabilities are also reachable over MCP
-(`src/agent/mcp/ShellUse.py` + `src/agent/mcp/BrowserUse.py`,
-registered in `src/agent/mcp/mcp.py`): `python_exec(code, timeout)`,
-`webfetch(url, max_chars)`, `websearch(query, count)`.
+`ALLOWED_OPS` (`src/agent/tool_router.py`) is `MCP_TOOL_NAMES` plus `done` and
+`write_todos`. `MCP_TOOL_DEFS` / `MCP_TOOL_NAMES` (`src/agent/mcp/specs.py`)
+derive each JSON-Schema spec from the category function's docstring and
+signature; `src/agent/mcp/mcp.py` registers the same functions over MCP, so the
+two cannot drift. `TERMINAL_TOOLS` and `ALL_TOOL_DEFS` are the same list.
+
+### ShellUse — 10
+
+| Tool | Params | Notes |
+|---|---|---|
+| `bash` | `command`, `background?`, `job_id?` | blocking shell by default; `background=true` returns a job id, `job_id` polls it |
+| `python_exec` | `code`, `timeout?` (30) | in the turn container when sandboxed |
+| `read` | `path`, `offset?` (1), `limit?` (100), `max_chars?` | 1-based line window |
+| `write` | `path`, `content`, `make_parents?` | create or overwrite |
+| `edit` | `path`, `old_string`, `new_string`, `replace_all?` | exact replace; fails when `old_string` is absent |
+| `list` | `path?` (`.`), `show_hidden?`, `limit?` (200) | dirs first |
+| `glob` | `pattern`, `path?` (`.`), `limit?` (50) | recursive file-name search |
+| `grep` | `pattern`, `path?` (`.`) | ripgrep fast path, fallback scan |
+| `move` | `src`, `dst` | parents created |
+| `delete` | `path`, `recursive?` | file, symlink, or directory |
+
+### BrowserUse — 7
+
+| Tool | Params | Notes |
+|---|---|---|
+| `webfetch` | `url`, `max_chars?` (6000) | one http(s) page as text |
+| `websearch` | `query`, `count?` (5) | titles/URLs/snippets |
+| `open_url` | `url` | OS default browser |
+| `browser_click` | `url`, `selector`, `timeout?`, `headless?` | Playwright, CSS selector |
+| `browser_type` | `url`, `selector`, `text`, `submit?`, `timeout?`, `headless?` | optionally presses Enter |
+| `browser_scroll` | `url`, `direction?`, `pixels?`, `timeout?`, `headless?` | reports the page after |
+| `download_file` | `url`, `dest`, `max_bytes?`, `timeout?` | http(s) to disk |
+
+### ComputerUse — 8
+
+| Tool | Params | Notes |
+|---|---|---|
+| `screenshot` | `path?` | PNG of the screen |
+| `click` | `x`, `y`, `button?` | left/right |
+| `type_text` | `text`, `interval?` | into the focused window |
+| `press_key` | `key` | single key or `+` combo |
+| `scroll` | `clicks`, `x?`, `y?` | positive up, negative down |
+| `get_active_window` | — | id/pid/name |
+| `list_windows` | `limit?` (50) | visible windows |
+| `open_app` | `name`, `args?` | executable name |
+
+### PlanningTools — 3
+
+| Tool | Params | Notes |
+|---|---|---|
+| `task` | `action?` (`list`), `id?`, `command?` | background job launch/poll/list (not the handoff tool) |
+| `question` | `action?` (`pending`), `id?`, `question?`, `options?`, `answer?` | clarification queue |
+| `skill` | `name?` | load a `SKILL.md`; blank lists installed |
+
+### Deepagents built-ins
+
+| Tool | Middleware | Purpose |
+|---|---|---|
+| `write_todos` | `TodoListMiddleware` | plan state for the turn |
+| `task` | `SubAgentMiddleware` | hand a description to `shell-use` / `browser-use` / `computer-use` |
+| `ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep` | `FilesystemMiddleware` | deepagents' own filesystem surface |
+
+The `SubAgentMiddleware.task` (specialist handoff) and the MCP
+`PlanningTools.task` (background jobs) share a name but are different tools;
+subagent stacks get no handoff `task`, so recursion is impossible.
+
+### Who sees what
+
+Tag groups live in `TOOL_TAGS` (`src/agent/mcp/specs.py`):
+
+| Role | Tag | Tools |
+|---|---|---|
+| planner | `Main` | `bash`, `python_exec`, `read`, `write`, `edit`, `list`, `glob`, `grep`, `webfetch`, `websearch`, `question`, `skill` (12) |
+| `shell-use` | `ShellUse` | the 10 ShellUse tools plus `task`, `download_file` (12) |
+| `browser-use` | `BrowserUse` | the 7 BrowserUse tools |
+| `computer-use` | `ComputerUse` | the 8 ComputerUse tools |
+
+The planner binds `build_execution_tools(..., tags={"Main"})` and still gets
+the deepagents built-ins on top. Non-shell specialists also get a read-only
+filesystem allowlist (`ls`, `read_file`, `glob`, `grep`,
+`READ_ONLY_FS_TOOLS` in `src/agent/long_running/specialists.py`). Tools
+discovered from configured MCP servers merge into the same pool, then the tag
+filter applies.
 
 ## 2.2 Parsing a call out of text
 
-Small models do not reliably emit one canonical format, so the parser accepts
-five and tries them in order. `_parse_action` (`src/models/chat_model.py`):
-
-```
-gemma_action → functiongemma_action → toolcall_dict → terminal_action → xml_action
-```
-
-each tried on the cleaned `answer`, then on the raw stream as a fallback.
+`_parse_action` (`src/models/chat_model.py`) splits thinking from the answer
+with `LlmModel.split_thinking`, then asks the model leg's
+`extract_tool_calls` (`src/models/llm.py`) for calls — first on the answer,
+then on the raw stream as a fallback.
 
 The accepted shapes:
 
 | Shape | Example |
 |---|---|
-| terminal JSON | `{"action": "exec", "command": "ls"}` |
-| XML function | `<function name="read"><param name="path">x</param></function>` |
-| Gemma native | the model's own envelope, terminated by `<end_function_call>` |
-| FunctionGemma | ditto, different envelope |
-| toolcall dict as text | `{"name": "read", "arguments": {"path": "x"}}` |
+| Hermes tool block | `<tool_call>{"name": "read", "arguments": {"path": "x"}}</tool_call>` |
+| bare OpenAI dict | `{"name": "read", "arguments": {"path": "x"}}` |
 
-Stop token is `</function>` when tools are bound (single path — the
-gemma270 `<end_function_call>` branch was retired with that backend).
-
-`_looks_like_call` (`chat_model.py:220-231`) sniffs for `<|tool_call>`,
-`<function`, `<start_function_call>`, `action`, or a paired `"name"`/`"arguments"`
-— used to decide whether a retry is warranted.
-
-`_norm_op` (`src/models/chat_model.py`) fuzzy-maps the op name. It matches on
-op-specific boundaries rather than prefix, which is what stops `python_exec`
-and `exec_bg` from collapsing into `exec` — a bug two eval runs found.
+Names pass through verbatim; mapping a name to execution lives outside the
+leg. Anything without a call is plain chat.
 
 ### Retry
 
-`_collect_raw` (`chat_model.py:344-360`) makes exactly one retry, with a nudge
-string from `_needs_retry` (`chat_model.py:233-248`) appended. `_repeat_note`
-(`chat_model.py:390-400+`) detects the last two identical read-only calls and
-appends a short-circuit note instead of letting the model loop.
+`_collect_raw` (`src/models/chat_model.py`) makes exactly one retry, with a
+nudge string from `_needs_retry` appended when the output is degenerate or an
+echo of the prompt. `_repeat_note` detects the last two identical read-only
+calls and appends a short-circuit note instead of letting the model loop.
 
 ## 2.3 The router
 
 `SemanticRouter` (`src/agent/tool_router.py`) picks which ops to even show the
-model, using `BAAI/bge-small-en-v1.5` on CPU (`ROUTER_MODEL_ID`, line 31).
+model, using `BAAI/bge-small-en-v1.5` on CPU (`ROUTER_MODEL_ID`).
 
 ```
-text ──▶ embed ──▶ cosine vs each op's blurb ──▶ top-k (k=3)
+text ──▶ embed ──▶ cosine vs each op's blurb ──▶ top-k (config tool_top_k, 5)
                                                  │
                             deps + followups ─────┘
                                     │
                             filtered by ALLOWED_OPS
 ```
 
-Model and tokenizer load once behind a lock (`tool_router.py:78-113`). The
-embedding matrix is normalized once (`tool_router.py:106-108`). Routing adds
-`_ROUTE_DEPS` and `_ROUTE_FOLLOWUP` expansions (`tool_router.py:147-159`) and
-returns `None` on any failure, which degrades to showing every op.
+Model and tokenizer load once behind a lock; the embedding matrix is
+normalized once. Routing adds `_ROUTE_DEPS` and `_ROUTE_FOLLOWUP` expansions
+and returns `None` on any failure, which degrades to showing every op.
 
-`InjectToolMiddleware` (`tool_router.py:177-206`) publishes the selection
-through a `ContextVar`, `current_ops()` (`tool_router.py:63-66`), which
-`LocalChatModel._prompt_tools` (`chat_model.py:107-138`) reads. On native-spec
-backends (`bonsai`, `qwen`) it skips the embedding router entirely
-(`chat_model.py:112`) and uses the keyword shortlist instead.
+`InjectToolMiddleware` (`src/agent/long_running/middleware/inject.py`)
+publishes the selection through a `ContextVar`, `current_ops()`, which
+`LocalChatModel._prompt_tools` reads. On native-spec backends (`bonsai`,
+`qwen`) it skips the embedding router entirely and uses the keyword shortlist
+instead.
 
 ## 2.4 Policy
 

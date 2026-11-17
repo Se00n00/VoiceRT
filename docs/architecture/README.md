@@ -10,7 +10,7 @@ are labeled as such rather than smoothed over.
 |---|---|---|
 | 00 | [ARCHITECTURE](../../ARCHITECTURE.md) | system design, contracts, dependency rules (single file) |
 | 01 | [Agent](01-agent.md) | `VoiceAgent`, warm order, the turn loop, events, planner/specialists, budgets |
-| 02 | [Tools](02-tools.md) | the execution ops, the five parser formats, semantic router, deny/confirm policy, MCP |
+| 02 | [Tools](02-tools.md) | the 28-tool inventory, tag groups, call parsing, semantic router, deny/confirm policy, MCP |
 | 03 | [Memory](03-memory.md) | L1 window, L2 episodic, L3 facts, the one injection point, write-back |
 | 04 | [Sessions](04-sessions.md) | identity, window ownership, persistence, serialization, resume |
 | 05 | [Models](05-models.md) | the four legs, `LlmConfig`, backends, streaming, VRAM |
