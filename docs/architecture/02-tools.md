@@ -5,6 +5,8 @@ policy gates in front of execution.
 
 ## 2.1 The tools
 
+Full standalone catalog: [tools.md](../tools.md).
+
 The long-running agent's tools come from three places:
 
 | Source | Tools | Where |

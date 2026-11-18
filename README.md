@@ -35,7 +35,8 @@ A Tauri desktop client, FastAPI backend, and XDG-managed local state keep the lo
 | — | [Architecture](docs/architecture/README.md) | diagrams, legs, engine, kernels |
 | 00 | [ARCHITECTURE](ARCHITECTURE.md) | system design, contracts, dependency rules |
 | 01 | [Agent](docs/architecture/01-agent.md) | warm order, turn loop, budgets |
-| 02 | [Tools](docs/architecture/02-tools.md) | ops, parsers, router, deny policy |
+| 02 | [Tools](docs/architecture/02-tools.md) | parsers, router, deny policy |
+| — | [Tool catalog](docs/tools.md) | every tool, params, tag groups, MCP config |
 | 03 | [Memory](docs/architecture/03-memory.md) | L1 window, L2 episodes, L3 facts |
 | 04 | [Sessions](docs/architecture/04-sessions.md) | identity, persistence, resume |
 | 05 | [Models](docs/architecture/05-models.md) | four legs, backends, streaming, VRAM |
