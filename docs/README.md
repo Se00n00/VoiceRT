@@ -6,6 +6,7 @@ Technical documentation for `voice-pipeline`. Start here, then go deep.
 |---|---|
 | [guide.md](guide.md) | Full walkthrough moved from the root README: run steps, architecture, agent loop, benchmarks, desktop app, sandbox |
 | [tools.md](tools.md) | Every agent tool: params, tag groups, planner/specialists, skill lookup, MCP config, how to add one |
+| [turn.md](turn.md) | One voice turn end to end: budget → admission → VAD → STT → agent → clause TTS, event shapes, harness paths |
 | [**architecture/**](architecture/README.md) | **The system, split by part: [01 Agent](architecture/01-agent.md) · [02 Tools](architecture/02-tools.md) · [03 Memory](architecture/03-memory.md) · [04 Sessions](architecture/04-sessions.md) · [05 Models](architecture/05-models.md) · [06 Processes](architecture/06-processes.md) · [07 Inference](architecture/07-inference.md)** |
 | [**APIReferences/**](APIReferences/README.md) | **Every `:8004` route, one file per group: [System](APIReferences/System.md) · [Turns](APIReferences/Turns.md) · [Voice](APIReferences/Voice.md) · [Talk](APIReferences/Talk.md) · [Chat](APIReferences/Chat.md) · [Sessions](APIReferences/Sessions.md) · [Keys](APIReferences/Keys.md)** |
 | [architecture.md](architecture.md) | Older single-file architecture: components, data flow per endpoint, module map, startup sequence, failure modes |
